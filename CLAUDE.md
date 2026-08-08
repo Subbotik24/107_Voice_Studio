@@ -47,7 +47,7 @@ This is a privacy-first desktop transcription application. Treat this file and
 ## Current verified state
 
 The source quality gate passed locally on 2026-08-08: compilation, Ruff,
-`94 passed, 5 subtests passed`, wheel build, `pip check` and `pip-audit`.
+`95 passed, 5 subtests passed`, wheel build, `pip check` and `pip-audit`.
 No live OpenAI key, real cloud request, Windows physical-device run, or unsigned
 Test RC artifact build was performed in this checkout. Do not represent those as
 verified.
