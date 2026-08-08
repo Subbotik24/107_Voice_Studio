@@ -18,11 +18,11 @@ jobs:
         python: ['3.11', '3.12']
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install --upgrade pip
+      - run: python -m pip install --upgrade pip "setuptools>=83"
       - run: python -m pip install -e ".[dev,cloud]" build pip-audit
       - run: python -m compileall -q src tests
       - run: python -m ruff check src tests

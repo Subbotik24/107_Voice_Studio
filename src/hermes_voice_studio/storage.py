@@ -5,6 +5,8 @@ import json
 import shutil
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from .models import Transcript
@@ -39,12 +41,17 @@ class LocalStore:
             path.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(self.db_path, timeout=30)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init_db(self) -> None:
         with self._connect() as db:

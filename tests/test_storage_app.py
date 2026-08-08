@@ -28,6 +28,17 @@ def test_history_search(tmp_path):
     assert store.list("missing") == []
 
 
+def test_store_connection_context_releases_sqlite_handle(tmp_path):
+    """The store must release SQLite files before backup restore swaps directories."""
+
+    store = LocalStore(tmp_path)
+    with store._connect() as connection:
+        connection.execute("SELECT 1").fetchone()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connection.execute("SELECT 1")
+
+
 def test_legacy_payload_defaults_engine():
     data = transcript().to_dict()
     data.pop("engine")
