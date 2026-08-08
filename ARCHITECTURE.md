@@ -2,7 +2,8 @@
 
 ## 1. Межа системи
 
-`Hermes Voice Studio` — одна desktop‑програма з двома взаємозамінними STT‑движками.
+`Hermes Voice Studio` — одна desktop‑програма з local-first STT та одним
+явно opt-in cloud adapter.
 
 ```text
 Microphone / media file
@@ -10,8 +11,9 @@ Microphone / media file
         ▼
 TranscriptionService
         │
-        ├── EngineManager ── faster-whisper
-        │                 └─ hermes-whisper (.hws)
+        ├── EngineManager ── faster-whisper (default, local)
+        │                 ├─ hermes-whisper (.hws, experimental)
+        │                 └─ openai-cloud (explicit consent only)
         │
         ├── TerminologyDictionary
         ├── LocalStore / SQLite
@@ -26,7 +28,7 @@ UI та storage не залежать від внутрішньої архіте
 |---|---|
 | `hermes_voice_studio.app` | Tkinter GUI, worker thread, hotkey, UX |
 | `hermes_voice_studio.cli` | Єдиний CLI та делегування model‑команд |
-| `hermes_voice_studio.engines` | Adapter contract і кеш важких runtime |
+| `hermes_voice_studio.engines` | Adapter contract, local runtime cache і explicit cloud adapter |
 | `hermes_voice_studio.service` | Оркестрація транскрибування |
 | `hermes_voice_studio.storage` | SHA‑256, SQLite, retention |
 | `hermes_voice_studio.dictionary` | Детерміновані термінологічні заміни |
@@ -49,7 +51,17 @@ transcribe(source: Path, language: str | None) -> EngineResult
 - elapsed time і RTF;
 - engine‑specific metadata.
 
-`corrected_text` не створюється моделлю. Це окремий детермінований шар програми.
+`corrected_text` не є raw output моделлю. Це окремий редагований шар програми.
+OpenAI AI cleanup може запропонувати правки лише після explicit user action;
+він не змінює `raw_text` і не надсилає його в cloud.
+
+## 3.1 Cloud boundary
+
+`openai-cloud` не є fallback для local engines. GUI показує provider, filename,
+size і факт передачі аудіо перед upload; CLI вимагає
+`--allow-cloud-upload`. `offline_only` блокує cloud STT і cleanup. Key material
+не входить до `Settings`, worker payloads, backups або diagnostics: resolution
+порядкується як `OPENAI_API_KEY`, потім OS Keychain/Credential Manager.
 
 ## 4. `.hws` runtime
 

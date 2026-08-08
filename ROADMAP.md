@@ -30,11 +30,11 @@
    - `.app/.dmg` для Apple Silicon та `.exe/.msi` для Windows x64;
    - code signing/notarization;
    - automated clean‑machine install test.
-   - стан: unsigned Apple Silicon `0.2.0-test-rc2` `.app/.dmg/wheel`,
-     frozen runtime probe, clean-wheel install і isolated GUI startup PASS;
-     Windows x64 atomic build/runtime-probe/ZIP pipeline підготовлено, але
-     фактичні `.exe`, packaged `.hws` E2E, clean-machine acceptance,
-     signing/notarization TODO.
+   - стан: source packaging pipeline та unsigned `0.3.0-test-rc1` release
+     contracts підготовлено; Windows x64 atomic build/runtime-probe/ZIP pipeline
+     готовий, але фактичні 0.3.0 `.exe/.zip`, macOS `.dmg`, clean-machine
+     acceptance і signing/notarization ще TODO. Не вважати попередній 0.2
+     artifact підтвердженням нового RC.
 
 5. **Storage migrations та backup**
    - versioned schema;
