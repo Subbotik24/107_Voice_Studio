@@ -45,6 +45,17 @@ def find_asset(registry: dict[str, Any], model_id: str) -> dict[str, Any]:
         raise ValueError("model registry asset URL must use HTTPS")
     if not isinstance(item["sha256"], str) or len(item["sha256"]) != 64:
         raise ValueError("model registry asset has invalid SHA-256")
+    try:
+        int(item["sha256"], 16)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("model registry asset has invalid SHA-256") from exc
+    try:
+        archive_bytes = int(item["archive_bytes"])
+        unpacked_bytes = int(item["unpacked_bytes"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("model registry asset has invalid numeric metadata") from exc
+    if not 0 < archive_bytes <= MAX_ARCHIVE_BYTES or not 0 < unpacked_bytes <= MAX_UNPACKED_BYTES:
+        raise ValueError("model registry asset exceeds the configured resource ceiling")
     return item
 
 
@@ -98,7 +109,13 @@ def unpack_verified_archive(archive: Path, destination: Path, *, expected_size: 
             seen.add(name)
             if stat.S_ISLNK(member.external_attr >> 16):
                 raise ValueError("model archive may not contain symlinks")
+            mode = member.external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            if kind and kind not in {stat.S_IFREG, stat.S_IFDIR}:
+                raise ValueError("model archive may contain only regular files and directories")
             total += member.file_size
             if total > expected_size or total > MAX_UNPACKED_BYTES:
                 raise ValueError("model archive exceeds declared unpacked size")
+        if total != expected_size:
+            raise ValueError("model archive unpacked size does not match the registry")
         bundle.extractall(destination)

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 import pytest
 
 from hermes_voice_studio.cloud_cleanup import propose_cleanup, validate_cleanup_payload
 from hermes_voice_studio.engines.openai_cloud import MAX_CLOUD_AUDIO_BYTES, OpenAICloudEngine
+from hermes_voice_studio.model_release import find_asset, unpack_verified_archive
 from hermes_voice_studio.models import Segment, Settings, Transcript
 from hermes_voice_studio.storage import LocalStore
 
@@ -91,3 +93,29 @@ def test_apply_and_undo_cleanup_preserves_raw_text(tmp_path: Path) -> None:
 def test_offline_only_rejects_cloud_engine() -> None:
     with pytest.raises(ValueError, match="offline_only"):
         Settings(engine="openai-cloud", offline_only=True).validate()
+
+
+def test_model_registry_rejects_invalid_asset_metadata() -> None:
+    registry = {
+        "models": [
+            {
+                "id": "tiny",
+                "url": "https://example.invalid/tiny.zip",
+                "sha256": "z" * 64,
+                "archive_bytes": 1,
+                "unpacked_bytes": 1,
+                "revision": "test",
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="SHA-256"):
+        find_asset(registry, "tiny")
+
+
+def test_model_archive_requires_exact_declared_unpacked_size(tmp_path: Path) -> None:
+    archive = tmp_path / "model.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("model.bin", b"a")
+        bundle.writestr("config.json", b"{}")
+    with pytest.raises(ValueError, match="unpacked size"):
+        unpack_verified_archive(archive, tmp_path / "out", expected_size=999)
