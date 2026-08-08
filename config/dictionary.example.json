@@ -1,0 +1,22 @@
+{
+  "replacements": [
+    {
+      "source": "гермес",
+      "target": "Hermes",
+      "case_sensitive": false,
+      "whole_word": true
+    },
+    {
+      "source": "фотовольтаїчна електростанція",
+      "target": "ФЕС",
+      "case_sensitive": false,
+      "whole_word": true
+    },
+    {
+      "source": "fotovoltaická elektrárna",
+      "target": "FVE",
+      "case_sensitive": false,
+      "whole_word": true
+    }
+  ]
+}

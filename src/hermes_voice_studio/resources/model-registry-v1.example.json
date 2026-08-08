@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "release": "models-v1",
+  "models": [
+    {
+      "id": "tiny",
+      "revision": "PIN_UPSTREAM_REVISION_AT_RELEASE",
+      "url": "https://github.com/OWNER/REPOSITORY/releases/download/models-v1/faster-whisper-tiny-REVISION.zip",
+      "sha256": "REPLACE_WITH_64_CHARACTER_SHA256",
+      "archive_bytes": 0,
+      "unpacked_bytes": 0,
+      "provenance": "Systran/faster-whisper-tiny"
+    }
+  ]
+}

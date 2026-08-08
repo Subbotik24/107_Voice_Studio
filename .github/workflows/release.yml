@@ -1,0 +1,28 @@
+name: Test RC release
+on:
+  push:
+    tags: ['v*']
+jobs:
+  validate-release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[dev,cloud,package]" build pip-audit
+      - run: python -m compileall -q src tests
+      - run: python -m ruff check src tests
+      - run: python -m pytest -q
+      - run: python -m build --wheel
+      - run: python -m pip check
+      - run: python -m pip_audit
+      - name: Refuse unsafe or oversized staged assets
+        shell: bash
+        run: |
+          test -f RELEASE_ACCEPTANCE.md
+          ! git ls-files | grep -E '\.(wav|mp3|m4a|mp4|sqlite3|hws|bin)$'
+          if [ -d dist ]; then ! find dist -type f -size +2G -print -quit | grep -q .; fi
+
+# Publishing is intentionally a manual maintainer step after macOS and Windows
+# acceptance evidence, checksums and a release manifest have been attached.
