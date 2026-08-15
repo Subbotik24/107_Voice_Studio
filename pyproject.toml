@@ -44,7 +44,7 @@ dev = [
 ]
 cloud = [
   "keyring>=25,<26",
-  "openai>=1.0,<3",
+  "openai>=1.0,<4",
 ]
 benchmark = [
   "psutil>=6,<8",
