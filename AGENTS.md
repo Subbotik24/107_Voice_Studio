@@ -3,6 +3,9 @@
 ## Обов’язковий старт
 
 1. Прочитати `README.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, `ROADMAP.md`.
+   Для нового продуктного або release-рішення також прочитати:
+   `docs/PROGRAM_DESCRIPTION.md`, `docs/DEVELOPMENT_DESCRIPTION.md`,
+   `docs/PROJECT_AUDIT_STATUS.md` і `docs/audit/FINDINGS_REGISTER.md`.
 2. Виконати:
 
 ```bash
@@ -27,6 +30,17 @@ PYTHONPATH=src pytest -q
 ## Пріоритет
 
 Працювати за P0 у `ROADMAP.md`. Desktop release на `faster-whisper` і навчання Hermes — два окремі треки. Не блокувати перший другим.
+
+## Audit і зміни продукту
+
+- Канонічний improvement backlog: `docs/PROJECT_IMPROVEMENT_ROADMAP.md`.
+- Security model: `docs/audit/107_Voice_Studio-threat-model.md`.
+- Engineering formulas: `docs/ENGINEERING_CALCULATION_REGISTER.md`.
+- Повторний deep audit: `docs/DEEP_AUDIT_EXECUTION_PROMPT.md`.
+- Матеріальний product change проходить
+  `AUDIT -> DESIGN -> USER APPROVAL -> IMPLEMENTATION -> VERIFICATION`.
+- Audit finding або documentation update сам по собі не дає дозволу змінювати
+  source, tests, dependencies, config, CI чи packaging.
 
 ## Definition of done для кожного increment
 

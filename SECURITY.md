@@ -1,6 +1,7 @@
 # Security and privacy
 
-- Хмарні adapters відсутні.
+- Local transcription є default. OpenAI STT та AI cleanup adapters присутні,
+  але кожна cloud-операція вимагає явної згоди; `offline_only` її блокує.
 - User original media не видаляється.
 - `delete_after_transcription` видаляє лише managed copy, якщо її не використовує інший transcript record.
 - Source content має SHA‑256 provenance.
@@ -17,7 +18,8 @@
 - global hotkey залежить від OS Accessibility permissions;
 - active-app insertion вимкнено;
 - немає sandbox process isolation для model runtime;
-- немає configurable archive/model resource limits;
+- model-release ZIP має resource limits, але `.hws` і backup ще не мають
+  повного набору member/count/expanded-size/compression-ratio limits;
 - немає encrypted-at-rest storage.
 
 Звіт про вразливість повинен містити ОС, версію програми, мінімальний сценарій відтворення і вплив. Не прикладати приватне аудіо.
