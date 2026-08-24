@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import queue
-import tempfile
 import threading
 import tkinter as tk
 from dataclasses import replace
@@ -60,6 +59,10 @@ class HermesVoiceApp(tk.Tk):
         self._history_items: list[Transcript] = []
         self._busy = False
         self._continuous_recording = False
+        self._pending_microphone_files: set[Path] = set()
+        self._active_recording_path: Path | None = None
+        self._ambiguous_microphone_files: set[Path] = set()
+        self._recording_residue_diagnostics: list[str] = []
         self._cancel_event = threading.Event()
         self._build_ui()
         self._refresh_history()
@@ -270,6 +273,154 @@ class HermesVoiceApp(tk.Tk):
             self.hotkey = None
             self.status.set(f"Hotkey недоступний: {exc}. Кнопка запису працює")
 
+    def _recordings_directory(self) -> Path:
+        return (Path(cache_dir()) / "recordings").resolve(strict=False)
+
+    def _safe_recording_path(self, path: str | Path | None) -> Path | None:
+        if path is None:
+            return None
+        try:
+            candidate = Path(path).expanduser().resolve(strict=False)
+            recordings_directory = self._recordings_directory()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return None
+        if candidate.parent != recordings_directory:
+            return None
+        return candidate
+
+    def _find_pending_recording(self, path: str | Path | None) -> Path | None:
+        safe_path = self._safe_recording_path(path)
+        if safe_path is None:
+            return None
+        pending = self.__dict__.get("_pending_microphone_files", set())
+        for candidate in pending:
+            if self._safe_recording_path(candidate) == safe_path:
+                return candidate
+        return None
+
+    def _cleanup_temp(self, path: str | Path | None) -> None:
+        """Remove only a tracked, direct child of the app recording root."""
+
+        pending = self.__dict__.get("_pending_microphone_files", set())
+        tracked = self._find_pending_recording(path)
+        if tracked is None:
+            return
+        safe_path = self._safe_recording_path(tracked)
+        if safe_path is None:
+            return
+        ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
+        if any(self._safe_recording_path(item) == safe_path for item in ambiguous):
+            return
+        try:
+            safe_path.unlink(missing_ok=True)
+        except OSError as exc:
+            diagnostics = self.__dict__.get("_recording_residue_diagnostics", [])
+            diagnostics.append(f"{safe_path}: {exc}")
+            self._recording_residue_diagnostics = diagnostics
+            if "status" in self.__dict__:
+                self.status.set(f"Не вдалося очистити тимчасовий запис: {safe_path.name}")
+            messagebox.showerror(
+                "Очищення запису",
+                f"Не вдалося очистити тимчасовий запис {safe_path}: {exc}",
+                parent=self,
+            )
+            return
+        pending.discard(tracked)
+        pending.discard(safe_path)
+        ambiguous.discard(tracked)
+        ambiguous.discard(safe_path)
+
+    @staticmethod
+    def _recorder_error_is_ambiguous(error: BaseException | None) -> bool:
+        if error is None:
+            return False
+        related = [error, getattr(error, "cleanup_error", None)]
+        for item in related:
+            if item is None:
+                continue
+            if bool(getattr(item, "identity_ambiguous", False)):
+                return True
+            diagnostic = getattr(item, "diagnostic", None)
+            if isinstance(diagnostic, dict):
+                if bool(diagnostic.get("identity_ambiguous")):
+                    return True
+                if "ambig" in str(diagnostic).lower():
+                    return True
+            if "ambig" in str(item).lower():
+                return True
+        return False
+
+    def _register_recorder_residues(self, error: BaseException | None = None) -> None:
+        owners = [error, getattr(error, "cleanup_error", None), self.recorder]
+        raw_paths: list[Path] = []
+        for owner in owners:
+            if owner is None:
+                continue
+            for raw_path in getattr(owner, "residue_paths", ()) or ():
+                candidate = Path(raw_path)
+                if candidate not in raw_paths:
+                    raw_paths.append(candidate)
+        quarantine = getattr(self.recorder, "quarantine_path", None)
+        if quarantine is not None and Path(quarantine) not in raw_paths:
+            raw_paths.append(Path(quarantine))
+
+        pending = self.__dict__.get("_pending_microphone_files", set())
+        ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
+        is_ambiguous = self._recorder_error_is_ambiguous(error)
+        structured_residue = bool(
+            getattr(error, "cleanup_error", None) is not None
+            or getattr(error, "residue_paths", ())
+        )
+        diagnostics = self.__dict__.get("_recording_residue_diagnostics", [])
+        for raw_path in raw_paths:
+            safe_path = self._safe_recording_path(raw_path)
+            if safe_path is None:
+                diagnostics.append(f"Залишок recorder поза app root: {raw_path}")
+                continue
+            pending.add(safe_path)
+            if is_ambiguous or structured_residue:
+                ambiguous.add(safe_path)
+        self._pending_microphone_files = pending
+        self._ambiguous_microphone_files = ambiguous
+        self._recording_residue_diagnostics = diagnostics
+
+    def _report_recorder_error(
+        self,
+        error: BaseException,
+        *,
+        title: str = "Мікрофон",
+        register_residues: bool = True,
+    ) -> None:
+        if register_residues:
+            self._register_recorder_residues(error)
+        message = str(error)
+        ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
+        if ambiguous:
+            paths = ", ".join(str(path) for path in sorted(ambiguous, key=str))
+            message += f"\n\nЗалишкові файли збережено для перевірки: {paths}"
+        messagebox.showerror(title, message, parent=self)
+
+    def _report_recording_residues(self) -> None:
+        pending = self.__dict__.get("_pending_microphone_files", set())
+        ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
+        diagnostics = self.__dict__.get("_recording_residue_diagnostics", [])
+        if not ambiguous and not diagnostics:
+            return
+        details: list[str] = []
+        if ambiguous:
+            details.append(
+                "Залишкові файли запису збережено через неоднозначність ідентичності: "
+                + ", ".join(str(path) for path in sorted(ambiguous, key=str))
+            )
+        if diagnostics:
+            details.append("Діагностика очищення: " + "; ".join(diagnostics))
+        if pending and not ambiguous:
+            details.append(
+                "Деякі тимчасові файли залишилися; їх можна перевірити вручну: "
+                + ", ".join(str(path) for path in sorted(pending, key=str))
+            )
+        messagebox.showerror("Очищення запису", "\n\n".join(details), parent=self)
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -280,8 +431,7 @@ class HermesVoiceApp(tk.Tk):
                     self._record_stop()
                 elif event == "done":
                     transcript, cleanup = value
-                    if cleanup:
-                        Path(cleanup).unlink(missing_ok=True)
+                    self._cleanup_temp(cleanup)
                     self._set_busy(False)
                     if not self._try_show_result(transcript, copy=True):
                         self._refresh_history(
@@ -289,8 +439,7 @@ class HermesVoiceApp(tk.Tk):
                         )
                 elif event == "error":
                     error, cleanup = value
-                    if cleanup:
-                        Path(cleanup).unlink(missing_ok=True)
+                    self._cleanup_temp(cleanup)
                     self._set_busy(False)
                     self.status.set("Помилка обробки")
                     messagebox.showerror("Помилка", str(error))
@@ -318,8 +467,7 @@ class HermesVoiceApp(tk.Tk):
                     self.status.set(f"{labels.get(phase, phase)}… {elapsed:.1f} с")
                 elif event == "job_cancelled":
                     cleanup = value
-                    if cleanup:
-                        Path(cleanup).unlink(missing_ok=True)
+                    self._cleanup_temp(cleanup)
                     self._set_busy(False)
                     self.status.set("Задачу скасовано")
                 elif event == "backup_done":
@@ -390,19 +538,44 @@ class HermesVoiceApp(tk.Tk):
             pass
         self.after(100, self._poll_events)
 
+    def _new_recording_temp(self) -> Path:
+        recordings_directory = self._recordings_directory()
+        try:
+            recordings_directory.mkdir(parents=True, exist_ok=True)
+            try:
+                recordings_directory.chmod(0o700)
+            except OSError:
+                pass
+            path = Path(self.recorder.start(recordings_directory)).resolve(strict=False)
+        except Exception as exc:
+            self._register_recorder_residues(exc)
+            raise
+        safe_path = self._safe_recording_path(path)
+        if safe_path is None:
+            raise RuntimeError("recorder returned a path outside the app recordings directory")
+        pending = self.__dict__.setdefault("_pending_microphone_files", set())
+        pending.add(safe_path)
+        try:
+            safe_path.chmod(0o600)
+        except OSError:
+            pass
+        return safe_path
+
     def _record_start(self, *, continuous: bool = False) -> None:
         if self._busy or self.recorder.recording:
             return
         try:
-            self.recorder.start()
+            self._active_recording_path = self._new_recording_temp()
             self._continuous_recording = continuous
+            self.after(250, self._poll_recording_limit, self._active_recording_path)
             if continuous:
                 self.continuous_record_button.configure(text="■ Зупинити запис")
                 self.status.set("Постійний запис… натисніть «Зупинити запис», коли завершите")
             else:
                 self.status.set("Запис… відпустіть кнопку або hotkey")
         except Exception as exc:
-            messagebox.showerror("Мікрофон", str(exc))
+            self._active_recording_path = None
+            self._report_recorder_error(exc, register_residues=False)
 
     def _toggle_continuous_recording(self) -> None:
         if self.recorder.recording:
@@ -411,24 +584,74 @@ class HermesVoiceApp(tk.Tk):
             return
         self._record_start(continuous=True)
 
-    def _record_stop(self, *, force: bool = False) -> None:
-        if not self.recorder.recording:
+    def _poll_recording_limit(self, path: str | Path) -> None:
+        active_path = self.__dict__.get("_active_recording_path")
+        active_safe_path = self._safe_recording_path(active_path)
+        callback_safe_path = self._safe_recording_path(path)
+        if active_path is None or active_safe_path != callback_safe_path:
+            return
+        if not getattr(self.recorder, "limit_reached", False):
+            if getattr(self.recorder, "recording", False):
+                self.after(250, self._poll_recording_limit, active_path)
+            return
+        self._record_stop(force=True, limit_forced=True)
+
+    def _record_stop(self, *, force: bool = False, limit_forced: bool = False) -> None:
+        active_path = self.__dict__.get("_active_recording_path")
+        if not self.recorder.recording and not limit_forced:
+            return
+        if limit_forced and (
+            active_path is None or not getattr(self.recorder, "limit_reached", False)
+        ):
             return
         if self._continuous_recording and not force:
             return
-        handle = tempfile.NamedTemporaryFile(prefix="hermes-voice-", suffix=".wav", delete=False)
-        handle.close()
-        target = Path(handle.name)
         try:
-            self.recorder.stop(target)
+            result = self.recorder.stop()
             self._continuous_recording = False
             self.continuous_record_button.configure(text="● Постійний запис")
-            self._process(target, cleanup=True)
+            self._active_recording_path = None
         except Exception as exc:
             self._continuous_recording = False
             self.continuous_record_button.configure(text="● Постійний запис")
-            target.unlink(missing_ok=True)
-            messagebox.showerror("Мікрофон", str(exc))
+            self._active_recording_path = None
+            self._register_recorder_residues(exc)
+            self._cleanup_temp(active_path)
+            self._report_recorder_error(exc, register_residues=False)
+            return
+
+        result_path = self._safe_recording_path(getattr(result, "path", None))
+        expected_path = self._safe_recording_path(active_path)
+        tracked_path = self._find_pending_recording(result_path)
+        if (
+            expected_path is None
+            or result_path is None
+            or result_path != expected_path
+            or tracked_path is None
+        ):
+            self._cleanup_temp(active_path)
+            self._report_recorder_error(
+                RuntimeError("Шлях результату запису не відповідає відстежуваному запису")
+            )
+            return
+
+        if getattr(result, "degraded", False):
+            warning = getattr(result, "warning", "") or (
+                "Запис має ознаки втрати або пошкодження аудіо."
+            )
+            if not messagebox.askyesno(
+                "Пошкоджений запис",
+                f"{warning}\n\nПродовжити транскрибування цього запису?",
+                parent=self,
+                default=messagebox.NO,
+            ):
+                self._cleanup_temp(result_path)
+                self.status.set("Пошкоджений запис відхилено")
+                return
+
+        self._process(result_path, cleanup=True)
+        if getattr(result, "limit_reached", False) or limit_forced:
+            self.status.set("Досягнуто максимальний ліміт запису (2 години). Запис обробляється…")
 
     def _choose_file(self) -> None:
         if self._busy:
@@ -1302,10 +1525,16 @@ class HermesVoiceApp(tk.Tk):
             return
         if self.hotkey:
             self.hotkey.stop()
-        if self.recorder.recording:
+        try:
             self.recorder.cancel()
+        except Exception as exc:
+            self._report_recorder_error(exc)
+        self._active_recording_path = None
         self._cancel_event.set()
         self.job_controller.close()
+        for path in list(self.__dict__.get("_pending_microphone_files", set())):
+            self._cleanup_temp(path)
+        self._report_recording_residues()
         self.destroy()
 
 
