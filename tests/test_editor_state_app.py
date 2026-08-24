@@ -9,7 +9,8 @@ import pytest
 from hermes_voice_studio import app as app_module
 from hermes_voice_studio.app import HermesVoiceApp
 from hermes_voice_studio.editor_state import snapshot_editor
-from hermes_voice_studio.models import Transcript
+from hermes_voice_studio.models import Segment, Transcript
+from hermes_voice_studio.storage import LocalStore
 
 
 class FakeEditor:
@@ -422,6 +423,98 @@ def test_cleanup_success_guards_before_durable_apply_then_displays_result(
     assert app.store.transcript is result
     assert app.current is result
     assert app.editor.text == "cleanup result"
+
+
+def test_cleanup_real_store_persists_valid_proposal_and_displays_result(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalStore(tmp_path)
+    old = _transcript("original")
+    old.segments = [Segment(0.0, 1.0, "raw segment")]
+    store.save(old)
+    app = _app()
+    app.current = store.get("id-1")
+    app.editor = FakeEditor("original")
+    app.editor.tags["bold"] = [("1.0", "1.4")]
+    app._editor_baseline = snapshot_editor("original", app.editor.tags)
+    app.store = store
+    app._cleanup_snapshot = app._editor_baseline
+    app._cleanup_transcript_id = old.id
+    proposal = SimpleNamespace(
+        corrected_text="cleaned",
+        to_dict=lambda: {
+            "corrected_text": "cleaned",
+            "segments": [{"segment_index": 0, "corrected_text": "cleaned segment"}],
+        },
+    )
+    app.events = queue.Queue()
+    app.events.put(("cleanup_proposal", (old, proposal)))
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    order: list[str] = []
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    app._confirm_editor_transition = lambda: order.append("guard") or True
+    original_snapshot_check = app._cleanup_result_is_current
+
+    def record_snapshot_check(transcript: Transcript) -> bool:
+        order.append("snapshot")
+        return original_snapshot_check(transcript)
+
+    app._cleanup_result_is_current = record_snapshot_check
+    app._poll_events()
+    persisted = store.get(old.id)
+    assert order == ["guard", "snapshot"]
+    assert persisted.corrected_text == "cleaned"
+    assert persisted.segments[0].corrected_text == "cleaned segment"
+    assert persisted.metadata["last_ai_cleanup"] == {
+        "provider": "openai",
+        "model": "test-model",
+    }
+    assert persisted.metadata["ai_cleanup_history"][0]["corrected_text"] == "original"
+    assert persisted.raw_text == "raw immutable"
+    assert app.current.corrected_text == "cleaned"
+    assert app.editor.text == "cleaned"
+    assert app.raw_editor.text == "raw immutable"
+
+
+def test_background_cancel_refreshes_real_store_then_selects_completed_row(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = LocalStore(tmp_path)
+    old = _transcript("original")
+    completed = _transcript("completed")
+    completed.id = "id-2"
+    completed.source_name = "completed.wav"
+    store.save(old)
+    store.save(completed)
+    app = _app()
+    app.store = store
+    app.current = store.get(old.id)
+    app.editor = FakeEditor("edited while background ran")
+    app.editor.tags["bold"] = [("1.0", "1.4")]
+    app._editor_baseline = snapshot_editor("original", app.editor.tags)
+    result = store.get(completed.id)
+    app.events = queue.Queue()
+    app.events.put(("done", (result, None)))
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    app._confirm_editor_transition = lambda: False
+    app._poll_events()
+    assert app.current.id == old.id
+    assert app.editor.text == "edited while background ran"
+    completed_index = next(
+        index for index, item in enumerate(app._history_items) if item.id == completed.id
+    )
+    app.history.selection_clear(0, "end")
+    app.history.selection_set(completed_index)
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
+    app._confirm_editor_transition = HermesVoiceApp._confirm_editor_transition.__get__(app)
+    app._select_history()
+    assert app.current.id == completed.id
+    assert app.editor.text == "completed"
+    assert app.history.curselection() == (completed_index,)
 
 
 def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPatch) -> None:
