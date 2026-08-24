@@ -16,9 +16,15 @@ class OperationTimeout(TimeoutError):
 class OwnedPartialCleanupError(RuntimeError):
     """Raised when an owned managed-import residue cannot be removed."""
 
-    def __init__(self, residue_path: Path, cleanup_error: BaseException) -> None:
+    def __init__(
+        self,
+        residue_path: Path,
+        cleanup_error: BaseException,
+        target_path: Path | None = None,
+    ) -> None:
         self.residue_path = Path(residue_path)
         self.cleanup_error = cleanup_error
+        self.target_path = Path(target_path) if target_path is not None else None
         super().__init__(
             "managed import partial cleanup failed; residue retained at "
             f"{self.residue_path}: {cleanup_error}"

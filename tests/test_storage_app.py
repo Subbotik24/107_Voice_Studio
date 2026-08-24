@@ -1,15 +1,25 @@
 import builtins
 import hashlib
 import io
+import os
 import sqlite3
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import uuid
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from hermes_voice_studio.models import Transcript
-from hermes_voice_studio.storage import LocalStore
+from hermes_voice_studio.storage import LocalStore, _compact_uuid
+
+
+def process_import_source(root: str, source: str) -> str:
+    return str(LocalStore(Path(root)).import_source(Path(source))[0])
+
+
+def compact_uuid(value: str) -> str:
+    return _compact_uuid(uuid.UUID(value))
 
 
 def transcript() -> Transcript:
@@ -124,13 +134,15 @@ def test_import_source_enforces_growing_source_cap_and_cleans_partial(tmp_path):
 
 
 def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkeypatch):
+    import hermes_voice_studio.storage as storage
+
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "same.wav"
     source.write_bytes(b"same-content")
-    replace_paths = []
+    link_paths = []
     lock = threading.Lock()
     opened = threading.Barrier(2, timeout=5)
-    real_replace = Path.replace
+    real_link = os.link
     real_open = Path.open
 
     def synchronized_open(self, mode="r", *args, **kwargs):
@@ -138,13 +150,13 @@ def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkey
             opened.wait()
         return real_open(self, mode, *args, **kwargs)
 
-    def record_replace(self, target):
-        if self.parent.resolve() == store.sources.resolve():
+    def record_link(source_path, target_path, *args, **kwargs):
+        if Path(target_path).parent.resolve() == store.sources.resolve():
             with lock:
-                replace_paths.append(self)
-        return real_replace(self, target)
+                link_paths.append(Path(target_path))
+        return real_link(source_path, target_path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", record_replace)
+    monkeypatch.setattr(storage.os, "link", record_link)
     monkeypatch.setattr(Path, "open", synchronized_open)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first, second = pool.map(lambda _: store.import_source(source), range(2))
@@ -152,28 +164,143 @@ def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkey
     assert first[0] != second[0]
     assert first[1] in first[0].name
     assert second[1] in second[0].name
-    assert len(replace_paths) == 2
-    assert len({path.name for path in replace_paths}) == 2
+    assert len(link_paths) == 2
+    assert len({path.name for path in link_paths}) == 2
     assert source.exists()
 
 
 def test_import_source_never_replaces_an_existing_final_target(tmp_path, monkeypatch):
+    import hermes_voice_studio.storage as storage
+
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "same.wav"
     source.write_bytes(b"same-content")
     first, _digest = store.import_source(source)
-    real_replace = Path.replace
+    real_link = os.link
 
-    def reject_existing(self, target):
-        assert not target.exists(), "final target replacement is unsafe on Windows"
-        return real_replace(self, target)
+    def reject_existing(source_path, target_path, *args, **kwargs):
+        assert not Path(target_path).exists(), "final target replacement is unsafe on Windows"
+        return real_link(source_path, target_path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", reject_existing)
+    monkeypatch.setattr(storage.os, "link", reject_existing)
     second, _ = store.import_source(source)
 
     assert first != second
     assert first.exists()
     assert second.exists()
+
+
+def test_concurrent_process_imports_never_overwrite_each_other(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "same.wav"
+    source.write_bytes(b"same-content")
+
+    with ProcessPoolExecutor(max_workers=2) as pool:
+        paths = list(
+            pool.map(
+                process_import_source,
+                [str(store.root)] * 2,
+                [str(source)] * 2,
+            )
+        )
+
+    assert len(set(paths)) == 2
+    assert all(Path(path).read_bytes() == source.read_bytes() for path in paths)
+    assert source.exists()
+
+
+def test_import_retries_full_uuid_collision_without_touching_existing_target(
+    tmp_path, monkeypatch
+):
+    import hermes_voice_studio.storage as storage
+
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "collision.wav"
+    source.write_bytes(b"collision-content")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    collision_uuid = "11111111111111111111111111111111"
+    winner_uuid = "22222222222222222222222222222222"
+    existing = store.sources / f"{source_hash}{compact_uuid(collision_uuid)}.wav"
+    existing.write_bytes(b"existing-peer")
+    values = iter(
+        [
+            uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            uuid.UUID(collision_uuid),
+            uuid.UUID(winner_uuid),
+        ]
+    )
+    monkeypatch.setattr(storage.uuid, "uuid4", lambda: next(values))
+
+    linked = []
+    real_link = os.link
+
+    def record_link(source_path, target_path, *args, **kwargs):
+        linked.append(Path(target_path))
+        return real_link(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr(storage.os, "link", record_link)
+    with existing.open("rb") as peer:
+        managed, _ = store.import_source(source)
+        assert peer.read() == b"existing-peer"
+
+    assert managed.name.endswith(f"{compact_uuid(winner_uuid)}.wav")
+    assert existing.read_bytes() == b"existing-peer"
+    assert linked[0] == existing
+    assert managed.read_bytes() == source.read_bytes()
+
+
+def test_link_failure_cleanup_failure_surfaces_owned_residue(tmp_path, monkeypatch):
+    import hermes_voice_studio.storage as storage
+
+    operation = __import__("hermes_voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "link-failure.wav"
+    source.write_bytes(b"link-failure")
+
+    def fail_link(*_args, **_kwargs):
+        raise OSError("link failed")
+
+    monkeypatch.setattr(storage.os, "link", fail_link)
+    real_unlink = Path.unlink
+
+    def fail_partial_unlink(self, missing_ok=False):
+        if self.name.endswith(".partial"):
+            raise OSError("cleanup denied")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_partial_unlink)
+    with pytest.raises(operation.OwnedPartialCleanupError) as raised:
+        store.import_source(source)
+
+    assert raised.value.residue_path.exists()
+    assert isinstance(raised.value.__cause__, OSError)
+    assert str(raised.value.__cause__) == "link failed"
+
+
+def test_link_success_partial_unlink_failure_surfaces_residue(tmp_path, monkeypatch):
+    import hermes_voice_studio.storage as storage
+
+    operation = __import__("hermes_voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "unlink-failure.wav"
+    source.write_bytes(b"unlink-failure")
+    real_link = os.link
+    real_unlink = Path.unlink
+
+    monkeypatch.setattr(storage.os, "link", real_link)
+
+    def fail_partial_unlink(self, missing_ok=False):
+        if self.name.endswith(".partial"):
+            raise OSError("partial unlink denied")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_partial_unlink)
+    with pytest.raises(operation.OwnedPartialCleanupError) as raised:
+        store.import_source(source)
+
+    assert raised.value.residue_path.exists()
+    assert isinstance(raised.value.__cause__, OSError)
+    assert str(raised.value.__cause__) == "partial unlink denied"
 
 
 def test_import_source_cancellation_cleans_owned_partial_only(tmp_path):
@@ -339,16 +466,18 @@ def test_import_source_write_failure_cleans_owned_partial_only(tmp_path, monkeyp
 
 
 def test_import_source_promotion_failure_cleans_owned_partial_only(tmp_path, monkeypatch):
+    import hermes_voice_studio.storage as storage
+
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "promotion.wav"
     source.write_bytes(b"promotion-failure")
     unrelated = store.sources / "unrelated.wav"
     unrelated.write_bytes(b"keep")
 
-    def fail_replace(self, _target):
+    def fail_link(*_args, **_kwargs):
         raise OSError("promotion failed")
 
-    monkeypatch.setattr(Path, "replace", fail_replace)
+    monkeypatch.setattr(storage.os, "link", fail_link)
     with pytest.raises(OSError, match="promotion failed"):
         store.import_source(source)
 
@@ -362,6 +491,8 @@ def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
 ):
     import importlib
 
+    import hermes_voice_studio.storage as storage
+
     operation = importlib.import_module("hermes_voice_studio.operation")
     error_type = getattr(operation, "OwnedPartialCleanupError", None)
     assert error_type is not None, "structured partial cleanup error is required"
@@ -370,7 +501,7 @@ def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
     source.write_bytes(b"cleanup-failure")
     real_unlink = Path.unlink
 
-    def fail_replace(self, _target):
+    def fail_link(*_args, **_kwargs):
         raise OSError("promotion failed")
 
     def fail_partial_unlink(self, missing_ok=False):
@@ -378,7 +509,7 @@ def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
             raise OSError("cleanup denied")
         return real_unlink(self, missing_ok=missing_ok)
 
-    monkeypatch.setattr(Path, "replace", fail_replace)
+    monkeypatch.setattr(storage.os, "link", fail_link)
     monkeypatch.setattr(Path, "unlink", fail_partial_unlink)
     with pytest.raises(error_type) as raised:
         store.import_source(source)
@@ -391,9 +522,7 @@ def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
     assert source.exists()
 
 
-def test_cleanup_rechecks_before_unlink_when_a_reference_commits_between_checks(
-    tmp_path, monkeypatch
-):
+def test_cleanup_rechecks_before_unlink_when_a_reference_commits_between_checks(tmp_path):
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "race.wav"
     source.write_bytes(b"race-content")
@@ -402,22 +531,64 @@ def test_cleanup_rechecks_before_unlink_when_a_reference_commits_between_checks(
     item.id = "race-reference"
     item.source_sha256 = digest
     item.source_path = str(managed)
-    calls = 0
-    real_check = getattr(store, "_source_is_referenced", None)
-    assert real_check is not None, "source reference check must be centralized"
-
-    def racing_check(target, source_hash):
-        nonlocal calls
-        calls += 1
-        referenced = real_check(target, source_hash)
-        if calls == 1:
-            store.save(item)
-        return referenced
-
-    monkeypatch.setattr(store, "_source_is_referenced", racing_check)
     store.remove_unreferenced_source(managed, digest)
 
-    assert calls >= 2
+    assert not managed.exists()
+    assert store.get(item.id) is None
+
+
+def test_cleanup_first_rejects_save_after_final_check_and_unlink(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "cleanup-first.wav"
+    source.write_bytes(b"cleanup-first")
+    managed, digest = store.import_source(source)
+    item = transcript()
+    item.id = "cleanup-first-reference"
+    item.source_sha256 = digest
+    item.source_path = str(managed)
+    ready = threading.Event()
+    release = threading.Event()
+    real_unlink = Path.unlink
+
+    def gated_unlink(self, missing_ok=False):
+        if self.resolve() == managed.resolve():
+            ready.set()
+            assert release.wait(timeout=5)
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", gated_unlink)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        cleanup_future = pool.submit(store.remove_unreferenced_source, managed, digest)
+        assert ready.wait(timeout=5)
+        save_started = threading.Event()
+
+        def save_from_peer():
+            save_started.set()
+            LocalStore(store.root).save(item)
+
+        save_future = pool.submit(save_from_peer)
+        assert save_started.wait(timeout=5)
+        release.set()
+        cleanup_future.result(timeout=5)
+        with pytest.raises(FileNotFoundError, match="managed source"):
+            save_future.result(timeout=5)
+
+    assert not managed.exists()
+
+
+def test_save_first_commits_and_cleanup_preserves_managed_source(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "save-first.wav"
+    source.write_bytes(b"save-first")
+    managed, digest = store.import_source(source)
+    item = transcript()
+    item.id = "save-first-reference"
+    item.source_sha256 = digest
+    item.source_path = str(managed)
+
+    LocalStore(store.root).save(item)
+    store.remove_unreferenced_source(managed, digest)
+
     assert managed.exists()
     assert store.get(item.id).source_path == str(managed)
 
