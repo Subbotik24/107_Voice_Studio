@@ -21,6 +21,7 @@ from .cloud_secrets import (
 )
 from .config import cache_dir, data_dir, load_settings, save_settings, settings_path
 from .dictionary import TerminologyDictionary
+from .editor_state import snapshot_editor
 from .exporters import export_transcript
 from .hotkey import GlobalHotkey, hotkey_from_tk_event
 from .jobs import JobCancelled, TranscriptionJobController
@@ -52,6 +53,7 @@ class HermesVoiceApp(tk.Tk):
         self.recorder = AudioRecorder()
         self.hotkey: GlobalHotkey | None = None
         self.current: Transcript | None = None
+        self._editor_baseline = snapshot_editor("", {})
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._history_items: list[Transcript] = []
         self._busy = False
@@ -279,7 +281,10 @@ class HermesVoiceApp(tk.Tk):
                     if cleanup:
                         Path(cleanup).unlink(missing_ok=True)
                     self._set_busy(False)
-                    self._show_result(transcript, copy=True)
+                    if not self._try_show_result(transcript, copy=True):
+                        self._refresh_history(
+                            select_id=self.current.id if self.current else None
+                        )
                 elif event == "error":
                     error, cleanup = value
                     if cleanup:
@@ -366,8 +371,8 @@ class HermesVoiceApp(tk.Tk):
                             provider="openai",
                             model=self.settings.openai_cleanup_model,
                         )
-                        self._show_result(updated, refresh=True)
-                        self.status.set("AI cleanup застосовано; raw text не змінено")
+                        if self._try_show_result(updated, refresh=True):
+                            self.status.set("AI cleanup застосовано; raw text не змінено")
                     else:
                         self.status.set("AI cleanup proposal не застосовано")
                 elif event == "cleanup_error":
@@ -482,6 +487,9 @@ class HermesVoiceApp(tk.Tk):
         self.editor.delete("1.0", "end")
         self.editor.insert("1.0", transcript.corrected_text)
         self._apply_editor_formatting(transcript.metadata.get("editor_formatting", {}))
+        self._editor_baseline = snapshot_editor(
+            self.editor.get("1.0", "end-1c"), self._editor_formatting()
+        )
         self._set_readonly_text(self.raw_editor, transcript.raw_text)
         details = {
             "id": transcript.id,
@@ -511,6 +519,14 @@ class HermesVoiceApp(tk.Tk):
             self._refresh_history(select_id=transcript.id)
         if copy and self.settings.auto_copy:
             self._copy_to_clipboard(transcript.corrected_text)
+
+    def _try_show_result(
+        self, transcript: Transcript, *, copy: bool = False, refresh: bool = True
+    ) -> bool:
+        if not self._confirm_editor_transition():
+            return False
+        self._show_result(transcript, copy=copy, refresh=refresh)
+        return True
 
     @staticmethod
     def _set_readonly_text(widget: tk.Text, text: str) -> None:
@@ -596,7 +612,15 @@ class HermesVoiceApp(tk.Tk):
     def _select_history(self, _event: Any = None) -> None:
         selection = self.history.curselection()
         if selection:
-            self._show_result(self._history_items[selection[0]], copy=False, refresh=False)
+            selected = self._history_items[selection[0]]
+            if self._try_show_result(selected, copy=False, refresh=False):
+                return
+            if self.current:
+                for index, item in enumerate(self._history_items):
+                    if item.id == self.current.id:
+                        self.history.selection_set(index)
+                        self.history.see(index)
+                        break
 
     def _selected_history_item(self) -> Transcript | None:
         selection = self.history.curselection()
@@ -606,6 +630,8 @@ class HermesVoiceApp(tk.Tk):
         transcript = self._selected_history_item()
         if transcript is None:
             messagebox.showinfo("Історія", "Спочатку виберіть запис в історії.")
+            return
+        if not self._confirm_editor_transition():
             return
         name = simpledialog.askstring(
             "Перейменувати запис",
@@ -627,6 +653,8 @@ class HermesVoiceApp(tk.Tk):
         transcript = self._selected_history_item()
         if transcript is None:
             messagebox.showinfo("Історія", "Спочатку виберіть запис в історії.")
+            return
+        if not self._confirm_editor_transition():
             return
         if not messagebox.askyesno(
             "Видалити запис",
@@ -655,18 +683,45 @@ class HermesVoiceApp(tk.Tk):
         self._refresh_history()
         self.status.set("Запис видалено з історії; оригінальний файл не змінено")
 
-    def _save_edits(self) -> None:
+    def _editor_is_dirty(self) -> bool:
         if not self.current:
-            return
-        self.current = self.store.update_corrected_text(
-            self.current.id,
-            self.editor.get("1.0", "end-1c"),
+            return False
+        current = snapshot_editor(self.editor.get("1.0", "end-1c"), self._editor_formatting())
+        return current != self._editor_baseline
+
+    def _confirm_editor_transition(self) -> bool:
+        if not self._editor_is_dirty():
+            return True
+        choice = messagebox.askyesnocancel(
+            "Незбережені правки",
+            "Зберегти правки перед переходом?\n\n"
+            "Так — зберегти, Ні — відкинути, Скасувати — залишитися.",
+            parent=self,
         )
-        self.current = self.store.update_editor_formatting(
-            self.current.id,
-            self._editor_formatting(),
+        if choice is True:
+            return self._save_edits()
+        return choice is False
+
+    def _save_edits(self) -> bool:
+        if not self.current:
+            return True
+        try:
+            self.current = self.store.update_corrected_text(
+                self.current.id,
+                self.editor.get("1.0", "end-1c"),
+            )
+            self.current = self.store.update_editor_formatting(
+                self.current.id,
+                self._editor_formatting(),
+            )
+        except Exception as exc:
+            messagebox.showerror("Збереження правок", str(exc), parent=self)
+            return False
+        self._editor_baseline = snapshot_editor(
+            self.editor.get("1.0", "end-1c"), self._editor_formatting()
         )
         self.status.set("Правки збережено")
+        return True
 
     def _ai_cleanup(self) -> None:
         if not self.current:
@@ -682,7 +737,8 @@ class HermesVoiceApp(tk.Tk):
             parent=self,
         ):
             return
-        self._save_edits()
+        if not self._save_edits():
+            return
         transcript = self.current
         self._set_busy(True)
 
@@ -698,8 +754,11 @@ class HermesVoiceApp(tk.Tk):
     def _undo_ai_cleanup(self) -> None:
         if not self.current:
             return
+        if not self._confirm_editor_transition():
+            return
         try:
-            self._show_result(self.store.undo_last_ai_cleanup(self.current.id), refresh=True)
+            updated = self.store.undo_last_ai_cleanup(self.current.id)
+            self._show_result(updated, refresh=True)
             self.status.set("Останнє AI cleanup скасовано")
         except Exception as exc:
             messagebox.showerror("AI cleanup", str(exc), parent=self)
@@ -708,7 +767,8 @@ class HermesVoiceApp(tk.Tk):
         if not self.current:
             messagebox.showinfo("Експорт", "Спочатку створіть або виберіть транскрипт.")
             return
-        self._save_edits()
+        if not self._save_edits():
+            return
         destination = filedialog.asksaveasfilename(
             defaultextension=f".{fmt}",
             initialfile=f"{Path(self.current.source_name).stem}.{fmt}",
@@ -1205,6 +1265,8 @@ class HermesVoiceApp(tk.Tk):
         )
 
     def _close(self) -> None:
+        if not self._confirm_editor_transition():
+            return
         if self.hotkey:
             self.hotkey.stop()
         if self.recorder.recording:

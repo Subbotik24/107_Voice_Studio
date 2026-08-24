@@ -45,3 +45,13 @@ def test_settings_dialog_destroys_tk_window_before_restarting_global_hotkey() ->
     assert close_helper.index("dialog.destroy()") < close_helper.index(
         "self.after_idle(self._start_hotkey)"
     )
+
+
+def test_gui_guards_editor_transitions_before_replacing_or_closing() -> None:
+    poll_events = inspect.getsource(HermesVoiceApp._poll_events)
+    show_result = inspect.getsource(HermesVoiceApp._show_result)
+    close = inspect.getsource(HermesVoiceApp._close)
+
+    assert "_try_show_result" in poll_events
+    assert "_editor_baseline" in show_result
+    assert "_confirm_editor_transition" in close
