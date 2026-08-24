@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import stat
+import struct
 import warnings
 import zipfile
 from dataclasses import FrozenInstanceError
@@ -29,6 +30,7 @@ def make_budget(**overrides: object) -> ZipBudget:
         "max_total_bytes": 500,
         "max_member_compression_ratio": 100.0,
         "max_total_compression_ratio": 100.0,
+        "max_central_directory_bytes": 1_000_000,
         "allow_directories": False,
         "allowed_compression_methods": frozenset({zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}),
     }
@@ -53,6 +55,48 @@ def write_special_member(path: Path, name: str, mode: int) -> None:
     info.external_attr = (mode | 0o700) << 16
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(info, b"payload")
+
+
+def central_directory_size(path: Path) -> int:
+    payload = path.read_bytes()
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    assert eocd_offset >= 0
+    return int.from_bytes(payload[eocd_offset + 12 : eocd_offset + 16], "little")
+
+
+def make_zip64_fixture(path: Path) -> None:
+    write_zip(path, [("payload", b"x")])
+    payload = path.read_bytes()
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    entries = int.from_bytes(payload[eocd_offset + 10 : eocd_offset + 12], "little")
+    directory_size = int.from_bytes(payload[eocd_offset + 12 : eocd_offset + 16], "little")
+    directory_offset = int.from_bytes(payload[eocd_offset + 16 : eocd_offset + 20], "little")
+    zip64_eocd = struct.pack(
+        "<4sQHHIIQQQQ",
+        b"PK\x06\x06",
+        44,
+        45,
+        45,
+        0,
+        0,
+        entries,
+        entries,
+        directory_size,
+        directory_offset,
+    )
+    locator = struct.pack("<4sLQL", b"PK\x06\x07", 0, eocd_offset, 1)
+    legacy_eocd = struct.pack(
+        "<4s4H2LH",
+        b"PK\x05\x06",
+        0,
+        0,
+        0xFFFF,
+        0xFFFF,
+        0xFFFFFFFF,
+        0xFFFFFFFF,
+        0,
+    )
+    path.write_bytes(payload[:eocd_offset] + zip64_eocd + locator + legacy_eocd)
 
 
 def test_value_objects_are_immutable_and_inspection_has_frozen_members(tmp_path: Path) -> None:
@@ -132,6 +176,134 @@ def test_inspection_rejects_unsafe_member_names(tmp_path: Path, name: str) -> No
     write_zip(archive_path, [(name, b"x")])
 
     with pytest.raises(ValueError, match="unsafe|traversal|absolute|drive|UNC|backslash"):
+        inspect_zip(archive_path, make_budget())
+
+
+@pytest.mark.parametrize("name", ["a/./b", "a//b"])
+def test_inspection_rejects_dot_and_empty_path_segments(tmp_path: Path, name: str) -> None:
+    archive_path = tmp_path / "unsafe-segment.zip"
+    write_zip(archive_path, [(name, b"x")])
+
+    with pytest.raises(ValueError, match="unsafe|empty|dot"):
+        inspect_zip(archive_path, make_budget())
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "plain.",
+        "plain ",
+        "stream:payload",
+        "bad*name",
+        "bad?name",
+        "bad\x01name",
+        "CON.txt",
+        "folder/NUL",
+    ],
+)
+def test_inspection_rejects_nonportable_windows_member_segments(
+    tmp_path: Path, name: str
+) -> None:
+    archive_path = tmp_path / "nonportable.zip"
+    write_zip(archive_path, [(name, b"x")])
+
+    with pytest.raises(ValueError, match="unsafe|portable|reserved|ADS|character"):
+        inspect_zip(archive_path, make_budget())
+
+
+def test_inspection_rejects_casefolded_aliases_per_segment(tmp_path: Path) -> None:
+    archive_path = tmp_path / "case-alias.zip"
+    write_zip(archive_path, [("Dir/A.txt", b"one"), ("dir/a.TXT", b"two")])
+
+    with pytest.raises(ValueError, match="alias|collision"):
+        inspect_zip(archive_path, make_budget())
+
+
+def test_inspection_rejects_unicode_normalization_aliases(tmp_path: Path) -> None:
+    archive_path = tmp_path / "unicode-alias.zip"
+    write_zip(archive_path, [("café.txt", b"one"), ("cafe\u0301.txt", b"two")])
+
+    with pytest.raises(ValueError, match="alias|collision"):
+        inspect_zip(archive_path, make_budget())
+
+
+def test_member_count_is_rejected_before_zipfile_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "member-count-preflight.zip"
+    write_zip(archive_path, [("one", b"1"), ("two", b"2")])
+
+    def zipfile_must_not_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ZipFile must not load before member-count preflight")
+
+    monkeypatch.setattr(archive_module.zipfile, "ZipFile", zipfile_must_not_load)
+    with pytest.raises(ValueError, match="max_members"):
+        inspect_zip(archive_path, make_budget(max_members=1))
+
+
+def test_central_directory_size_is_rejected_before_zipfile_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "central-directory-preflight.zip"
+    write_zip(archive_path, [("payload", b"payload")])
+    directory_size = central_directory_size(archive_path)
+
+    def zipfile_must_not_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ZipFile must not load before central-size preflight")
+
+    monkeypatch.setattr(archive_module.zipfile, "ZipFile", zipfile_must_not_load)
+    with pytest.raises(ValueError, match="central directory"):
+        inspect_zip(
+            archive_path,
+            make_budget(max_central_directory_bytes=directory_size - 1),
+        )
+
+
+def test_inspection_rejects_truncated_eocd_before_zipfile_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "truncated-eocd.zip"
+    write_zip(archive_path, [("payload", b"x")])
+    archive_path.write_bytes(archive_path.read_bytes()[:-8])
+
+    def zipfile_must_not_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ZipFile must not load malformed EOCD")
+
+    monkeypatch.setattr(archive_module.zipfile, "ZipFile", zipfile_must_not_load)
+    with pytest.raises(ValueError, match="EOCD|end-of-central"):
+        inspect_zip(archive_path, make_budget())
+
+
+def test_inspection_rejects_contradictory_eocd_bounds(tmp_path: Path) -> None:
+    archive_path = tmp_path / "contradictory-eocd.zip"
+    write_zip(archive_path, [("payload", b"x")])
+    payload = bytearray(archive_path.read_bytes())
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    payload[eocd_offset + 16 : eocd_offset + 20] = (0xFFFFFFFF).to_bytes(4, "little")
+    archive_path.write_bytes(payload)
+
+    with pytest.raises(ValueError, match="central directory|ZIP64|EOCD"):
+        inspect_zip(archive_path, make_budget())
+
+
+def test_inspection_accepts_bounded_zip64_metadata(tmp_path: Path) -> None:
+    archive_path = tmp_path / "zip64.zip"
+    make_zip64_fixture(archive_path)
+
+    inspection = inspect_zip(archive_path, make_budget())
+
+    assert inspection.member_count == 1
+
+
+def test_inspection_rejects_zip64_sentinel_without_locator(tmp_path: Path) -> None:
+    archive_path = tmp_path / "missing-zip64-locator.zip"
+    write_zip(archive_path, [("payload", b"x")])
+    payload = bytearray(archive_path.read_bytes())
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    payload[eocd_offset + 10 : eocd_offset + 12] = (0xFFFF).to_bytes(2, "little")
+    archive_path.write_bytes(payload)
+
+    with pytest.raises(ValueError, match="ZIP64"):
         inspect_zip(archive_path, make_budget())
 
 

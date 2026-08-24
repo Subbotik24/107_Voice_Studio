@@ -11,11 +11,14 @@ import ntpath
 import os
 import shutil
 import stat
+import struct
 import tempfile
+import unicodedata
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 _DEFAULT_ALLOWED_COMPRESSION_METHODS = frozenset(
     {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
@@ -32,6 +35,54 @@ _SUPPORTED_COMPRESSION_METHODS = frozenset(
     if method is not None
 )
 _COPY_CHUNK_BYTES = 1024 * 1024
+_EOCD_SIGNATURE = b"PK\x05\x06"
+_ZIP64_EOCD_SIGNATURE = b"PK\x06\x06"
+_ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
+_EOCD_STRUCT = struct.Struct("<4s4H2LH")
+_ZIP64_EOCD_STRUCT = struct.Struct("<4sQHHIIQQQQ")
+_ZIP64_LOCATOR_STRUCT = struct.Struct("<4sLQL")
+_MAX_EOCD_SCAN_BYTES = _EOCD_STRUCT.size + 0xFFFF
+_WINDOWS_FORBIDDEN_CHARS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {
+        "aux",
+        "com1",
+        "com2",
+        "com3",
+        "com4",
+        "com5",
+        "com6",
+        "com7",
+        "com8",
+        "com9",
+        "com¹",
+        "com²",
+        "com³",
+        "con",
+        "lpt1",
+        "lpt2",
+        "lpt3",
+        "lpt4",
+        "lpt5",
+        "lpt6",
+        "lpt7",
+        "lpt8",
+        "lpt9",
+        "lpt¹",
+        "lpt²",
+        "lpt³",
+        "nul",
+        "prn",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ZipDirectoryMetadata:
+    member_count: int
+    central_directory_bytes: int
+    central_directory_offset: int
+    directory_end: int
 
 
 def _validate_limit(name: str, value: int | None) -> None:
@@ -55,6 +106,8 @@ class ZipBudget:
 
     ``None`` means that a caller has chosen not to impose that particular
     limit.  No product-specific byte or member limits are selected here.
+    ``max_central_directory_bytes`` is required so the central-directory
+    allocation performed by ``zipfile`` is always preceded by a bound.
     ``max_archive_bytes``, ``max_member_ratio``, ``max_total_ratio`` and
     ``allowed_methods`` are accepted as compatibility aliases for the
     canonical field names.
@@ -68,6 +121,7 @@ class ZipBudget:
     max_total_compression_ratio: float | None
     allow_directories: bool
     allowed_compression_methods: frozenset[int]
+    max_central_directory_bytes: int
 
     def __init__(
         self,
@@ -79,6 +133,7 @@ class ZipBudget:
         max_total_compression_ratio: float | None = None,
         allow_directories: bool = False,
         allowed_compression_methods: Iterable[int] | None = None,
+        max_central_directory_bytes: int | None = None,
         *,
         max_archive_bytes: int | None = None,
         max_member_ratio: float | None = None,
@@ -113,8 +168,11 @@ class ZipBudget:
             ("max_members", max_members),
             ("max_member_bytes", max_member_bytes),
             ("max_total_bytes", max_total_bytes),
+            ("max_central_directory_bytes", max_central_directory_bytes),
         ):
             _validate_limit(name, value)
+        if max_central_directory_bytes is None:
+            raise ValueError("max_central_directory_bytes must be explicitly provided")
         _validate_ratio("max_member_compression_ratio", max_member_compression_ratio)
         _validate_ratio("max_total_compression_ratio", max_total_compression_ratio)
         if type(allow_directories) is not bool:
@@ -136,6 +194,7 @@ class ZipBudget:
         object.__setattr__(self, "max_total_compression_ratio", max_total_compression_ratio)
         object.__setattr__(self, "allow_directories", allow_directories)
         object.__setattr__(self, "allowed_compression_methods", methods)
+        object.__setattr__(self, "max_central_directory_bytes", max_central_directory_bytes)
 
     @property
     def max_archive_bytes(self) -> int | None:
@@ -228,7 +287,188 @@ class ZipInspection:
         return self.total_expanded_bytes
 
 
-def _unsafe_name_reason(name: str) -> str | None:
+def _read_exact(
+    stream: BinaryIO,
+    offset: int,
+    size: int,
+    file_size: int,
+    description: str,
+) -> bytes:
+    if offset < 0 or size < 0 or offset > file_size or size > file_size - offset:
+        raise ValueError(f"truncated ZIP {description}")
+    stream.seek(offset)
+    payload = stream.read(size)
+    if len(payload) != size:
+        raise ValueError(f"truncated ZIP {description}")
+    return payload
+
+
+def _read_eocd(stream: BinaryIO, file_size: int) -> tuple[int, tuple[object, ...]]:
+    if file_size < _EOCD_STRUCT.size:
+        raise ValueError("truncated ZIP EOCD record")
+    start = max(0, file_size - _MAX_EOCD_SCAN_BYTES)
+    stream.seek(start)
+    tail = stream.read(file_size - start)
+    if len(tail) != file_size - start:
+        raise ValueError("truncated ZIP EOCD search window")
+    cursor = len(tail)
+    while True:
+        relative = tail.rfind(_EOCD_SIGNATURE, 0, cursor)
+        if relative < 0:
+            break
+        if relative + _EOCD_STRUCT.size <= len(tail):
+            fields = _EOCD_STRUCT.unpack_from(tail, relative)
+            comment_size = fields[-1]
+            absolute = start + relative
+            if absolute + _EOCD_STRUCT.size + comment_size == file_size:
+                return absolute, fields
+        cursor = relative
+    raise ValueError("malformed or missing ZIP EOCD record")
+
+
+def _read_zip_directory_metadata(
+    source: Path,
+    file_size: int,
+    budget: ZipBudget,
+) -> _ZipDirectoryMetadata:
+    with source.open("rb") as stream:
+        eocd_offset, fields = _read_eocd(stream, file_size)
+        (
+            signature,
+            disk_number,
+            directory_disk,
+            entries_on_disk,
+            entries_total,
+            directory_bytes,
+            directory_offset,
+            _comment_size,
+        ) = fields
+        if signature != _EOCD_SIGNATURE:
+            raise ValueError("malformed ZIP EOCD record")
+
+        zip64_required = (
+            entries_on_disk == 0xFFFF
+            or entries_total == 0xFFFF
+            or directory_bytes == 0xFFFFFFFF
+            or directory_offset == 0xFFFFFFFF
+        )
+        directory_end_marker = eocd_offset
+        if zip64_required:
+            locator_offset = eocd_offset - _ZIP64_LOCATOR_STRUCT.size
+            locator_payload = _read_exact(
+                stream,
+                locator_offset,
+                _ZIP64_LOCATOR_STRUCT.size,
+                file_size,
+                "ZIP64 locator",
+            )
+            (
+                locator_signature,
+                locator_disk,
+                zip64_offset,
+                total_disks,
+            ) = _ZIP64_LOCATOR_STRUCT.unpack(locator_payload)
+            if locator_signature != _ZIP64_LOCATOR_SIGNATURE:
+                raise ValueError("ZIP64 EOCD sentinel has no valid ZIP64 locator")
+            if locator_disk != 0 or total_disks != 1:
+                raise ValueError("unsupported multi-disk ZIP64 archive")
+            if zip64_offset >= locator_offset:
+                raise ValueError("contradictory ZIP64 EOCD offset")
+            zip64_payload = _read_exact(
+                stream,
+                zip64_offset,
+                _ZIP64_EOCD_STRUCT.size,
+                file_size,
+                "ZIP64 EOCD record",
+            )
+            (
+                zip64_signature,
+                zip64_record_size,
+                _version_made,
+                _version_needed,
+                zip64_disk_number,
+                zip64_directory_disk,
+                zip64_entries_on_disk,
+                zip64_entries_total,
+                zip64_directory_bytes,
+                zip64_directory_offset,
+            ) = _ZIP64_EOCD_STRUCT.unpack(zip64_payload)
+            if zip64_signature != _ZIP64_EOCD_SIGNATURE or zip64_record_size < 44:
+                raise ValueError("malformed ZIP64 EOCD record")
+            zip64_end = zip64_offset + 12 + zip64_record_size
+            if zip64_end != locator_offset:
+                raise ValueError("contradictory ZIP64 EOCD record bounds")
+            if zip64_disk_number != 0 or zip64_directory_disk != 0:
+                raise ValueError("unsupported multi-disk ZIP64 archive")
+            if disk_number != 0 or directory_disk != 0:
+                raise ValueError("unsupported multi-disk ZIP archive")
+            entries_on_disk = zip64_entries_on_disk
+            entries_total = zip64_entries_total
+            directory_bytes = zip64_directory_bytes
+            directory_offset = zip64_directory_offset
+            directory_end_marker = zip64_offset
+        else:
+            if disk_number != 0 or directory_disk != 0:
+                raise ValueError("unsupported multi-disk ZIP archive")
+            if entries_on_disk != entries_total:
+                raise ValueError("contradictory ZIP EOCD member counts")
+
+        if entries_on_disk != entries_total:
+            raise ValueError("contradictory ZIP member counts")
+        if directory_offset > file_size or directory_bytes > file_size - directory_offset:
+            raise ValueError("ZIP central directory bounds are invalid")
+        directory_end = directory_offset + directory_bytes
+        if directory_end > directory_end_marker:
+            raise ValueError("ZIP central directory overlaps EOCD metadata")
+        if (entries_total == 0) != (directory_bytes == 0):
+            raise ValueError("contradictory ZIP EOCD member count and directory size")
+        if budget.max_members is not None and entries_total > budget.max_members:
+            raise ValueError(
+                "zip archive exceeds max_members: "
+                f"actual={entries_total}, maximum={budget.max_members}"
+            )
+        if budget.max_central_directory_bytes is None:
+            raise ValueError(
+                "max_central_directory_bytes is required for bounded ZIP inspection"
+            )
+        if directory_bytes > budget.max_central_directory_bytes:
+            raise ValueError(
+                "zip central directory exceeds max_central_directory_bytes: "
+                f"actual={directory_bytes}, maximum={budget.max_central_directory_bytes}"
+            )
+        return _ZipDirectoryMetadata(
+            member_count=entries_total,
+            central_directory_bytes=directory_bytes,
+            central_directory_offset=directory_offset,
+            directory_end=directory_end,
+        )
+
+
+def _portable_member_identity(name: str, is_directory: bool) -> tuple[str, ...]:
+    portable_name = name[:-1] if is_directory and name.endswith("/") else name
+    segments = portable_name.split("/")
+    for segment in segments:
+        if not segment:
+            raise ValueError("empty ZIP member path segment")
+        if segment == ".":
+            raise ValueError("dot ZIP member path segment is not allowed")
+        if segment == "..":
+            raise ValueError("ZIP member path traversal is not allowed")
+        if segment.endswith((".", " ")):
+            raise ValueError("ZIP member segment has a trailing dot or space")
+        if any(ord(character) < 32 or ord(character) == 127 for character in segment):
+            raise ValueError("ZIP member segment contains a control character")
+        if ":" in segment:
+            raise ValueError("ZIP member segment contains an ADS/colon")
+        if any(character in _WINDOWS_FORBIDDEN_CHARS for character in segment):
+            raise ValueError("ZIP member segment contains a forbidden Windows character")
+        device_name = segment.split(".", 1)[0]
+        if device_name.casefold() in _WINDOWS_RESERVED_NAMES:
+            raise ValueError("ZIP member segment uses a reserved device name")
+    return tuple(unicodedata.normalize("NFC", segment).casefold() for segment in segments)
+
+
+def _unsafe_name_reason(name: str, *, is_directory: bool = False) -> str | None:
     if not name:
         return "empty"
     if "\x00" in name:
@@ -242,8 +482,10 @@ def _unsafe_name_reason(name: str) -> str | None:
     drive, _ = ntpath.splitdrive(name)
     if drive:
         return "drive"
-    if any(part == ".." for part in name.split("/")):
-        return "path traversal"
+    try:
+        _portable_member_identity(name, is_directory)
+    except ValueError as exc:
+        return str(exc)
     return None
 
 
@@ -276,6 +518,7 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
             "zip container exceeds max_container_bytes: "
             f"actual={container_bytes}, maximum={budget.max_container_bytes}"
         )
+    directory_metadata = _read_zip_directory_metadata(source, container_bytes, budget)
 
     try:
         archive = zipfile.ZipFile(source, "r")
@@ -289,26 +532,39 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
                 "zip archive exceeds max_members: "
                 f"actual={len(infos)}, maximum={budget.max_members}"
             )
+        if len(infos) != directory_metadata.member_count:
+            raise ValueError(
+                "ZIP central directory member count differs from EOCD metadata: "
+                f"reported={directory_metadata.member_count}, actual={len(infos)}"
+            )
         seen: set[str] = set()
+        canonical_names: dict[tuple[str, ...], str] = {}
         members: list[ZipMember] = []
         total_expanded = 0
         total_compressed = 0
         for info in infos:
             name = info.filename
-            reason = _unsafe_name_reason(name)
-            if reason:
-                raise ValueError(f"zip archive member has unsafe {reason} name: {name!r}")
-            if name in seen:
-                raise ValueError(f"zip archive contains duplicate member: {name!r}")
-            seen.add(name)
-
             is_directory, invalid_kind = _member_kind(info)
             if invalid_kind:
                 raise ValueError(
                     f"zip archive member is a {invalid_kind} or special entry: {name!r}"
                 )
+            reason = _unsafe_name_reason(name, is_directory=is_directory)
+            if reason:
+                raise ValueError(f"zip archive member has unsafe {reason} name: {name!r}")
+            if name in seen:
+                raise ValueError(f"zip archive contains duplicate member: {name!r}")
+            seen.add(name)
             if is_directory and not budget.allow_directories:
                 raise ValueError(f"zip archive directory member is not allowed: {name!r}")
+            canonical_identity = _portable_member_identity(name, is_directory)
+            previous_name = canonical_names.get(canonical_identity)
+            if previous_name is not None:
+                raise ValueError(
+                    "zip archive member aliases an existing path: "
+                    f"name={name!r}, existing={previous_name!r}"
+                )
+            canonical_names[canonical_identity] = name
             if info.compress_type not in _SUPPORTED_COMPRESSION_METHODS:
                 raise ValueError(
                     "zip archive uses unsupported compression method: "
