@@ -86,3 +86,59 @@ def test_accepts_compliant_external_and_local_actions(tmp_path: Path) -> None:
     )
 
     assert violations == []
+
+
+def test_rejects_flow_style_uses_mapping(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - {uses: actions/checkout@v7, with: {persist-credentials: false}}
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_quoted_uses_key(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - 'uses': actions/setup-python@v7
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_does_not_treat_block_scalar_text_as_checkout_input(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        with:
+          sparse-checkout: |
+            persist-credentials: false
+""",
+    )
+
+    assert any("persist-credentials: false" in violation for violation in violations)
+
+
+def test_accepts_flow_style_with_mapping(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        with: {{persist-credentials: false}}
+""",
+    )
+
+    assert violations == []

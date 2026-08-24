@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses\s*:\s*(?P<value>\S+)")
+_UNSUPPORTED_USES_RE = re.compile(
+    r"^\s*(?:-\s*)?(?:['\"]uses['\"]\s*:|\{\s*['\"]?uses['\"]?\s*:|,\s*['\"]?uses['\"]?\s*:)")
 _KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+)\s*:\s*(?P<value>.*?)\s*$")
 _IMMUTABLE_REF_RE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
@@ -71,10 +73,22 @@ def _checkout_has_non_persistent_credentials(lines: list[str], uses_index: int) 
             if candidate_indent > _indent(lines[start]):
                 with_index = index
                 with_indent = candidate_indent
+                inline_with = candidate.strip()[len("with:") :].strip()
+                if inline_with:
+                    if not (inline_with.startswith("{") and inline_with.endswith("}")):
+                        return False
+                    fields = inline_with[1:-1].split(",")
+                    return any(
+                        (match := _KEY_RE.match(field.strip()))
+                        and match.group("key") == "persist-credentials"
+                        and match.group("value").strip() == "false"
+                        for field in fields
+                    )
                 break
     if with_index is None:
         return False
 
+    property_indent: int | None = None
     for index in range(with_index + 1, end):
         candidate = lines[index]
         if not candidate.strip():
@@ -82,6 +96,10 @@ def _checkout_has_non_persistent_credentials(lines: list[str], uses_index: int) 
         candidate_indent = _indent(candidate)
         if candidate_indent <= with_indent:
             break
+        if property_indent is None:
+            property_indent = candidate_indent
+        if candidate_indent != property_indent:
+            continue
         match = _KEY_RE.match(candidate.strip())
         if match and match.group("key") == "persist-credentials":
             value = match.group("value").split("#", 1)[0].strip()
@@ -106,6 +124,12 @@ def check_workflow_paths(paths: Iterable[str | Path]) -> list[str]:
                 violations.append(f"{workflow}: cannot read workflow ({exc})")
                 continue
             for line_number, line in enumerate(lines, start=1):
+                if _UNSUPPORTED_USES_RE.match(line):
+                    violations.append(
+                        f"{workflow}:{line_number}: unsupported uses syntax; use a canonical "
+                        "unquoted 'uses: owner/action@<40 lowercase hexadecimal SHA>' mapping"
+                    )
+                    continue
                 match = _USES_RE.match(line)
                 if not match:
                     continue
