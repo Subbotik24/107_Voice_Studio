@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import stat
 import tempfile
 import threading
 import wave
@@ -19,7 +20,17 @@ MAX_STATUS_LENGTH = 200
 
 
 class RecorderCleanupError(RuntimeError):
-    pass
+    """A cleanup operation retained one or more recorder residue paths."""
+
+    def __init__(self, message: str, *, residue_paths: tuple[Path, ...] = ()) -> None:
+        self.residue_paths = tuple(Path(path) for path in residue_paths)
+        self.paths = self.residue_paths
+        self.diagnostic = {
+            "kind": "recorder_cleanup",
+            "message": message,
+            "residue_paths": tuple(str(path) for path in self.residue_paths),
+        }
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +62,7 @@ class AudioRecorder:
         self._status_counts: dict[str, int] = {}
         self._limit_reached = False
         self._destination: Path | None = None
+        self._recording_directory: Path | None = None
         self._destination_owned = False
         self._expected_identity: tuple[int, int] | None = None
         self._destination_identity: tuple[int, int] | None = None
@@ -73,32 +85,42 @@ class AudioRecorder:
     def quarantine_path(self) -> Path | None:
         return self._quarantine_path
 
-    def start(self, destination: Path) -> None:
-        with self._lifecycle_lock:
-            self._start_impl(destination)
+    def start(self, recording_directory: Path) -> Path:
+        """Start recording into a new private WAV under ``recording_directory``."""
 
-    def _start_impl(self, destination: Path) -> None:
+        with self._lifecycle_lock:
+            return self._start_impl(Path(recording_directory))
+
+    def _start_impl(self, recording_directory: Path) -> Path:
         if self.recording or self._stream is not None or self._writer_thread is not None:
-            return
+            if self._destination is None:
+                raise RuntimeError("recorder lifecycle state is inconsistent")
+            return self._destination
+
         try:
             import sounddevice as sd
         except ImportError as exc:
             raise RuntimeError("sounddevice is not installed") from exc
 
-        path = Path(destination)
-        expected_identity: tuple[int, int] | None = None
-        if path.exists():
-            stat = path.stat()
-            if stat.st_size != 0:
-                raise FileExistsError(f"refusing to overwrite existing recording: {path}")
-            expected_identity = self._file_identity(stat)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        directory = self._prepare_recording_directory(recording_directory)
+        fd, name = tempfile.mkstemp(
+            prefix=".hermes-voice-",
+            suffix=".wav",
+            dir=str(directory),
+        )
+        path = Path(name)
+        try:
+            expected_identity = self._file_identity(os.fstat(fd))
+        finally:
+            os.close(fd)
+
         self._drain_queue()
         with self._state_lock:
             self._destination = path
-            self._destination_owned = False
+            self._recording_directory = directory
+            self._destination_owned = True
             self._expected_identity = expected_identity
-            self._destination_identity = None
+            self._destination_identity = expected_identity
             self._quarantine_path = None
             self._writer_error = None
             self._writer_done.clear()
@@ -126,18 +148,19 @@ class AudioRecorder:
             available = self.sample_rate * MAX_RECORDING_SECONDS
             with self._state_lock:
                 remaining = available - self._accepted_frames
-                accepted = min(max(int(frames), 0), len(indata), max(remaining, 0))
+                if remaining <= 0:
+                    self._limit_reached = True
+                    self._recording.clear()
+                    return
+                accepted = min(max(int(frames), 0), len(indata), remaining)
                 if accepted:
                     self._accepted_frames += accepted
-                reached_limit = accepted > 0 and accepted >= remaining
+                reached_limit = accepted >= remaining
                 if reached_limit:
                     self._limit_reached = True
                     self._recording.clear()
 
             if accepted <= 0:
-                return
-            if self._frames.full():
-                self._record_drop()
                 return
             payload = indata[:accepted].tobytes()
             try:
@@ -155,15 +178,20 @@ class AudioRecorder:
                 callback=callback,
             )
             self._stream.start()
-        except BaseException:
+        except BaseException as exc:
             self._recording.clear()
+            stream_error: BaseException | None = None
             try:
                 self._close_stream()
-            finally:
-                self._finish_writer()
-                self._remove_owned_partial()
-                self._clear_session()
-            raise
+            except BaseException as close_exc:
+                stream_error = close_exc
+            self._finish_writer()
+            writer_error = self._writer_error
+            cleanup_error = self._remove_owned_partial()
+            self._clear_session()
+            self._raise_with_cleanup(stream_error or writer_error or exc, cleanup_error)
+            raise AssertionError("unreachable") from exc
+        return path
 
     def stop(self) -> RecordingResult:
         with self._lifecycle_lock:
@@ -184,7 +212,8 @@ class AudioRecorder:
         if stream_error is not None or writer_error is not None:
             cleanup_error = self._remove_owned_partial()
             self._clear_session()
-            raise stream_error or writer_error or cleanup_error
+            self._raise_with_cleanup(stream_error or writer_error, cleanup_error)
+            raise AssertionError("unreachable")
         if path is None or self._frames_written <= 0 or not path.exists():
             cleanup_error = self._remove_owned_partial()
             self._clear_session()
@@ -192,13 +221,11 @@ class AudioRecorder:
                 raise cleanup_error
             raise RuntimeError("no audio was captured")
         if not self._path_has_destination_identity():
+            primary = FileExistsError(f"recording destination was replaced: {path}")
             cleanup_error = self._remove_owned_partial()
             self._clear_session()
-            if cleanup_error is not None:
-                raise FileExistsError(
-                    f"recording destination was replaced: {path}"
-                ) from cleanup_error
-            raise FileExistsError(f"recording destination was replaced: {path}")
+            self._raise_with_cleanup(primary, cleanup_error)
+            raise AssertionError("unreachable")
 
         with self._state_lock:
             status_messages = tuple(self._status_counts)
@@ -221,7 +248,6 @@ class AudioRecorder:
             warning_parts.append("Sounddevice status: " + rendered_status)
         if limit_reached:
             warning_parts.append("Maximum recording duration reached.")
-        warning = " ".join(warning_parts)
         result = RecordingResult(
             path=path,
             frames_written=frames_written,
@@ -229,7 +255,7 @@ class AudioRecorder:
             status_messages=status_messages,
             limit_reached=limit_reached,
             degraded=bool(warning_parts),
-            warning=warning,
+            warning=" ".join(warning_parts),
         )
         self._destination_owned = False
         return result
@@ -239,6 +265,8 @@ class AudioRecorder:
             self._cancel_impl()
 
     def _cancel_impl(self) -> None:
+        if self._stream is None and self._writer_thread is None:
+            return
         self._recording.clear()
         close_error: BaseException | None = None
         try:
@@ -251,7 +279,8 @@ class AudioRecorder:
         cleanup_error = self._remove_owned_partial()
         self._clear_session()
         if close_error is not None:
-            raise close_error
+            self._raise_with_cleanup(close_error, cleanup_error)
+            raise AssertionError("unreachable")
         if cleanup_error is not None:
             raise cleanup_error
 
@@ -269,6 +298,7 @@ class AudioRecorder:
                         break
                     payload, frame_count = item  # type: ignore[misc]
                     wav.writeframes(payload)
+                    raw.flush()
                     with self._state_lock:
                         self._frames_written += frame_count
         except BaseException as exc:
@@ -304,14 +334,13 @@ class AudioRecorder:
     def _open_destination(self, path: Path) -> Any:
         expected = self._expected_identity
         if expected is None:
-            fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
-        else:
-            fd = os.open(str(path), os.O_RDWR)
+            raise RuntimeError("recorder destination identity is unavailable")
+        fd = os.open(str(path), os.O_RDWR)
         try:
-            stat = os.fstat(fd)
-            actual = self._file_identity(stat)
-            if (expected is not None and actual != expected) or stat.st_size != 0:
-                raise FileExistsError(f"refusing to overwrite existing recording: {path}")
+            stat_result = os.fstat(fd)
+            actual = self._file_identity(stat_result)
+            if actual != expected or stat_result.st_size != 0:
+                raise FileExistsError(f"recorder destination identity changed: {path}")
             raw = os.fdopen(fd, "r+b")
         except BaseException:
             os.close(fd)
@@ -358,8 +387,28 @@ class AudioRecorder:
             self._dropped_blocks += 1
 
     @staticmethod
-    def _file_identity(stat: os.stat_result) -> tuple[int, int]:
-        return stat.st_dev, stat.st_ino
+    def _file_identity(stat_result: os.stat_result) -> tuple[int, int]:
+        return stat_result.st_dev, stat_result.st_ino
+
+    @staticmethod
+    def _prepare_recording_directory(recording_directory: Path) -> Path:
+        directory = recording_directory.expanduser()
+        if directory.is_symlink():
+            raise ValueError("recording directory must not be a symbolic link")
+        if directory.exists():
+            if not directory.is_dir():
+                raise NotADirectoryError(
+                    f"recording directory is not a directory: {directory}"
+                )
+        else:
+            directory.mkdir(parents=True, mode=0o700)
+        if os.name != "nt":
+            mode = stat.S_IMODE(directory.stat().st_mode)
+            if mode & 0o077:
+                raise PermissionError(
+                    f"recording directory must be owner-only: {directory}"
+                )
+        return directory
 
     def _path_has_destination_identity(self) -> bool:
         path = self._destination
@@ -378,40 +427,89 @@ class AudioRecorder:
             except queue.Empty:
                 return
 
-    def _remove_owned_partial(self) -> BaseException | None:
+    @staticmethod
+    def _existing_residue_paths(*paths: Path | None) -> tuple[Path, ...]:
+        result: list[Path] = []
+        for path in paths:
+            if path is not None and path.exists() and path not in result:
+                result.append(path)
+        return tuple(result)
+
+    def _remove_owned_partial(self) -> RecorderCleanupError | None:
         path = self._destination
-        identity = self._destination_identity
+        identity = self._destination_identity or self._expected_identity
         if not self._destination_owned or path is None or identity is None:
             return None
-        quarantine: Path | None = None
+
+        self._quarantine_path = None
         try:
+            try:
+                path_identity = self._file_identity(path.stat())
+            except FileNotFoundError:
+                self._destination_owned = False
+                return None
+            if path_identity != identity:
+                return self._make_cleanup_error(
+                    f"recorder preserved foreign destination entry at {path}",
+                    residue_paths=self._existing_residue_paths(path),
+                )
+
             quarantine_fd, quarantine_name = tempfile.mkstemp(
-                prefix=f".{path.name}.recorder-", dir=str(path.parent)
+                prefix=f".{path.name}.recorder-",
+                dir=str(path.parent),
             )
             os.close(quarantine_fd)
             quarantine = Path(quarantine_name)
             self._quarantine_path = quarantine
             quarantine.unlink()
             os.rename(path, quarantine)
-            moved_identity = self._file_identity(quarantine.stat())
-            if moved_identity == identity:
+
+            # Check twice: the second check closes the deterministic race where a
+            # foreign entry replaces the quarantine path during the first check.
+            first_identity = self._file_identity(quarantine.stat())
+            second_identity = self._file_identity(quarantine.stat())
+            if first_identity == identity and second_identity == identity:
                 quarantine.unlink()
                 self._quarantine_path = None
+                self._destination_owned = False
                 return None
-            return RecorderCleanupError(
-                f"recorder preserved foreign destination entry at {quarantine}"
+            return self._make_cleanup_error(
+                f"recorder preserved ambiguous partial entry at {quarantine}",
+                residue_paths=self._existing_residue_paths(path, quarantine),
             )
         except BaseException as exc:
-            if quarantine is None:
-                return RecorderCleanupError(f"could not prepare recorder cleanup: {exc}")
-            return RecorderCleanupError(
-                f"recorder preserved partial entry at {quarantine}: {exc}"
+            return self._make_cleanup_error(
+                f"recorder preserved cleanup residue: {exc}",
+                residue_paths=self._existing_residue_paths(path, self._quarantine_path),
             )
+
+    def _make_cleanup_error(
+        self, message: str, *, residue_paths: tuple[Path, ...]
+    ) -> RecorderCleanupError:
+        return RecorderCleanupError(message, residue_paths=residue_paths)
+
+    @staticmethod
+    def _raise_with_cleanup(
+        primary: BaseException | None, cleanup: RecorderCleanupError | None
+    ) -> None:
+        if cleanup is None:
+            if primary is None:
+                raise RuntimeError("recorder operation failed")
+            raise primary
+        if primary is None:
+            raise cleanup
+        try:
+            primary.cleanup_error = cleanup  # type: ignore[attr-defined]
+            primary.residue_paths = cleanup.residue_paths  # type: ignore[attr-defined]
+        except BaseException:
+            pass
+        raise primary from cleanup
 
     def _clear_session(self) -> None:
         self._stream = None
         self._writer_thread = None
         self._destination = None
+        self._recording_directory = None
         self._destination_owned = False
         self._expected_identity = None
         self._destination_identity = None

@@ -61,10 +61,11 @@ def _assert_no_writer_threads() -> None:
 def test_recorder_streams_fixed_blocks_to_wav(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
-    destination = tmp_path / "recording.wav"
     recorder = AudioRecorder(sample_rate=16_000, channels=1)
 
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
+    assert destination.parent == tmp_path
+    assert destination.suffix == ".wav"
     stream = _stream()
     assert stream.kwargs["blocksize"] == 1_600
     samples = np.arange(1_600, dtype=np.int16).reshape(-1, 1)
@@ -80,6 +81,8 @@ def test_recorder_streams_fixed_blocks_to_wav(
         assert handle.getsampwidth() == 2
         assert handle.getframerate() == 16_000
         assert handle.readframes(1_600) == samples.tobytes()
+    recorder.cancel()
+    assert destination.exists()
     assert stream.stopped and stream.closed
     _assert_no_writer_threads()
 
@@ -88,7 +91,7 @@ def test_recorder_reports_sounddevice_status(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
     recorder = AudioRecorder()
-    recorder.start(tmp_path / "status.wav")
+    recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16), status="input overflow")
 
     result = recorder.stop()
@@ -116,7 +119,7 @@ def test_recorder_bounds_queue_and_reports_drops(
 
     monkeypatch.setattr(recorder_module.wave, "open", slow_open)
     recorder = AudioRecorder()
-    recorder.start(tmp_path / "drops.wav")
+    recorder.start(tmp_path)
     block = np.zeros((1_600, 1), dtype=np.int16)
     for _ in range(200):
         _stream().emit(block)
@@ -133,7 +136,7 @@ def test_recorder_stops_at_duration_limit(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
     recorder = AudioRecorder(sample_rate=1)
-    recorder.start(tmp_path / "limited.wav")
+    recorder.start(tmp_path)
     _stream().emit(np.zeros((7_201, 1), dtype=np.int16))
 
     result = recorder.stop()
@@ -148,9 +151,8 @@ def test_recorder_stops_at_duration_limit(
 def test_recorder_cancel_removes_partial_file(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
-    destination = tmp_path / "cancelled.wav"
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
 
     recorder.cancel()
@@ -170,7 +172,7 @@ def test_recorder_refuses_to_overwrite_existing_destination(
     destination.write_bytes(original)
     recorder = AudioRecorder()
 
-    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+    with pytest.raises((FileExistsError, NotADirectoryError)):
         recorder.start(destination)
 
     assert destination.read_bytes() == original
@@ -178,20 +180,21 @@ def test_recorder_refuses_to_overwrite_existing_destination(
     _assert_no_writer_threads()
 
 
-def test_recorder_accepts_precreated_empty_destination_and_cancel_preserves_success(
+def test_recorder_creates_unique_private_destination_and_cancel_preserves_user_file(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
-    destination = tmp_path / "precreated.wav"
-    destination.touch()
+    user_file = tmp_path / "precreated.wav"
+    user_file.write_bytes(b"user media")
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
 
-    result = recorder.stop()
     recorder.cancel()
 
-    assert result.path == destination
-    assert destination.exists()
+    assert destination != user_file
+    assert destination.parent == tmp_path
+    assert not destination.exists()
+    assert user_file.read_bytes() == b"user media"
     _assert_no_writer_threads()
 
 
@@ -202,9 +205,9 @@ def test_recorder_serializes_overlapping_starts(
     destinations = [tmp_path / "one.wav", tmp_path / "two.wav"]
     recorder = AudioRecorder()
 
-    def start(destination: Any) -> None:
+    def start(_directory: Any) -> None:
         barrier.wait()
-        recorder.start(destination)
+        recorder.start(tmp_path)
 
     threads = [threading.Thread(target=start, args=(destination,)) for destination in destinations]
     for thread in threads:
@@ -222,8 +225,6 @@ def test_recorder_serializes_overlapping_starts(
 def test_recorder_rejects_destination_replacement_before_writer_open(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "raced.wav"
-    destination.touch()
     entered = threading.Event()
     release = threading.Event()
     recorder = AudioRecorder()
@@ -235,7 +236,7 @@ def test_recorder_rejects_destination_replacement_before_writer_open(
         return real_open_destination(path)
 
     monkeypatch.setattr(recorder, "_open_destination", delayed_open)
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     assert entered.wait(2)
     replacement = tmp_path / "raced-replacement.wav"
     replacement.write_bytes(b"replacement")
@@ -243,19 +244,21 @@ def test_recorder_rejects_destination_replacement_before_writer_open(
     replacement.replace(destination)
     release.set()
 
-    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+    with pytest.raises(FileExistsError, match="identity changed") as raised:
         recorder.stop()
 
     assert destination.read_bytes() == b"replacement"
+    cleanup = getattr(raised.value, "cleanup_error", None)
+    assert isinstance(cleanup, recorder_module.RecorderCleanupError)
+    assert cleanup.residue_paths == (destination,)
     _assert_no_writer_threads()
 
 
 def test_recorder_serializes_stop_then_cancel_without_orphaning_writer(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
-    destination = tmp_path / "stop-cancel.wav"
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     stream = _stream()
     entered = threading.Event()
@@ -290,7 +293,7 @@ def test_recorder_bounds_persistent_status_metadata(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream]
 ) -> None:
     recorder = AudioRecorder()
-    recorder.start(tmp_path / "status-stress.wav")
+    recorder.start(tmp_path)
     stream = _stream()
     block = np.zeros((1_600, 1), dtype=np.int16)
     for _ in range(2_000):
@@ -307,14 +310,12 @@ def test_recorder_bounds_persistent_status_metadata(
 def test_recorder_writer_failure_is_raised_and_partial_removed(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "failed.wav"
-
     def fail_open(*args: Any, **kwargs: Any) -> Any:
         raise OSError("disk full")
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_open)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
 
     with pytest.raises(OSError, match="disk full"):
@@ -327,7 +328,6 @@ def test_recorder_writer_failure_is_raised_and_partial_removed(
 def test_recorder_write_failure_removes_real_partial_wav(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "real-partial.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
 
@@ -345,9 +345,10 @@ def test_recorder_write_failure_removes_real_partial_wav(
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
+    assert recorder._writer_done.wait(2)
     assert destination.exists() and destination.stat().st_size > 0
 
     with pytest.raises(OSError, match="write failed"):
@@ -360,7 +361,6 @@ def test_recorder_write_failure_removes_real_partial_wav(
 def test_recorder_write_failure_cleans_partial_but_not_replacement(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "failed-after-write.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
 
@@ -378,7 +378,7 @@ def test_recorder_write_failure_cleans_partial_but_not_replacement(
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
     assert recorder._writer_done.wait(2)
@@ -404,7 +404,6 @@ def test_recorder_write_failure_cleans_partial_but_not_replacement(
 def test_cleanup_preserves_foreign_quarantine_when_destination_collides(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "quarantine-collision.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
 
@@ -422,7 +421,7 @@ def test_cleanup_preserves_foreign_quarantine_when_destination_collides(
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
 
@@ -449,10 +448,9 @@ def test_cleanup_preserves_foreign_quarantine_when_destination_collides(
     _assert_no_writer_threads()
 
 
-def test_cleanup_does_not_depend_on_hard_links(
+def test_cleanup_preserves_foreign_destination_without_hard_links(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "no-hard-link.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
 
@@ -475,7 +473,7 @@ def test_cleanup_does_not_depend_on_hard_links(
         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("hard links unsupported")),
     )
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
     foreign = tmp_path / "foreign-destination.bin"
@@ -483,19 +481,20 @@ def test_cleanup_does_not_depend_on_hard_links(
     destination.unlink()
     foreign.replace(destination)
 
-    with pytest.raises(OSError, match="write failed"):
+    with pytest.raises(OSError, match="write failed") as raised:
         recorder.stop()
 
-    assert recorder.quarantine_path is not None
-    assert recorder.quarantine_path.exists()
-    assert recorder.quarantine_path.read_bytes() == b"foreign destination"
+    assert recorder.quarantine_path is None
+    assert destination.read_bytes() == b"foreign destination"
+    cleanup = getattr(raised.value, "cleanup_error", None)
+    assert isinstance(cleanup, recorder_module.RecorderCleanupError)
+    assert cleanup.residue_paths == (destination,)
     _assert_no_writer_threads()
 
 
-def test_cleanup_does_not_delete_foreign_replacement_after_identity_check(
+def test_cleanup_identity_ambiguity_preserves_residue_and_exposes_structured_error(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "post-stat-race.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
 
@@ -513,7 +512,7 @@ def test_cleanup_does_not_delete_foreign_replacement_after_identity_check(
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
 
@@ -538,19 +537,22 @@ def test_cleanup_does_not_delete_foreign_replacement_after_identity_check(
         staticmethod(replace_after_identity_check),
     )
 
-    with pytest.raises(OSError, match="primary write failed"):
+    with pytest.raises(OSError, match="primary write failed") as raised:
         recorder.stop()
 
     assert replaced
     assert recorder.quarantine_path is not None
     assert recorder.quarantine_path.read_bytes() == b"foreign replacement"
+    cleanup = getattr(raised.value, "cleanup_error", None)
+    assert isinstance(cleanup, recorder_module.RecorderCleanupError)
+    assert cleanup.residue_paths == (recorder.quarantine_path,)
+    assert tuple(cleanup.diagnostic["residue_paths"]) == (str(recorder.quarantine_path),)
     _assert_no_writer_threads()
 
 
 def test_recorder_close_failure_propagates_and_cleans_partial(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "close-failed.wav"
     recorder = AudioRecorder()
     real_open_destination = recorder._open_destination
 
@@ -568,7 +570,7 @@ def test_recorder_close_failure_propagates_and_cleans_partial(
         return CloseFailingFile(real_open_destination(path))
 
     monkeypatch.setattr(recorder, "_open_destination", open_close_failing)
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
 
     with pytest.raises(OSError, match="close before release failed"):
@@ -583,7 +585,6 @@ def test_recorder_close_failure_propagates_and_cleans_partial(
 def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "cleanup-failed.wav"
     wrote = threading.Event()
     real_open = recorder_module.wave.open
     real_mkstemp = recorder_module.tempfile.mkstemp
@@ -602,7 +603,7 @@ def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
 
     monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
     monkeypatch.setattr(
@@ -621,8 +622,7 @@ def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
 
     monkeypatch.setattr(recorder_module.wave, "open", real_open)
     monkeypatch.setattr(recorder_module.tempfile, "mkstemp", real_mkstemp)
-    next_destination = tmp_path / "restart.wav"
-    recorder.start(next_destination)
+    next_destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     recorder.cancel()
     assert not next_destination.exists()
@@ -631,7 +631,6 @@ def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
 def test_recorder_full_queue_writer_failure_stops_promptly(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    destination = tmp_path / "full-queue-failed.wav"
     entered = threading.Event()
     release = threading.Event()
     real_open = recorder_module.wave.open
@@ -651,7 +650,7 @@ def test_recorder_full_queue_writer_failure_stops_promptly(
 
     monkeypatch.setattr(recorder_module.wave, "open", blocked_fail)
     recorder = AudioRecorder()
-    recorder.start(destination)
+    destination = recorder.start(tmp_path)
     block = np.zeros((1_600, 1), dtype=np.int16)
     _stream().emit(block)
     assert entered.wait(2)
