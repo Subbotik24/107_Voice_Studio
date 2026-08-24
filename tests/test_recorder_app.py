@@ -492,6 +492,61 @@ def test_cleanup_does_not_depend_on_hard_links(
     _assert_no_writer_threads()
 
 
+def test_cleanup_does_not_delete_foreign_replacement_after_identity_check(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "post-stat-race.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("primary write failed")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+
+    real_file_identity = recorder_module.AudioRecorder._file_identity
+    replaced = False
+
+    def replace_after_identity_check(stat: Any) -> tuple[int, int]:
+        nonlocal replaced
+        identity = real_file_identity(stat)
+        quarantine = recorder.quarantine_path
+        if not replaced and quarantine is not None and quarantine.exists():
+            foreign = tmp_path / "post-stat-foreign.bin"
+            foreign.write_bytes(b"foreign replacement")
+            quarantine.unlink()
+            foreign.replace(quarantine)
+            replaced = True
+        return identity
+
+    monkeypatch.setattr(
+        recorder_module.AudioRecorder,
+        "_file_identity",
+        staticmethod(replace_after_identity_check),
+    )
+
+    with pytest.raises(OSError, match="primary write failed"):
+        recorder.stop()
+
+    assert replaced
+    assert recorder.quarantine_path is not None
+    assert recorder.quarantine_path.read_bytes() == b"foreign replacement"
+    _assert_no_writer_threads()
+
+
 def test_recorder_close_failure_propagates_and_cleans_partial(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
