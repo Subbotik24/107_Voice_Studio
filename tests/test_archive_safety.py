@@ -349,6 +349,48 @@ def test_inspection_rejects_regular_file_ancestor_conflicts(
         inspect_zip(archive_path, make_budget())
 
 
+def test_hierarchy_check_does_not_scan_all_prior_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "many-siblings.zip"
+    write_zip(
+        archive_path,
+        [(f"sibling-{index}.txt", b"x") for index in range(2_000)],
+    )
+    scan_count = [0]
+
+    class CountingCanonicalNames(dict):
+        def items(self):  # type: ignore[no-untyped-def]
+            scan_count[0] += 1
+            return super().items()
+
+    original_check = archive_module._check_canonical_hierarchy
+
+    def check_spy(
+        canonical_names: dict[tuple[str, ...], tuple[str, bool]],
+        canonical_identity: tuple[str, ...],
+        name: str,
+        is_directory: bool,
+        **kwargs: object,
+    ) -> None:
+        original_check(
+            CountingCanonicalNames(canonical_names),
+            canonical_identity,
+            name,
+            is_directory,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(archive_module, "_check_canonical_hierarchy", check_spy)
+    inspection = inspect_zip(
+        archive_path,
+        make_budget(max_members=2_000, max_total_bytes=2_000),
+    )
+
+    assert inspection.member_count == 2_000
+    assert scan_count[0] == 0
+
+
 def test_inspection_rejects_truncated_eocd_before_zipfile_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

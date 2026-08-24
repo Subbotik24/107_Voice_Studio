@@ -468,6 +468,10 @@ def _check_canonical_hierarchy(
     canonical_identity: tuple[str, ...],
     name: str,
     is_directory: bool,
+    *,
+    regular_file_identities: set[tuple[str, ...]],
+    ancestor_prefixes: set[tuple[str, ...]],
+    ancestor_prefix_names: dict[tuple[str, ...], str],
 ) -> None:
     previous_entry = canonical_names.get(canonical_identity)
     if previous_entry is not None:
@@ -476,19 +480,18 @@ def _check_canonical_hierarchy(
             f"name={name!r}, existing={previous_entry[0]!r}"
         )
     for prefix_length in range(1, len(canonical_identity)):
-        ancestor_entry = canonical_names.get(canonical_identity[:prefix_length])
-        if ancestor_entry is not None and not ancestor_entry[1]:
+        prefix_identity = canonical_identity[:prefix_length]
+        if prefix_identity in regular_file_identities:
+            ancestor_entry = canonical_names[prefix_identity]
             raise ValueError(
                 "zip archive member has a regular-file ancestor: "
                 f"name={name!r}, ancestor={ancestor_entry[0]!r}"
             )
-    if not is_directory:
-        for existing_identity, existing_entry in canonical_names.items():
-            if existing_identity[: len(canonical_identity)] == canonical_identity:
-                raise ValueError(
-                    "zip archive regular file conflicts with descendant path: "
-                    f"name={name!r}, descendant={existing_entry[0]!r}"
-                )
+    if not is_directory and canonical_identity in ancestor_prefixes:
+        raise ValueError(
+            "zip archive regular file conflicts with descendant path: "
+            f"name={name!r}, descendant={ancestor_prefix_names[canonical_identity]!r}"
+        )
 
 
 def _unsafe_name_reason(name: str, *, is_directory: bool = False) -> str | None:
@@ -562,6 +565,9 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
             )
         seen: set[str] = set()
         canonical_names: dict[tuple[str, ...], tuple[str, bool]] = {}
+        regular_file_identities: set[tuple[str, ...]] = set()
+        ancestor_prefixes: set[tuple[str, ...]] = set()
+        ancestor_prefix_names: dict[tuple[str, ...], str] = {}
         members: list[ZipMember] = []
         total_expanded = 0
         total_compressed = 0
@@ -586,8 +592,17 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
                 canonical_identity,
                 name,
                 is_directory,
+                regular_file_identities=regular_file_identities,
+                ancestor_prefixes=ancestor_prefixes,
+                ancestor_prefix_names=ancestor_prefix_names,
             )
             canonical_names[canonical_identity] = (name, is_directory)
+            if not is_directory:
+                regular_file_identities.add(canonical_identity)
+            for prefix_length in range(1, len(canonical_identity)):
+                prefix_identity = canonical_identity[:prefix_length]
+                ancestor_prefixes.add(prefix_identity)
+                ancestor_prefix_names.setdefault(prefix_identity, name)
             if info.compress_type not in _SUPPORTED_COMPRESSION_METHODS:
                 raise ValueError(
                     "zip archive uses unsupported compression method: "
