@@ -1,5 +1,8 @@
 # Roadmap
 
+Current 0.4 RC checkpoint and the ordered cross-computer continuation plan are
+tracked in `IMPLEMENTATION_STATUS.md` and `docs/CONTINUATION_PLAN_0.4.md`.
+
 ## P0 — довести desktop‑застосунок до release candidate
 
 1. **Реальний E2E на macOS та Windows**

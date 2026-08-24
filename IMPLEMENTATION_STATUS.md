@@ -1,43 +1,59 @@
-# Implementation status — 0.3.0 Test RC preparation
+# Implementation status — VOICE Studio 0.4 RC work in progress
 
-Last reviewed: 2026-08-08.
+Last reviewed: 2026-08-24.
 
-## Verified automatically
+The repository is a verified source checkpoint, not a signed production
+release. The canonical continuation instructions are in
+`docs/CONTINUATION_PLAN_0.4.md`.
 
-| Area | Status | Evidence |
+## Verified repository scope
+
+| Area | Status | Exact evidence |
 | --- | --- | --- |
-| Source compilation | PASS | `python -m compileall -q src tests` |
-| Tests | PASS | `95 passed, 5 subtests passed` |
-| Lint | PASS | `ruff check src tests scripts` |
-| Wheel | PASS | `python -m build --wheel` |
-| Dependency consistency | PASS | `python -m pip check` |
-| Known dependency vulnerabilities | PASS | `pip-audit` |
-| Local default behavior | Implemented | `faster-whisper`; no automatic cloud fallback |
-| OpenAI STT consent contract | Tested with fakes | CLI/UI explicit consent, 25 MB limit, offline block |
-| AI cleanup privacy contract | Tested with fakes | proposal/apply/undo; immutable `raw_text` |
-| Model release installer hardening | Tested | SHA-256, size, archive traversal/symlink/duplicate checks |
-| GitHub Actions matrix | PASS | macOS ARM64 + Windows x64, Python 3.11/3.12, run `31278657773` |
-| CodeQL | PASS | run `31278657771` |
+| W0 workflow supply-chain baseline | PASS | all workflow `uses:` pinned to full commit SHA; repository policy test passes |
+| W1 strict settings and clipboard default | PASS | malformed types rejected; `auto_copy=False` |
+| W1 editor dirty-state protection | PASS | Save/Discard/Cancel and atomic editor-state persistence |
+| W1 recorder safety | PASS | bounded queue and duration, degraded-capture rejection, owned-temp cleanup |
+| W1 original/raw invariants | PASS | originals preserved; `raw_text` immutable regressions |
+| W2-M1 cancellable managed import | PASS | one monotonic budget, one-pass copy/hash, unique immutable managed targets, bounded collision retry |
+| W2-M1 save/cleanup serialization | PASS | SQLite `BEGIN IMMEDIATE` prevents committed records from referencing concurrently removed managed audio |
+| W2-A1 generic ZIP safety primitives | PASS | bounded EOCD/ZIP64 preflight, portable member identities, hierarchy trie, bounded copy/free-space primitives |
+| Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
+| Integrated tests | PASS | `272 passed, 2 skipped, 5 subtests passed` at code checkpoint `c5462a9` |
+| Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
 
-## Implemented but requires external/manual verification
+## Implemented but pending native acceptance
 
-| Area | Status | Required evidence |
-| --- | --- | --- |
-| Windows 10/11 x64 source launcher | NOT_RUN on a physical target | `run_windows.bat`, mic/media/local model workflow |
-| Windows frozen ZIP | NOT_BUILT | `scripts/build_windows.ps1` plus clean-profile acceptance |
-| macOS ARM64 Test RC | NOT_BUILT for 0.3.0 | build script, Gatekeeper behavior and clean-profile smoke |
-| Live OpenAI STT/cleanup | NOT_RUN | manual public-domain fixture; never add keys to CI |
-| Tiny/Small `models-v1` assets | NOT_CREATED | upstream provenance, inventory, license and SHA256SUMS |
+- W1 GUI/microphone lifecycle on physical Windows 10/11 x64 and macOS Apple
+  Silicon;
+- W2-M1 cross-process/file-lock behavior under antivirus, removable media and
+  forced termination;
+- W2-A1 real large-archive/disk-full behavior on both supported filesystems.
 
-## Explicitly out of scope for this RC
+These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
-- signing/notarization;
-- Intel Mac builds;
-- local LLM text cleanup;
-- OpenAI Realtime API or multi-provider cloud;
-- Hermes production weights or accuracy claims.
+## Not implemented yet
+
+- disposable contained PyAV/FFmpeg media worker and process-tree termination;
+- `.hws` and backup consumers wired to the generic archive limits;
+- `cryptography` dependency and encrypted backup v2;
+- journaled restore/startup recovery;
+- coordinated shutdown and multiprocessing queue disposal;
+- SQLite/filesystem/model-catalog reconciliation;
+- all W3 VAD/timestamp/hardware/editor work;
+- W4 reproducible locks, SBOM, signed/notarized installers and updater;
+- W5 physical 50-task acceptance per OS;
+- W6 independent release go/no-go.
+
+## Current environment limitations
+
+The verification interpreter used for this checkpoint did not contain
+`build`, `pip`, `pip_audit` or `cryptography`. No packages were silently
+installed into that frozen environment. These gates remain `BLOCKED` until the
+next dependency increment creates and freezes its own environment.
 
 ## Release rule
 
-This repository is source/Test RC preparation, not a production release. Follow
-`RELEASE_ACCEPTANCE.md` before creating a tag or publishing artifacts.
+Do not create `v0.4.0`, publish installers, or call this production-ready until
+W2-W6 and the human signing/native/legal gates in
+`docs/CONTINUATION_PLAN_0.4.md` are complete.
