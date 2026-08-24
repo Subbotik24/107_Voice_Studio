@@ -178,6 +178,132 @@ def test_recorder_refuses_to_overwrite_existing_destination(
     _assert_no_writer_threads()
 
 
+def test_recorder_accepts_precreated_empty_destination_and_cancel_preserves_success(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream]
+) -> None:
+    destination = tmp_path / "precreated.wav"
+    destination.touch()
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+
+    result = recorder.stop()
+    recorder.cancel()
+
+    assert result.path == destination
+    assert destination.exists()
+    _assert_no_writer_threads()
+
+
+def test_recorder_serializes_overlapping_starts(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream]
+) -> None:
+    barrier = threading.Barrier(3)
+    destinations = [tmp_path / "one.wav", tmp_path / "two.wav"]
+    recorder = AudioRecorder()
+
+    def start(destination: Any) -> None:
+        barrier.wait()
+        recorder.start(destination)
+
+    threads = [threading.Thread(target=start, args=(destination,)) for destination in destinations]
+    for thread in threads:
+        thread.start()
+    barrier.wait()
+    for thread in threads:
+        thread.join()
+
+    assert len(FakeInputStream.instances) == 1
+    assert recorder.recording is True
+    recorder.cancel()
+    _assert_no_writer_threads()
+
+
+def test_recorder_rejects_destination_replacement_before_writer_open(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "raced.wav"
+    destination.touch()
+    entered = threading.Event()
+    release = threading.Event()
+    recorder = AudioRecorder()
+    real_open_destination = recorder._open_destination
+
+    def delayed_open(path: Any) -> Any:
+        entered.set()
+        assert release.wait(2)
+        return real_open_destination(path)
+
+    monkeypatch.setattr(recorder, "_open_destination", delayed_open)
+    recorder.start(destination)
+    assert entered.wait(2)
+    replacement = tmp_path / "raced-replacement.wav"
+    replacement.write_bytes(b"replacement")
+    destination.unlink()
+    replacement.replace(destination)
+    release.set()
+
+    with pytest.raises(FileExistsError, match="refusing to overwrite"):
+        recorder.stop()
+
+    assert destination.read_bytes() == b"replacement"
+    _assert_no_writer_threads()
+
+
+def test_recorder_serializes_stop_then_cancel_without_orphaning_writer(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream]
+) -> None:
+    destination = tmp_path / "stop-cancel.wav"
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    stream = _stream()
+    entered = threading.Event()
+    release = threading.Event()
+    original_stop = stream.stop
+
+    def blocking_stop() -> None:
+        entered.set()
+        assert release.wait(2)
+        original_stop()
+
+    stream.stop = blocking_stop
+    outcomes: list[Any] = []
+    stop_thread = threading.Thread(target=lambda: outcomes.append(recorder.stop()))
+    cancel_thread = threading.Thread(target=recorder.cancel)
+    stop_thread.start()
+    assert entered.wait(2)
+    cancel_thread.start()
+    time.sleep(0.05)
+    assert cancel_thread.is_alive()
+    release.set()
+    stop_thread.join()
+    cancel_thread.join()
+
+    assert len(outcomes) == 1
+    assert outcomes[0].path == destination
+    assert destination.exists()
+    _assert_no_writer_threads()
+
+
+def test_recorder_bounds_persistent_status_metadata(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream]
+) -> None:
+    recorder = AudioRecorder()
+    recorder.start(tmp_path / "status-stress.wav")
+    stream = _stream()
+    block = np.zeros((1_600, 1), dtype=np.int16)
+    for _ in range(2_000):
+        stream.emit(block, status="persistent input overflow")
+
+    result = recorder.stop()
+
+    assert result.status_messages == ("persistent input overflow",)
+    assert "x2000" in result.warning
+    assert len(result.status_messages) <= recorder_module.MAX_STATUS_CATEGORIES
+    _assert_no_writer_threads()
+
+
 def test_recorder_writer_failure_is_raised_and_partial_removed(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -195,4 +321,43 @@ def test_recorder_writer_failure_is_raised_and_partial_removed(
         recorder.stop()
 
     assert not destination.exists()
+    _assert_no_writer_threads()
+
+
+def test_recorder_write_failure_cleans_partial_but_not_replacement(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "failed-after-write.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("write failed")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+    assert recorder._writer_done.wait(2)
+    assert destination.exists() and destination.stat().st_size > 0
+
+    replacement = tmp_path / "replacement.wav"
+    replacement.write_bytes(b"replacement")
+    destination.unlink()
+    replacement.replace(destination)
+
+    with pytest.raises(OSError, match="write failed"):
+        recorder.stop()
+
+    assert destination.read_bytes() == b"replacement"
     _assert_no_writer_threads()
