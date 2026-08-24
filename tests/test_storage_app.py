@@ -249,6 +249,54 @@ def test_import_retries_full_uuid_collision_without_touching_existing_target(
     assert managed.read_bytes() == source.read_bytes()
 
 
+def test_repeated_uuid_collision_has_bounded_allocation_and_cleans_partial(
+    tmp_path, monkeypatch
+):
+    import hermes_voice_studio.operation as operation
+    import hermes_voice_studio.storage as storage
+
+    limit = getattr(storage, "MAX_MANAGED_TARGET_ATTEMPTS", None)
+    assert limit is not None, "managed target allocation must be bounded"
+    error_type = getattr(operation, "ManagedTargetAllocationError", None)
+    assert error_type is not None, "allocation exhaustion needs a concrete error"
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "repeated-collision.wav"
+    source.write_bytes(b"repeated-collision")
+    source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+    collision_uuid = uuid.UUID("33333333333333333333333333333333")
+    existing = store.sources / f"{source_hash}{compact_uuid(collision_uuid.hex)}.wav"
+    existing.write_bytes(b"existing-peer")
+    partial_uuid = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    uuid_calls = 0
+
+    def repeat_uuid():
+        nonlocal uuid_calls
+        uuid_calls += 1
+        return partial_uuid if uuid_calls == 1 else collision_uuid
+
+    monkeypatch.setattr(storage.uuid, "uuid4", repeat_uuid)
+    real_link = os.link
+    link_calls = 0
+
+    def collision_guard(source_path, target_path, *args, **kwargs):
+        nonlocal link_calls
+        link_calls += 1
+        if link_calls > limit:
+            raise AssertionError("unbounded managed target allocation")
+        return real_link(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr(storage.os, "link", collision_guard)
+    with pytest.raises(error_type, match=f"after {limit} attempts") as raised:
+        store.import_source(source)
+
+    assert raised.value.attempts == limit
+    assert uuid_calls == limit + 1
+    assert link_calls == limit
+    assert existing.read_bytes() == b"existing-peer"
+    assert list(store.sources.glob("*.partial")) == []
+    assert source.exists()
+
+
 def test_link_failure_cleanup_failure_surfaces_owned_residue(tmp_path, monkeypatch):
     import hermes_voice_studio.storage as storage
 

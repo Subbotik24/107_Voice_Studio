@@ -13,6 +13,17 @@ class OperationTimeout(TimeoutError):
     """Raised when a bounded operation reaches its absolute deadline."""
 
 
+class ManagedTargetAllocationError(OSError):
+    """Raised when no unique managed-import target can be allocated."""
+
+    def __init__(self, attempts: int) -> None:
+        self.attempts = attempts
+        super().__init__(
+            "managed import target allocation failed during import promotion "
+            f"after {attempts} attempts; retry the import"
+        )
+
+
 class OwnedPartialCleanupError(RuntimeError):
     """Raised when an owned managed-import residue cannot be removed."""
 
@@ -84,6 +95,7 @@ class OperationBudget:
 __all__ = [
     "JobCancelled",
     "ManagedImportCleanupError",
+    "ManagedTargetAllocationError",
     "OperationBudget",
     "OperationCancelled",
     "OperationTimeout",

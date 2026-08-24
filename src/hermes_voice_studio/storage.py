@@ -11,7 +11,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from .models import Transcript
-from .operation import OperationBudget, OwnedPartialCleanupError
+from .operation import (
+    ManagedTargetAllocationError,
+    OperationBudget,
+    OwnedPartialCleanupError,
+)
 
 IMMUTABLE_TRANSCRIPT_FIELDS = (
     "created_at",
@@ -22,6 +26,7 @@ IMMUTABLE_TRANSCRIPT_FIELDS = (
     "raw_text",
 )
 SCHEMA_VERSION = 1
+MAX_MANAGED_TARGET_ATTEMPTS = 16
 _UUID_ALPHABET = string.ascii_letters + string.digits + "!#$%&'()+,-.;=@[]^_{}~`"
 
 
@@ -151,7 +156,7 @@ class LocalStore:
                         budget.checkpoint("import")
             source_hash = digest.hexdigest()
             suffix = path.suffix.lower() or ".bin"
-            while True:
+            for _attempt in range(1, MAX_MANAGED_TARGET_ATTEMPTS + 1):
                 target = self.sources / f"{source_hash}{_compact_uuid(uuid.uuid4())}{suffix}"
                 if budget is not None:
                     budget.checkpoint("import")
@@ -173,6 +178,9 @@ class LocalStore:
                         partial, cleanup_error, target_path=target
                     ) from cleanup_error
                 return target, source_hash
+            allocation_error = ManagedTargetAllocationError(MAX_MANAGED_TARGET_ATTEMPTS)
+            cleanup_attempted = True
+            self._cleanup_partial_or_raise(partial, allocation_error)
         except BaseException as primary:
             if partial_created and not promoted and not cleanup_attempted:
                 self._cleanup_partial_or_raise(partial, primary)
