@@ -66,6 +66,17 @@ def test_clipboard_copy_is_private_by_default():
     assert Settings.from_dict({"auto_copy": True}).auto_copy is True
 
 
+def test_settings_ignores_unknown_and_classvar_keys():
+    settings = Settings.from_dict(
+        {
+            "STRING_FIELDS": "not-a-setting",
+            "BOOLEAN_FIELDS": {"not": "a-setting"},
+            "future_setting": "ignored",
+        }
+    )
+    assert settings == Settings()
+
+
 def test_application_directories_can_be_isolated_with_environment(monkeypatch, tmp_path):
     config = tmp_path / "config"
     data = tmp_path / "data"

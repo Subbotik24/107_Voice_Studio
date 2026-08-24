@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
@@ -168,7 +168,7 @@ class Settings:
         data = dict(data)
         if data.get("hotkey") == "<ctrl>+<alt>+space":
             data["hotkey"] = "<ctrl>+<alt>+<space>"
-        allowed = cls.__dataclass_fields__.keys()
+        allowed = {item.name for item in fields(cls) if item.init}
         settings = cls(**{key: value for key, value in data.items() if key in allowed})
         settings.validate()
         return settings
