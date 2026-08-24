@@ -635,6 +635,7 @@ class HermesVoiceApp(tk.Tk):
             )
             return
 
+        limit_reached = bool(getattr(result, "limit_reached", False) or limit_forced)
         if getattr(result, "degraded", False):
             warning = getattr(result, "warning", "") or (
                 "Запис має ознаки втрати або пошкодження аудіо."
@@ -646,12 +647,19 @@ class HermesVoiceApp(tk.Tk):
                 default=messagebox.NO,
             ):
                 self._cleanup_temp(result_path)
-                self.status.set("Пошкоджений запис відхилено")
+                if limit_reached:
+                    self.status.set(
+                        "Досягнуто максимальний ліміт запису (2 години). "
+                        "Пошкоджений запис відхилено; обробку не розпочато."
+                    )
+                else:
+                    self.status.set("Пошкоджений запис відхилено")
                 return
 
-        self._process(result_path, cleanup=True)
-        if getattr(result, "limit_reached", False) or limit_forced:
-            self.status.set("Досягнуто максимальний ліміт запису (2 години). Запис обробляється…")
+        started = self._process(result_path, cleanup=True)
+        if limit_reached:
+            suffix = "Запис обробляється…" if started else "Обробку не розпочато."
+            self.status.set(f"Досягнуто максимальний ліміт запису (2 години). {suffix}")
 
     def _choose_file(self) -> None:
         if self._busy:
@@ -660,18 +668,25 @@ class HermesVoiceApp(tk.Tk):
         if name:
             self._process(Path(name), cleanup=False)
 
-    def _process(self, source: Path, *, cleanup: bool) -> None:
+    def _process(self, source: Path, *, cleanup: bool) -> bool:
         if self.settings.engine == "openai-cloud":
             if self.settings.offline_only:
-                messagebox.showerror("Cloud STT", "Offline-only режим блокує OpenAI.")
-                return
+                message = "Offline-only режим блокує OpenAI."
+                messagebox.showerror("Cloud STT", message)
+                if cleanup:
+                    self._cleanup_temp(source)
+                    self.status.set(f"Обробку не розпочато: {message}")
+                return False
             try:
                 from .engines.openai_cloud import OpenAICloudEngine
 
                 OpenAICloudEngine.validate_upload(source)
             except Exception as exc:
                 messagebox.showerror("Cloud STT", str(exc), parent=self)
-                return
+                if cleanup:
+                    self._cleanup_temp(source)
+                    self.status.set(f"Обробку не розпочато: {exc}")
+                return False
             if not messagebox.askyesno(
                 "Передати аудіо OpenAI?",
                 f"Provider: OpenAI\nФайл: {source.name}\n"
@@ -679,7 +694,10 @@ class HermesVoiceApp(tk.Tk):
                 "Аудіо буде передано третій стороні для транскрипції. Продовжити?",
                 parent=self,
             ):
-                return
+                if cleanup:
+                    self._cleanup_temp(source)
+                    self.status.set("Обробку не розпочато: передачу аудіо не підтверджено.")
+                return False
         self._set_busy(True)
         self._cancel_event.clear()
         self.status.set("Підготовка локального транскрибування…")
@@ -704,6 +722,7 @@ class HermesVoiceApp(tk.Tk):
                 self.events.put(("error", (exc, source if cleanup else None)))
 
         threading.Thread(target=work, daemon=True, name="transcription-worker").start()
+        return True
 
     def _cancel_current(self) -> None:
         if self._busy:

@@ -10,7 +10,7 @@ import pytest
 
 from hermes_voice_studio import app as app_module
 from hermes_voice_studio.app import HermesVoiceApp
-from hermes_voice_studio.recorder import RecorderCleanupError
+from hermes_voice_studio.recorder import RecorderCleanupError, RecordingResult
 
 
 class FakeButton:
@@ -321,15 +321,106 @@ def test_duration_limit_stops_only_current_recording_and_reports_two_hours(
     recorder.destination = current
     recorder.recording = False
     recorder.limit_reached = True
-    recorder.result = SimpleNamespace(path=current, degraded=False, warning="", limit_reached=True)
+    recorder.result = RecordingResult(
+        path=current,
+        frames_written=1,
+        dropped_blocks=0,
+        status_messages=(),
+        limit_reached=True,
+        degraded=True,
+        warning="Maximum recording duration reached.",
+    )
     monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **kwargs: None)
+    prompts: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "askyesno",
+        lambda *args, **kwargs: prompts.append(kwargs) or False,
+    )
 
     app._poll_recording_limit(stale)
     assert recorder.stop_calls == 0
 
     app._poll_recording_limit(current)
     assert recorder.stop_calls == 1
+    assert prompts and prompts[0]["default"] == app_module.messagebox.NO
+    assert not current.exists()
     assert any("2" in value and "год" in value for value in app.status.values)
+    assert not any("обробляється" in value for value in app.status.values)
+
+
+@pytest.mark.parametrize(
+    ("offline_only", "validation_error", "consent", "expected_message"),
+    [
+        (True, None, True, "Offline-only"),
+        (False, RuntimeError("upload validation failed"), True, "upload validation failed"),
+        (False, None, False, "не розпочато"),
+    ],
+    ids=("offline", "validation-error", "consent-decline"),
+)
+def test_owned_microphone_preflight_exit_cleans_without_starting_job(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    offline_only: bool,
+    validation_error: Exception | None,
+    consent: bool,
+    expected_message: str,
+) -> None:
+    """Catches synchronous cleanup=True exits retaining audio or claiming a job started."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    app.settings.engine = "openai-cloud"
+    app.settings.offline_only = offline_only
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "askyesno",
+        lambda *args, **kwargs: consent,
+    )
+    if validation_error is not None:
+        from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+
+        monkeypatch.setattr(
+            OpenAICloudEngine,
+            "validate_upload",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(validation_error),
+        )
+
+    app._process(path, cleanup=True)
+
+    assert not path.exists()
+    assert path not in app._pending_microphone_files
+    assert app.job_controller.sources == []
+    visible = " ".join(str(item) for item in (*errors, *app.status.values))
+    assert expected_message.lower() in visible.lower()
+
+
+def test_original_preflight_exit_keeps_cleanup_false_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches applying microphone ownership cleanup to an original source-file flow."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    original = tmp_path / "user-original.wav"
+    original.write_bytes(b"original")
+    app.settings.engine = "openai-cloud"
+    app.settings.offline_only = True
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **kwargs: None)
+
+    app._process(original, cleanup=False)
+
+    assert original.read_bytes() == b"original"
+    assert app.job_controller.sources == []
 
 
 def test_close_cancels_recorder_then_deletes_pending_temps_but_not_original(
