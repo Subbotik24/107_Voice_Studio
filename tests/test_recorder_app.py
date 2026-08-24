@@ -324,6 +324,39 @@ def test_recorder_writer_failure_is_raised_and_partial_removed(
     _assert_no_writer_threads()
 
 
+def test_recorder_write_failure_removes_real_partial_wav(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "real-partial.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("write failed")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+    assert destination.exists() and destination.stat().st_size > 0
+
+    with pytest.raises(OSError, match="write failed"):
+        recorder.stop()
+
+    assert not destination.exists()
+    _assert_no_writer_threads()
+
+
 def test_recorder_write_failure_cleans_partial_but_not_replacement(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -351,13 +384,92 @@ def test_recorder_write_failure_cleans_partial_but_not_replacement(
     assert recorder._writer_done.wait(2)
     assert destination.exists() and destination.stat().st_size > 0
 
-    replacement = tmp_path / "replacement.wav"
-    replacement.write_bytes(b"replacement")
-    destination.unlink()
-    replacement.replace(destination)
+    real_rename = recorder_module.os.rename
+
+    def race_rename(source: Any, target: Any) -> Any:
+        result = real_rename(source, target)
+        if source == destination:
+            destination.write_bytes(b"replacement")
+        return result
+
+    monkeypatch.setattr(recorder_module.os, "rename", race_rename)
 
     with pytest.raises(OSError, match="write failed"):
         recorder.stop()
 
     assert destination.read_bytes() == b"replacement"
+    _assert_no_writer_threads()
+
+
+def test_recorder_close_failure_propagates_and_cleans_partial(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "close-failed.wav"
+    recorder = AudioRecorder()
+    real_open_destination = recorder._open_destination
+
+    class CloseFailingFile:
+        def __init__(self, raw: Any) -> None:
+            self._raw = raw
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._raw, name)
+
+        def close(self) -> None:
+            self._raw.close()
+            raise OSError("close failed")
+
+    def open_close_failing(path: Any) -> Any:
+        return CloseFailingFile(real_open_destination(path))
+
+    monkeypatch.setattr(recorder, "_open_destination", open_close_failing)
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+
+    with pytest.raises(OSError, match="close failed"):
+        recorder.stop()
+
+    assert not destination.exists()
+    assert not recorder._writer_thread
+    assert recorder._writer_done.is_set()
+    _assert_no_writer_threads()
+
+
+def test_recorder_full_queue_writer_failure_stops_promptly(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "full-queue-failed.wav"
+    entered = threading.Event()
+    release = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def blocked_fail(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def wait_then_fail(data: bytes) -> Any:
+            entered.set()
+            release.wait(2)
+            writeframes(data)
+            raise OSError("full queue write failed")
+
+        handle.writeframes = wait_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", blocked_fail)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    block = np.zeros((1_600, 1), dtype=np.int16)
+    _stream().emit(block)
+    assert entered.wait(2)
+    for _ in range(200):
+        _stream().emit(block)
+    release.set()
+
+    started = time.monotonic()
+    with pytest.raises(OSError, match="full queue write failed"):
+        recorder.stop()
+
+    assert time.monotonic() - started < 2
+    assert not destination.exists()
     _assert_no_writer_threads()

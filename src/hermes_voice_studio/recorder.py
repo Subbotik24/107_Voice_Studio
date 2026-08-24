@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import tempfile
 import threading
 import wave
 from dataclasses import dataclass
@@ -250,9 +251,15 @@ class AudioRecorder:
             with self._state_lock:
                 self._writer_error = exc
         finally:
-            if raw is not None:
-                raw.close()
-            self._writer_done.set()
+            try:
+                if raw is not None:
+                    raw.close()
+            except BaseException as exc:
+                with self._state_lock:
+                    if self._writer_error is None:
+                        self._writer_error = exc
+            finally:
+                self._writer_done.set()
 
     def _open_destination(self, path: Path) -> Any:
         expected = self._expected_identity
@@ -278,7 +285,7 @@ class AudioRecorder:
         thread = self._writer_thread
         if thread is None:
             return
-        while not self._writer_done.is_set():
+        while not self._writer_done.is_set() and thread.is_alive():
             try:
                 self._frames.put(self._sentinel, timeout=0.05)
                 break
@@ -331,8 +338,31 @@ class AudioRecorder:
 
     def _remove_owned_partial(self) -> None:
         path = self._destination
-        if self._destination_owned and self._path_has_destination_identity() and path is not None:
-            path.unlink()
+        identity = self._destination_identity
+        if not self._destination_owned or path is None or identity is None:
+            return
+        quarantine_fd, quarantine_name = tempfile.mkstemp(
+            prefix=f".{path.name}.recorder-", dir=str(path.parent)
+        )
+        os.close(quarantine_fd)
+        quarantine = Path(quarantine_name)
+        try:
+            quarantine.unlink()
+            os.rename(path, quarantine)
+            moved_identity = self._file_identity(quarantine.stat())
+            if moved_identity == identity:
+                quarantine.unlink()
+                return
+            try:
+                os.link(quarantine, path)
+            except FileExistsError:
+                return
+            quarantine.unlink()
+        except FileNotFoundError:
+            return
+        finally:
+            if quarantine.exists() and self._path_has_destination_identity():
+                quarantine.unlink()
 
     def _clear_session(self) -> None:
         self._stream = None
