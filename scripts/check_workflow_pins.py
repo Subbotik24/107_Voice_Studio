@@ -8,10 +8,10 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-_USES_RE = re.compile(r"^\s*(?:-\s*)?uses\s*:\s*(?P<value>\S+)")
-_USES_KEY_RE = re.compile(r"(?:^|[\s,{])['\"]?uses['\"]?\s*:")
+_USES_RE = re.compile(r"^\s*-\s+uses\s*:\s*(?P<value>\S+)\s*$")
+_USES_KEY_RE = re.compile(r"(?:^|[\s,{\"'])uses['\"]?\s*:", re.IGNORECASE)
 _KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+)\s*:\s*(?P<value>.*?)\s*$")
-_BLOCK_SCALAR_RE = re.compile(r":\s*[|>](?:[1-9]?[-+]?)?\s*(?:#.*)?$")
+_BLOCK_SCALAR_RE = re.compile(r":\s*[|>](?:[-+]?[1-9]?|[1-9]?[-+]?)?\s*$")
 _IMMUTABLE_REF_RE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
@@ -30,12 +30,42 @@ def _without_inline_comment(line: str) -> str:
     return re.split(r"\s+#", line, maxsplit=1)[0].rstrip()
 
 
+def _quote_count(line: str, quote: str) -> int:
+    count = 0
+    escaped = False
+    for character in line:
+        if quote == '"' and character == "\\" and not escaped:
+            escaped = True
+            continue
+        if character == quote and not escaped:
+            count += 1
+        escaped = False
+    return count
+
+
+def _unclosed_quote(line: str) -> str | None:
+    for quote in ('"', "'"):
+        if _quote_count(line, quote) % 2:
+            return quote
+    return None
+
+
+def _quote_is_closed(line: str, quote: str) -> bool:
+    return bool(_quote_count(line, quote) % 2)
+
+
 def _structural_lines(lines: list[str]) -> list[str]:
     """Blank comments and block-scalar bodies before structural inspection."""
 
     structural: list[str] = []
     scalar_parent_indent: int | None = None
+    quoted_scalar: str | None = None
     for line in lines:
+        if quoted_scalar is not None:
+            structural.append("")
+            if _quote_is_closed(line, quoted_scalar):
+                quoted_scalar = None
+            continue
         if scalar_parent_indent is not None:
             if not line.strip() or line.lstrip().startswith("#"):
                 structural.append("")
@@ -51,7 +81,17 @@ def _structural_lines(lines: list[str]) -> list[str]:
         structural.append(visible)
         if _BLOCK_SCALAR_RE.search(visible):
             scalar_parent_indent = _indent(line)
+        else:
+            quoted_scalar = _unclosed_quote(visible)
     return structural
+
+
+def _mapping_key(line: str) -> str | None:
+    candidate = line.strip()
+    if candidate.startswith("-"):
+        candidate = candidate[1:].lstrip()
+    match = _KEY_RE.match(candidate)
+    return match.group("key") if match else None
 
 
 def _step_bounds(lines: list[str], uses_index: int) -> tuple[int, int]:
@@ -103,15 +143,7 @@ def _checkout_has_non_persistent_credentials(lines: list[str], uses_index: int) 
                 with_indent = candidate_indent
                 inline_with = candidate.strip()[len("with:") :].strip()
                 if inline_with:
-                    if not (inline_with.startswith("{") and inline_with.endswith("}")):
-                        return False
-                    fields = inline_with[1:-1].split(",")
-                    return any(
-                        (match := _KEY_RE.match(field.strip()))
-                        and match.group("key") == "persist-credentials"
-                        and match.group("value").strip() == "false"
-                        for field in fields
-                    )
+                    return False
                 break
     if with_index is None:
         return False
@@ -152,6 +184,18 @@ def check_workflow_paths(paths: Iterable[str | Path]) -> list[str]:
                 violations.append(f"{workflow}: cannot read workflow ({exc})")
                 continue
             for line_number, line in enumerate(lines, start=1):
+                if _BLOCK_SCALAR_RE.search(line) and _mapping_key(line) != "run":
+                    violations.append(
+                        f"{workflow}:{line_number}: unsupported block scalar; only canonical "
+                        "run: | or run: > workflow fields are allowed"
+                    )
+                    continue
+                if _unclosed_quote(line) is not None:
+                    violations.append(
+                        f"{workflow}:{line_number}: unsupported multiline quoted scalar; use "
+                        "canonical block-style workflow mappings"
+                    )
+                    continue
                 if not _USES_RE.match(line) and _USES_KEY_RE.search(line):
                     violations.append(
                         f"{workflow}:{line_number}: unsupported uses syntax; use a canonical "
@@ -168,12 +212,19 @@ def check_workflow_paths(paths: Iterable[str | Path]) -> list[str]:
                         "an immutable @40 lowercase hexadecimal commit SHA"
                     )
                 requires_credentials_check = reference.startswith("actions/checkout@")
+                is_case_variant_checkout = reference.lower().startswith("actions/checkout@")
+                if is_case_variant_checkout and not requires_credentials_check:
+                    violations.append(
+                        f"{workflow}:{line_number}: unsupported case-variant checkout action "
+                        f"'{reference}'; use the canonical actions/checkout name"
+                    )
                 if requires_credentials_check and not _checkout_has_non_persistent_credentials(
                     lines, line_number - 1
                 ):
                     violations.append(
-                        f"{workflow}:{line_number}: actions/checkout must set "
-                        "persist-credentials: false in its own with block"
+                        f"{workflow}:{line_number}: actions/checkout requires a supported "
+                        "canonical block with mapping containing persist-credentials: false; "
+                        "flow and quoted forms are unsupported"
                     )
     return violations
 

@@ -130,7 +130,7 @@ def test_does_not_treat_block_scalar_text_as_checkout_input(tmp_path: Path) -> N
     assert any("persist-credentials: false" in violation for violation in violations)
 
 
-def test_accepts_flow_style_with_mapping(tmp_path: Path) -> None:
+def test_rejects_flow_style_with_mapping(tmp_path: Path) -> None:
     violations = _violations(
         tmp_path,
         f"""jobs:
@@ -141,7 +141,7 @@ def test_accepts_flow_style_with_mapping(tmp_path: Path) -> None:
 """,
     )
 
-    assert violations == []
+    assert any("unsupported" in violation for violation in violations)
 
 
 def test_rejects_flow_style_uses_mapping_when_uses_is_not_first(tmp_path: Path) -> None:
@@ -188,3 +188,104 @@ def test_ignores_over_indented_comments_and_nested_scalar_text(tmp_path: Path) -
     )
 
     assert any("persist-credentials: false" in violation for violation in violations)
+
+
+def test_rejects_quoted_hash_before_flow_uses(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - {name: "#", uses: actions/checkout@v7}
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_block_scalar_modifier_bypasses(tmp_path: Path) -> None:
+    for modifier in ("|-2", "|+2"):
+        violations = _violations(
+            tmp_path,
+            f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        name: {modifier}
+          with:
+            persist-credentials: false
+""",
+        )
+
+        assert any("persist-credentials: false" in violation for violation in violations)
+
+
+def test_rejects_inline_quoted_flow_value_as_credentials(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        with: {{note: "persist-credentials: false"}}
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_multiline_quoted_scalar_structural_text(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        name: "with:
+          persist-credentials: false
+          "
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_step_metadata_scalar_without_hiding_sibling_uses(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - name: |
+          uses: actions/checkout@v7
+      - uses: actions/setup-python@{SETUP_PYTHON_SHA}
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_case_variant_checkout_action(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: Actions/Checkout@{CHECKOUT_SHA}
+""",
+    )
+
+    assert any("checkout" in violation.lower() for violation in violations)
+
+
+def test_rejects_documentation_text_that_contains_uses_key(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - name: "uses: documentation only"
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
