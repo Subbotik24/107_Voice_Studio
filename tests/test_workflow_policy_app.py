@@ -289,3 +289,60 @@ def test_rejects_documentation_text_that_contains_uses_key(tmp_path: Path) -> No
     )
 
     assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_escaped_quoted_uses_key(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - "u\\u0073es": actions/checkout@v7
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_explicit_mapping_key_uses_syntax(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - ? uses
+        : actions/checkout@v7
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_rejects_nested_env_with_credentials_for_checkout(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        env:
+          with:
+            persist-credentials: false
+""",
+    )
+
+    assert any("persist-credentials: false" in violation for violation in violations)
+
+
+def test_accepts_plain_scalar_apostrophe_in_step_metadata(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/setup-python@{SETUP_PYTHON_SHA}
+        name: Don't publish
+""",
+    )
+
+    assert violations == []

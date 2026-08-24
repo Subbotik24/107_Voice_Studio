@@ -11,6 +11,10 @@ from pathlib import Path
 _USES_RE = re.compile(r"^\s*-\s+uses\s*:\s*(?P<value>\S+)\s*$")
 _USES_KEY_RE = re.compile(r"(?:^|[\s,{\"'])uses['\"]?\s*:", re.IGNORECASE)
 _KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+)\s*:\s*(?P<value>.*?)\s*$")
+_QUOTED_MAPPING_KEY_RE = re.compile(
+    r"^\s*(?:-\s*)?(?:\"(?:\\.|[^\"\\])*\"|'(?:''|[^'])*')\s*:"
+)
+_EXPLICIT_MAPPING_KEY_RE = re.compile(r"^\s*(?:-\s*)?\?\s+")
 _BLOCK_SCALAR_RE = re.compile(r":\s*[|>](?:[-+]?[1-9]?|[1-9]?[-+]?)?\s*$")
 _IMMUTABLE_REF_RE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
@@ -30,28 +34,63 @@ def _without_inline_comment(line: str) -> str:
     return re.split(r"\s+#", line, maxsplit=1)[0].rstrip()
 
 
-def _quote_count(line: str, quote: str) -> int:
-    count = 0
-    escaped = False
-    for character in line:
-        if quote == '"' and character == "\\" and not escaped:
-            escaped = True
-            continue
-        if character == quote and not escaped:
-            count += 1
-        escaped = False
-    return count
+def _quote_can_start(line: str, index: int) -> bool:
+    """Return whether a quote begins a YAML scalar at ``index``."""
+
+    if index == 0:
+        return True
+    previous = line[index - 1]
+    return previous.isspace() or previous in ":-?[,{"
 
 
 def _unclosed_quote(line: str) -> str | None:
-    for quote in ('"', "'"):
-        if _quote_count(line, quote) % 2:
-            return quote
-    return None
+    """Return an actually opened quote, ignoring apostrophes in plain scalars."""
+
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quote = None
+        elif quote == "'":
+            if character == "'":
+                if index + 1 < len(line) and line[index + 1] == "'":
+                    index += 1
+                else:
+                    quote = None
+        elif character in ('"', "'") and _quote_can_start(line, index):
+            quote = character
+        index += 1
+    return quote
 
 
 def _quote_is_closed(line: str, quote: str) -> bool:
-    return bool(_quote_count(line, quote) % 2)
+    """Return whether a multiline quoted scalar closes on this line."""
+
+    escaped = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote == '"':
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                return True
+        elif character == "'":
+            if index + 1 < len(line) and line[index + 1] == "'":
+                index += 1
+            else:
+                return True
+        index += 1
+    return False
 
 
 def _structural_lines(lines: list[str]) -> list[str]:
@@ -94,6 +133,14 @@ def _mapping_key(line: str) -> str | None:
     return match.group("key") if match else None
 
 
+def _unsupported_mapping_key_syntax(line: str) -> str | None:
+    if _QUOTED_MAPPING_KEY_RE.match(line):
+        return "quoted mapping-key"
+    if _EXPLICIT_MAPPING_KEY_RE.match(line):
+        return "explicit mapping-key"
+    return None
+
+
 def _step_bounds(lines: list[str], uses_index: int) -> tuple[int, int]:
     """Return the list-item bounds containing a uses key."""
 
@@ -132,19 +179,37 @@ def _step_bounds(lines: list[str], uses_index: int) -> tuple[int, int]:
 
 def _checkout_has_non_persistent_credentials(lines: list[str], uses_index: int) -> bool:
     start, end = _step_bounds(lines, uses_index)
+    step_indent = _indent(lines[start])
+    direct_child_indent: int | None = None
+    for index in range(start + 1, end):
+        candidate = lines[index]
+        if not candidate.strip():
+            continue
+        candidate_indent = _indent(candidate)
+        if candidate_indent <= step_indent:
+            break
+        direct_child_indent = candidate_indent
+        break
+    if direct_child_indent is None:
+        return False
+
     with_index: int | None = None
     with_indent = -1
-    for index in range(start, end):
+    for index in range(start + 1, end):
         candidate = lines[index]
-        if candidate.strip().startswith("with:"):
-            candidate_indent = _indent(candidate)
-            if candidate_indent > _indent(lines[start]):
-                with_index = index
-                with_indent = candidate_indent
-                inline_with = candidate.strip()[len("with:") :].strip()
-                if inline_with:
-                    return False
-                break
+        if not candidate.strip():
+            continue
+        candidate_indent = _indent(candidate)
+        if candidate_indent <= step_indent:
+            break
+        if candidate_indent != direct_child_indent or not candidate.strip().startswith("with:"):
+            continue
+        with_index = index
+        with_indent = candidate_indent
+        inline_with = candidate.strip()[len("with:") :].strip()
+        if inline_with:
+            return False
+        break
     if with_index is None:
         return False
 
@@ -194,6 +259,13 @@ def check_workflow_paths(paths: Iterable[str | Path]) -> list[str]:
                     violations.append(
                         f"{workflow}:{line_number}: unsupported multiline quoted scalar; use "
                         "canonical block-style workflow mappings"
+                    )
+                    continue
+                unsupported_key = _unsupported_mapping_key_syntax(line)
+                if unsupported_key is not None:
+                    violations.append(
+                        f"{workflow}:{line_number}: unsupported {unsupported_key} syntax; use "
+                        "canonical unquoted block-style workflow mappings"
                     )
                     continue
                 if not _USES_RE.match(line) and _USES_KEY_RE.search(line):
