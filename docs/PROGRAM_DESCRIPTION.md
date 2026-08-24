@@ -1,12 +1,21 @@
-# 107 Voice Studio — опис програми
+# VOICE Studio — опис програми
 
 ## Статус документа
 
-Цей документ описує фактичний стан `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`. Поточний продукт — локальний unsigned **Test RC 0.3.0**, а не production release. Заплановані можливості позначено окремо.
+Цей документ описує фактичний W1 стан після інтеграції
+`672577ef63d6107b7f7a78910574924dc9f2775f`. Customer-facing brand — **VOICE
+Studio**; package/storage/CLI compatibility names (`hermes_voice_studio`,
+`hermes-voice`) збережено. Поточний продукт — локальний unsigned **Test RC
+0.3.0**, а не production release. Заплановані можливості та native acceptance
+позначено окремо.
 
 ## Призначення і користувачі
 
-107 Voice Studio — назва репозиторію/проєкту для privacy-first desktop-застосунку, який GUI/package/README зараз називають **Hermes Voice Studio**. Він перетворює мовлення з аудіо, відео або мікрофона на редагований текст. Основні користувачі: автори контенту, інженери, юристи, дослідники та команди, яким потрібна локальна транскрипція з контрольованим експортом і збереженням оригіналу. Customer-facing brand ще потребує окремого рішення.
+VOICE Studio — customer-facing назва privacy-first desktop-застосунку. Він
+перетворює мовлення з аудіо, відео або мікрофона на редагований текст. Основні
+користувачі: автори контенту, інженери, юристи, дослідники та команди, яким
+потрібна локальна транскрипція з контрольованим експортом і збереженням
+оригіналу. Внутрішні compatibility names не є окремими продуктами.
 
 ## Що програма робить сьогодні
 
@@ -18,7 +27,8 @@
 - може надсилати файл в OpenAI STT лише після явної згоди для конкретної дії;
 - зберігає незмінний `raw_text` і окремий `corrected_text`;
 - застосовує словникові заміни, ручне редагування та опціональне AI cleanup;
-- за поточним default автоматично копіює успішний transcript в OS clipboard;
+- має `auto_copy=false` за замовчуванням; копіювання в OS clipboard виконується
+  лише явною дією користувача і супроводжується disclosure про history/sync;
 - зберігає історію в локальній SQLite БД і керовані аудіокопії;
 - експортує TXT, Markdown, JSON, SRT і VTT;
 - створює та відновлює локальні backup-архіви;
@@ -35,9 +45,28 @@
 
 ### Запис із мікрофона
 
-`мікрофон -> тимчасовий WAV -> стандартний pipeline транскрипції -> cleanup temp-файлу`
+`мікрофон -> private recorder-owned WAV -> bounded writer -> стандартний pipeline транскрипції -> scoped cleanup temp-файлу`
 
-Поточне continuous recording накопичує запис у пам’яті та не має ліміту тривалості. Закриття програми під час обробки може залишити тимчасовий WAV. Це не готовий production-потік.
+Recorder пише 100 ms блоки через bounded queue на 64 блоки, має ліміт 7 200
+секунд (дві години) і повертає status/drop/limit metadata. Degraded capture
+показується користувачу й за замовчуванням відхиляється без запуску
+транскрипції. App очищає лише tracked direct-child записи у private app-cache
+directory; identity ambiguity зберігає residue та показує його шлях для
+перевірки. Headless tests проходять, але реальний microphone, overflow/device
+disconnect, limit і close на Windows/macOS ще **NOT RUN**.
+
+### W1 data-safety controls
+
+| Контроль | Поточна поведінка | Evidence state |
+|---|---|---|
+| Settings | Typed JSON fields; пошкоджений/неправильний тип дає recoverable error і безпечні defaults | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+| Editor | Save/Discard/Cancel перед history navigation, AI cleanup, delete або close; Save змінює лише `corrected_text` | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+| Clipboard | `auto_copy` off by default; explicit Copy only; OS history/manager/sync disclosure | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+| Recorder | Private recorder-owned WAV; 100 ms / 64 blocks / two-hour cap; visible degraded warning; default rejection | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+| Microphone temp | Tracked scoped cleanup on success/error/cancel/close/preflight; ambiguous identity residue retained and reported | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+
+Ці стани не є production/release acceptance. Вони очікують фізичну native
+перевірку за матрицею в `PROJECT_AUDIT_STATUS.md`.
 
 ### Cloud STT та AI cleanup
 
@@ -61,7 +90,7 @@ Repo містить окремий research-трек: manifest/data pipeline, to
 | Settings/keychain/env | конфігурація і OpenAI credential | секрет не входить у settings/backup |
 | SQLite + managed files | локальна історія й копії | plaintext у межах OS account |
 | TXT/MD/JSON/SRT/VTT | результат користувача | контрольований локальний експорт |
-| OS clipboard | автоматичне/ручне перенесення тексту | зовнішня OS/app/history/sync boundary |
+| OS clipboard | лише явне перенесення тексту за default-off політикою | зовнішня OS/app/history/sync boundary |
 
 ## Інтеграції і системні межі
 
@@ -91,7 +120,12 @@ Repo містить окремий research-трек: manifest/data pipeline, to
 - модельні/backup архіви мають integrity controls, але не publisher signature і не повні resource budgets;
 - немає reproducible dependency lock, per-artifact SBOM/attestation та повного license payload;
 - observability, update/rollback, entitlement і support operations не готові до платного продукту.
-- automatic clipboard може розширити data boundary, а незбережені ручні правки не мають dirty-state prompt/autosave.
+- native clipboard history/sync, фізичний microphone/device disconnect і OS
+  permission behavior не перевірені; W1 headless evidence не замінює ці gates;
+- identity-ambiguous recorder residue навмисно зберігається; secure deletion і
+  delete-by-handle guarantee не заявляються;
+- broader diagnostics disclosure, restore/shutdown lifecycle, backup
+  encryption, signing, packaging і W2+ findings залишаються відкритими.
 
 ## Deployment і зрілість
 

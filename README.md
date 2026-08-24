@@ -1,12 +1,16 @@
-# Hermes Voice Studio 0.3.0 Test RC
+# VOICE Studio 0.3.0 Test RC
 
 Privacy-first desktop transcription for macOS Apple Silicon and Windows x64.
 `faster-whisper` is the default local engine: audio, transcripts, history and
 models remain on the device unless a user explicitly chooses a cloud action.
+The current customer-facing brand is **VOICE Studio**. Existing
+`hermes_voice_studio` package paths and the `hermes-voice` CLI are retained for
+compatibility.
 
 This is an **unsigned Test RC**, not a production release. Hermes Whisper is an
 experimental research engine; it has no published accuracy claim or default
-weights.
+weights. The W1 desktop data-safety controls below still require native
+Windows/macOS acceptance.
 
 Українська версія: [README.uk.md](README.uk.md).
 
@@ -72,8 +76,8 @@ not hardcoded credentials.
 
 The planned release assets are:
 
-- `Hermes-Voice-Studio-0.3.0-test-rc1-macos-arm64-unsigned.dmg`
-- `Hermes-Voice-Studio-0.3.0-test-rc1-windows-x64-unsigned.zip`
+- `VOICE-Studio-0.3.0-test-rc1-macos-arm64-unsigned.dmg`
+- `VOICE-Studio-0.3.0-test-rc1-windows-x64-unsigned.zip`
 - wheel, release manifest and `SHA256SUMS.txt`
 
 macOS Gatekeeper and Windows SmartScreen warnings are expected because these
@@ -101,6 +105,20 @@ The original user file is never deleted. `raw_text` is immutable STT output;
 editing and AI cleanup operate on `corrected_text`. API keys are resolved from
 `OPENAI_API_KEY` first, then OS Keychain/Credential Manager; they are not put in
 settings, backups, worker messages, diagnostics or Git.
+
+Clipboard disclosure is opt-in: `auto_copy` defaults to `false`, and the user
+must use the explicit Copy action to place text in the OS clipboard. Clipboard
+history, manager processes and OS sync can retain or disclose copied text.
+Unsaved editor changes trigger a Save/Discard/Cancel prompt before history
+navigation or close; Save persists only `corrected_text` and formatting.
+
+Microphone capture is recorder-owned and private under the app cache. It streams
+100 ms blocks through a bounded 64-block queue, stops at two hours, surfaces
+overflow/status degradation, and rejects degraded capture by default. The app
+cleans only tracked recorder-owned temporary files; an identity-ambiguous
+cleanup residue is retained and reported for inspection. These contracts have
+headless test evidence, while real microphones, device disconnects, OS
+clipboard history/sync and physical Windows/macOS acceptance remain **NOT RUN**.
 
 Use `hermes-voice diagnostics --export report.json` for a redacted forum report.
 Do not share private audio, transcripts, databases, API keys, or full user paths.

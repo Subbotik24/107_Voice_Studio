@@ -1,10 +1,18 @@
-# Audit ledger — 107 Voice Studio
+# Audit ledger — VOICE Studio
 
 ## Baseline
 
-Audit date: 2026-08-20. Repository state: `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`, initially clean, `origin=https://github.com/Subbotik24/107_Voice_Studio.git`. Product code in `main` remained frozen. A transient isolated-worktree incident is recorded below rather than hidden.
+Original audit date: 2026-08-20. Historical repository state:
+`main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`, initially clean,
+`origin=https://github.com/Subbotik24/107_Voice_Studio.git`. W1 integrated
+implementation evidence is anchored at
+`672577ef63d6107b7f7a78910574924dc9f2775f`; the product remains an unsigned
+Test RC and no production/release acceptance is claimed. Product code in the
+historical `main` audit remained frozen. A transient isolated-worktree incident
+is recorded below rather than hidden.
 
-Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`.
+Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`,
+`IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 
 ## Ledger
 
@@ -46,6 +54,65 @@ Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`.
 | 9 | Second-order challenge | PASS review | independent read-only reviewer after initial synthesis | corrected OpenAI retraction drift and ambiguous anchors; added clipboard, unsaved-edit, capture-status, market-validation and brand-identity gaps; aligned severities/IDs/calculations | high; all material comments reconciled |
 | 10 | Transient protected-scope incident | FAIL → REMEDIATED | linked worktree `codex/desktop-data-safety`; `git worktree list/status`; exact worktree/branch removal | an uncommitted product-code draft was created outside `main`; after re-reading the master read-only constraint it was identified, never committed/transferred, and the worktree plus branch were removed; `main` product files never changed | high; draft had no commit and is not recoverable |
 | 10 | Final protected scope | PASS with test blocker | bundled Python `compileall -q src tests scripts packaging`; pytest probe; required-doc/link/finding-anchor scans; `git diff --check`; allowlist; status/diff; HEAD↔origin | compile PASS; pytest BLOCKED (`No module named pytest`); 12 required docs and links PASS; 33 roadmap IDs mapped; only `AGENTS.md`, `SECURITY.md`, `docs/**`; HEAD=origin/main, divergence 0/0 | high; no product code/config/test/dependency/CI/package change |
+
+## W1 implementation and verification addendum — 2026-08-24
+
+W1 changes are documented against the integrated implementation tree at
+`672577ef63d6107b7f7a78910574924dc9f2775f`. The exact finding scope is
+`COR-002`, `COR-004`, `PRV-003`, `REL-001`, and the microphone-temp portion of
+`PRV-001`; each is `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`. No broader finding
+is closed. In particular, the restore/shutdown portion of `REL-003`, broader
+diagnostics disclosure in `PRV-001`, and all W2+ findings remain open.
+
+### W1 behavior evidence
+
+| Control | Evidence state | Boundary/non-claim |
+|---|---|---|
+| Strict settings types | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` | Headless wrong-type matrix passes; physical Tk startup/recovery NOT RUN |
+| Dirty editor | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` | Save/Discard/Cancel guards pass; live Tk interaction/crash draft NOT RUN |
+| Clipboard | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` | `auto_copy=false`; explicit Copy/disclosure pass statically; OS history/sync NOT RUN |
+| Recorder | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` | 100 ms blocks, 64-block queue, two-hour cap, visible degradation/default rejection covered headlessly; real device NOT RUN |
+| Microphone temp | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` | recorder-owned scoped cleanup and accepted ambiguity residue covered headlessly; physical close/ACL/device NOT RUN |
+
+### Frozen local verification
+
+All commands used the existing frozen interpreter
+`C:\Users\Enerfis-User\Desktop\107_Voice_Studio-worktrees\voice-recorder-core\.venv\Scripts\python.exe`; no install or upgrade was attempted.
+
+| Command | Status | Exact output/result |
+|---|---|---|
+| `python -m compileall -q src tests scripts packaging` | PASS | Python 3.12.13; exit 0; no output |
+| `PYTHONPATH=src python -m pytest -q tests/test_config_app.py tests/test_editor_state_app.py tests/test_gui_contract_app.py tests/test_recorder_app.py tests/test_recording_lifecycle_app.py` | PASS | `72 passed in 0.75s` |
+| `PYTHONPATH=src python -m pytest -q` | PASS | `179 passed, 2 skipped, 5 subtests passed in 4.08s` |
+| `python -m ruff check .` | PASS | `All checks passed!` |
+| `python -m build` | BLOCKED | `No module named build` |
+| `python -m pip check` | BLOCKED | `No module named pip` |
+| `python -m pip_audit` | BLOCKED | `No module named pip_audit` |
+| `git diff --check` | PASS | exit 0; Git emitted only LF→CRLF normalization warnings |
+| `git status --short --branch` | PASS | branch `codex/voice-data-safety-docs`; exactly six modified allowlisted docs; no untracked artifacts |
+| `git diff --stat` | PASS | six files changed, 358 insertions, 70 deletions |
+| allowlist/scope check | PASS | `changed_count=6`; `allowlist_unexpected=` empty; no source/tests/dependencies/config/CI/packaging/schema/cloud/Hermes diff |
+
+The focused suite and full suite are local behavioral evidence only. Missing
+build/pip/pip-audit modules are recorded as `BLOCKED`; they were not repaired by
+installing dependencies.
+
+### Native/manual acceptance
+
+Windows 10/11 x64 and macOS Apple Silicon procedures are recorded in
+`docs/PROJECT_AUDIT_STATUS.md` under **W1 native acceptance gate — NOT RUN**.
+They cover normal/continuous capture, overflow or device disconnect, the
+two-hour limit, close during capture/transcription, and clipboard history/sync.
+Every case remains **NOT RUN** until real OS/device evidence is captured. A fake
+sounddevice stream, document change or headless test cannot close this gate.
+
+### Accepted cleanup residual
+
+Recorder cleanup retains and reports identity-ambiguous destination/quarantine
+paths rather than unlinking a possibly foreign entry. A malicious same-account
+replacement after the final identity check remains an accepted residual outside
+the selected OS-account/full-disk-encryption threat boundary. No secure
+deletion or absolute delete-by-handle protection is claimed.
 
 ## External authoritative references consulted
 

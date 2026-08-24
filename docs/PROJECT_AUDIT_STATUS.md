@@ -1,10 +1,26 @@
-# 107 Voice Studio — статус незалежного аудиту
+# VOICE Studio — статус незалежного аудиту
 
 ## Висновок
 
-`main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511` має добру local-first основу і помітні захисні контракти, але **не готовий до production/commercial release**. Підтверджених P0 не знайдено. P1-блокери охоплюють desktop correctness/resource/data-loss lifecycle, Hermes integration і scientific validity, untrusted files/model authenticity, sensitive-data protection, reproducible supply chain, native acceptance та комерційну операційну модель. Cloud model default підтверджено офіційним API; активний cloud diagnostics finding є P2.
+Integrated W1 state `672577ef63d6107b7f7a78910574924dc9f2775f` має добру
+local-first основу і помітні захисні контракти, але **не готовий до
+production/commercial release**. Підтверджених P0 не знайдено. P1-блокери
+охоплюють незакриті desktop correctness/resource/data-loss lifecycle, Hermes
+integration і scientific validity, untrusted files/model authenticity,
+sensitive-data protection, reproducible supply chain, native acceptance та
+комерційну операційну модель. W1 зафіксував лише headless implementation slice для
+точно визначених finding portions; їхній стан —
+`IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`. Cloud model default підтверджено
+офіційним API; активний cloud diagnostics finding є P2.
 
-У фінальному `main` цей етап змінив тільки документацію/Codex instructions. Product code, tests, dependencies, config, CI і packaging не змінені. Під час роботи була створена непроіндексована product-code чернетка в окремому linked worktree; після повторної перевірки read-only constraint її і тимчасову гілку повністю видалено, без коміту або перенесення в `main`. Інцидент зафіксований у ledger, а не прихований.
+Історичний audit `main` змінював лише документацію/Codex instructions. Перед
+цим W1 integrated implementation tree змінив тільки дозволені product modules
+і regression tests; поточний documentation increment змінює лише шість
+дозволених Markdown-файлів. Під час історичного audit була створена
+непроіндексована product-code чернетка в окремому linked worktree; після
+повторної перевірки read-only constraint її і тимчасову гілку повністю
+видалено, без коміту або перенесення в `main`. Інцидент зафіксований у ledger,
+а не прихований.
 
 ## Repository baseline
 
@@ -12,27 +28,34 @@
 |---|---|
 | Root | repository checkout root (`.`); host-specific absolute path intentionally not versioned |
 | Repository | `https://github.com/Subbotik24/107_Voice_Studio.git` |
-| Branch | `main`, tracking `origin/main` |
-| Commit | `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511` |
-| Initial status | clean |
+| Source integration line | `codex/voice-studio-0.4-rc` |
+| Documentation worktree | `codex/voice-data-safety-docs` |
+| Commit | `672577ef63d6107b7f7a78910574924dc9f2775f` (W1 integrated implementation baseline) |
+| Initial audit baseline | `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511` (historical, docs-only audit) |
+| Initial status | clean before W1 integration |
 | Pre-existing user changes | none observed |
 | Product tracks | desktop `hermes_voice_studio`; experimental `hermes_whisper` |
-| Release claim | unsigned 0.3.0 Test RC; no production-authoritative release |
+| Customer brand | `VOICE Studio` (compatibility package/CLI names remain `hermes_*` / `hermes-voice`) |
+| Release claim | unsigned 0.3.0 Test RC; no production-authoritative release, signing, notarization or clean-machine acceptance |
 
 ## Scope and method
 
-Inspected repository structure, current docs, Git history, source, tests, manifests, workflows, build/packaging scripts and configuration shape. Traced desktop/media/cloud/storage/backup/model and Hermes data/train/evaluate/bundle flows. Performed independent desktop, security/privacy and Hermes/commercial passes, then reconciled results. External checks used current official OpenAI, GitHub, Python Packaging and PyPI sources where the repository contract could have drifted.
+Inspected repository structure, current docs, Git history, source, tests, manifests, workflows, build/packaging scripts and configuration shape. Traced desktop/media/cloud/storage/backup/model and Hermes data/train/evaluate/bundle flows. Performed independent desktop, security/privacy and Hermes/commercial passes, then reconciled results. W1 additionally reviewed the integrated settings/editor/clipboard/recorder/temp behavior and its focused regression tests. External checks used current official OpenAI, GitHub, Python Packaging and PyPI sources where the repository contract could have drifted.
 
-No production service, live OpenAI call, destructive migration, dependency update/install, commit, push, PR, release or deployment occurred.
+No production service, live OpenAI call, destructive migration, dependency update/install, native device acceptance, signed artifact acceptance, push, PR, release or deployment occurred in this audit update.
 
 ## Verification ledger summary
 
 | Check | Status | Evidence |
 |---|---|---|
-| `git status`, branch, SHA, remote | PASS | exact local baseline recorded |
-| `python -m compileall -q src tests` | PASS | bundled Python 3.12.13; ~0.08 s |
-| `pytest -q` | BLOCKED | `pytest` absent in available bundled runtime; dependencies deliberately not installed |
-| Ruff/build/pip-audit locally | BLOCKED | modules absent; no mutation of environment |
+| `git status`, branch, SHA, remote | PASS | W1 worktree and allowlisted docs scope recorded |
+| frozen `python -m compileall -q src tests scripts packaging` | PASS | Python 3.12.13; exit 0, no output |
+| frozen focused W1 suite | PASS | `tests/test_config_app.py tests/test_editor_state_app.py tests/test_gui_contract_app.py tests/test_recorder_app.py tests/test_recording_lifecycle_app.py`; `72 passed` |
+| frozen `PYTHONPATH=src python -m pytest -q` | PASS | `179 passed, 2 skipped, 5 subtests passed` |
+| frozen `python -m ruff check .` | PASS | `All checks passed!` |
+| frozen `python -m build` | BLOCKED | `No module named build`; no installation attempted |
+| frozen `python -m pip check` | BLOCKED | `No module named pip`; no installation attempted |
+| frozen `python -m pip_audit` | BLOCKED | `No module named pip_audit`; no installation attempted |
 | GitHub CI run `31278777131` | PASS, remote historical evidence | exact baseline SHA; macOS 14/Windows 2022, Python 3.11/3.12; compile/Ruff/pytest/wheel/pip check/pip-audit jobs succeeded |
 | GitHub CodeQL run `31278777138` | PASS, remote historical evidence | exact baseline SHA |
 | Scheduled CodeQL `31992968536` | PASS, remote historical evidence | exact baseline SHA; 2026-08-17 |
@@ -53,11 +76,11 @@ Scale: `0` absent/unknown, `1` prototype, `2` major blockers, `3` credible Test-
 |---|---:|---|
 | Product definition | 3.0/5 | workflows and local/private boundaries are clear; packaging/support promises incomplete |
 | Desktop architecture | 3.0/5 | engine/service/store boundaries exist; large UI module and mixed sync/async lifecycle debt |
-| Desktop correctness/reliability | 2.0/5 | settings crash paths, preparation cancel gap, temp/recording/restore lifecycle and cloud health-report defect |
+| Desktop correctness/reliability | 2.5/5 | W1 settings/editor/recorder/temp slices have headless evidence; preparation/restore lifecycle, native acceptance and cloud health-report gaps remain |
 | Security/privacy | 2.0/5 | explicit consent and archive controls are good; unsigned models, native parsing, plaintext data and mutable supply chain remain |
 | Tests/QA | 2.5/5 | strong unit contracts and prior CI; many GUI tests are source assertions/fakes, local suite blocked, no physical/live/Hermes deterministic gate |
 | Dependencies/release | 1.5/5 | CI/audits exist; no lock/hashes/SBOM/attestation/signing or symmetric current OS gate |
-| Performance/resource efficiency | 1.5/5 | worker reuse exists; long recording/main-thread/archive/model/decoder resource risks lack measured budgets |
+| Performance/resource efficiency | 1.5/5 | recorder queue/duration bounds are implemented; native disk/device behavior and main-thread/archive/model/decoder resource budgets remain unmeasured |
 | Hermes engineering validity | 1.0/5 | formulas partly sound; integration overlap, leakage, fingerprint, metrics, CTC/resampling and provenance block claims |
 | Operations/support | 1.5/5 | doctor/backup/diagnostics exist; logging, incident, updater/rollback, support and vulnerability channels incomplete |
 | Commercial readiness | 1.0/5 | no signed product, entitlement, EULA/support lifecycle, IP/model proof or unit-economics evidence |
@@ -72,17 +95,21 @@ The 1,219-line `app.py` owns UI, lifecycle, cloud dialogs, model management, bac
 
 ## Correctness and reliability assessment
 
-Highest-confidence issues:
+Highest-confidence remaining issues and W1 boundaries:
 
 - current default `gpt-transcribe` is present in the official OpenAI Audio API model list; live account behavior remains unverified and no automated API-drift contract exists;
-- wrong JSON setting types escape intended damaged-settings recovery;
+- wrong JSON setting types are rejected by strict validation and surfaced as a recoverable settings warning; GUI/native recovery behavior remains NOT RUN;
 - Hermes computes merged overlap text but desktop stores a join of original chunks;
-- continuous recording grows unbounded in RAM and doubles data at stop;
-- sounddevice callback status is discarded, so capture overflow/dropout may be silent;
-- mic temp cleanup depends on a Tk event that may never run after close;
-- automatic clipboard expands the privacy boundary and unsaved editor changes can be overwritten/closed without a dirty prompt;
+- recorder capture is streamed through a bounded 64-block queue with 100 ms blocks and a two-hour limit; overflow/status is surfaced and degraded capture is rejected by default, but native microphone/device evidence is NOT RUN;
+- microphone temp ownership is scoped to recorder-created private app-cache files with cleanup on success/error/cancel/close/preflight; identity ambiguity is retained and reported, while broader diagnostics disclosure remains open;
+- clipboard auto-copy is disabled by default and editor navigation/close uses Save/Discard/Cancel; native clipboard history/sync and live Tk interaction remain NOT RUN;
 - backup restore daemon lifecycle and model-catalog/file operations can leave recoverable but inconsistent states;
 - `doctor` applies local model readiness logic to cloud engine.
+
+The exact W1 finding states are `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` for
+`COR-002`, `COR-004`, `PRV-003`, `REL-001`, and the microphone-temp portion of
+`PRV-001` only. This does not close `REL-003` restore/shutdown behavior,
+broader `PRV-001` diagnostics disclosure, or any W2+ finding.
 
 Full details and confidence labels: [audit/FINDINGS_REGISTER.md](audit/FINDINGS_REGISTER.md).
 
@@ -96,9 +123,9 @@ Threat model: [audit/107_Voice_Studio-threat-model.md](audit/107_Voice_Studio-th
 
 ## Tests and QA assessment
 
-Strong areas: service/storage invariants, worker reuse/cancel/timeout, cloud privacy with fakes, archive traversal/integrity, restore staging and overlap helper.
+Strong areas: service/storage invariants, worker reuse/cancel/timeout, cloud privacy with fakes, archive traversal/integrity, restore staging and overlap helper, typed-settings/editor guards, and bounded recorder/temp lifecycle tests.
 
-Weak areas: GUI behavioral tests frequently inspect source strings; platform acceptance uses fake controllers/media; no recorder lifecycle tests; no corrupt typed-settings regression; no restore shutdown/process-tree tests; no deterministic CI that installs and executes Hermes/Torch; no >30 s Hermes desktop integration; no coverage threshold/type checker; no real codec/device/cloud/model acceptance.
+Weak areas: GUI behavioral tests frequently inspect source strings; platform acceptance uses fake controllers/media; no restore shutdown/process-tree tests; no deterministic CI that installs and executes Hermes/Torch; no >30 s Hermes desktop integration; no coverage threshold/type checker; no real microphone/device disconnect, native clipboard history/sync, physical OS, codec, cloud or model acceptance. The local frozen runtime passed the W1 focused and full suites, but absent build/pip/pip-audit modules remain explicit blockers.
 
 ## Dependency and supply-chain assessment
 
@@ -106,7 +133,7 @@ Direct dependency ranges and upper bounds exist, and prior CI included `pip-audi
 
 ## Performance, scalability and cost
 
-- long continuous recording has unbounded memory and an additional stop-time copy;
+- recorder memory is bounded by a 64-block queue and durable writer, with a two-hour cap; native disk-full/device behavior and measured peak resource evidence remain NOT RUN;
 - bundle/model import/hash/network operations can freeze GUI;
 - backup restore reads large members fully into memory;
 - parent media probe and FFmpeg lifecycle lack complete time/resource/process-tree budgets;
@@ -138,6 +165,103 @@ The closest viable product is signed local-first desktop on faster-whisper, sold
 5. Lock/attest/sign dependencies, builds, installers and model channel; complete license/SBOM inventory.
 6. Define data protection, support/update/rollback/incident and entitlement policies.
 7. Obtain specialist legal review for EULA, privacy/DPA, FFmpeg/native dependencies, corpus/model redistribution, trademark/contributor IP.
+
+## W1 native acceptance gate — NOT RUN
+
+The following procedure is the required physical gate for the five W1 states.
+It is a manual/native checklist, not a substitute for the frozen headless
+suite. Run each OS on a disposable user profile with a short non-sensitive
+fixture and a locally installed `faster-whisper` model; do not use production
+audio or claim release/signing acceptance from this checklist alone. Record
+the app build/commit, OS version, input device, permission result, timestamps,
+visible messages and whether each expected file remained or was removed.
+
+### Windows 10/11 x64 — NOT RUN
+
+1. Start VOICE Studio from the candidate source/frozen app on a disposable
+   profile. In Settings confirm `auto_copy` is off, select a local engine/model,
+   and grant Microphone permission only when Windows asks. Do not enable
+   clipboard history for the first run.
+2. **WIN-CAP-01 normal capture:** hold the capture button, speak for 5–10 s,
+   release, and wait for the local transcript. Confirm the UI reports success,
+   `raw_text` remains unchanged, the result is in history, and the private
+   recording temp is gone after processing. Confirm a user-selected original
+   file in a separate directory is unchanged.
+3. **WIN-CAP-02 continuous capture:** click `Постійний запис`, speak for at
+   least 30 s, click stop, and confirm the returned transcript and status. Do
+   not treat a successful short run as proof of the two-hour limit; record the
+   displayed status and peak behavior.
+4. **WIN-CAP-03 overflow/device disconnect:** start continuous capture, then
+   unplug the active USB microphone (or disable that input in
+   Settings → System → Sound) for 3–5 s and reconnect it before stopping. If
+   the recorder reports a drop/status warning, verify a visible degraded-capture
+   prompt defaults to **No**; choose No and confirm the temp is cleaned and no
+   transcription job starts. If no warning appears, record that as a failure,
+   not as PASS. Repeat once with the warning accepted only if the user needs to
+   verify the explicit opt-in path.
+5. **WIN-CAP-04 duration limit:** start continuous capture with a stable input
+   and leave it running until the UI reports the two-hour limit and forces a
+   stop. Confirm the status says the limit was reached, the recording does not
+   continue growing, and processing starts only after the degraded/limit policy
+   is answered. This two-hour test is NOT RUN until physically executed.
+6. **WIN-LIFE-01 close during capture:** begin capture, close the window with
+   Alt+F4, and confirm the recorder is cancelled, only the tracked private temp
+   is removed, and the original fixture is untouched. Reopen the app and verify
+   no orphan private recording is silently processed.
+7. **WIN-LIFE-02 close during transcription:** start a local transcription,
+   close the window while the status shows processing, and reopen the app. Record
+   whether cancellation is visible and whether any managed copy/history entry
+   is consistent; do not infer restore/shutdown safety for backups from this
+   test.
+8. **WIN-CLIP-01 clipboard disclosure:** with `auto_copy` still off, complete a
+   transcript and press `Win+V`. Confirm the new transcript was not copied by
+   the app. Use the explicit Copy action, press `Win+V` again, and record the
+   Windows clipboard-history entry. If clipboard sync is enabled, verify the
+   disclosure on the paired device; do not enable sync without recording that
+   it changes the privacy boundary.
+
+### macOS Apple Silicon — NOT RUN
+
+1. Start VOICE Studio with `./run_mac.command` (or the candidate app) on a
+   disposable profile. In System Settings → Privacy & Security → Microphone,
+   grant access only to the tested app; confirm `auto_copy` is off and select a
+   local engine/model. Do not use production audio.
+2. **MAC-CAP-01 normal capture:** hold the capture button, speak for 5–10 s,
+   release, and wait for the local transcript. Confirm success/history,
+   immutable `raw_text`, removal of the private recorder temp, and no change to
+   a separate user-selected original file.
+3. **MAC-CAP-02 continuous capture:** click `Постійний запис`, speak for at
+   least 30 s, stop it, and record the transcript/status and any warning. A
+   short run does not prove the two-hour limit.
+4. **MAC-CAP-03 overflow/device disconnect:** start continuous capture, unplug
+   the active USB microphone (or revoke/disable its input in System Settings →
+   Privacy & Security → Microphone) for 3–5 s, reconnect/restore it, and stop.
+   Verify that any status/drop warning is visible, that the default **No** on
+   the degraded-capture prompt removes the private temp and starts no job, and
+   record a missing warning as a failure. Repeat with explicit acceptance only
+   as a separate opt-in observation.
+5. **MAC-CAP-04 duration limit:** leave continuous capture active until the
+   two-hour limit is reported and capture is forced to stop. Confirm no further
+   frames are accepted and that the status/processing decision is explicit. This
+   remains NOT RUN until a physical two-hour observation exists.
+6. **MAC-LIFE-01 close during capture:** close the window or press Cmd+Q during
+   capture, confirm recorder cancellation and scoped removal of only the tracked
+   private temp, then reopen and check for no silent orphan processing. Record
+   any permission or device error verbatim.
+7. **MAC-LIFE-02 close during transcription:** start local transcription, close
+   while processing, reopen, and record cancellation visibility plus history/
+   managed-copy consistency. This does not validate backup restore shutdown.
+8. **MAC-CLIP-01 clipboard disclosure:** with `auto_copy` off, complete a
+   transcript and inspect the current clipboard using an existing clipboard
+   manager only if the test profile already has one; confirm the app did not
+   copy automatically. Use explicit Copy and inspect the manager. If a second
+   Apple device and Universal Clipboard are enabled, record any synchronized
+   copy as an external boundary; macOS has no built-in history view equivalent
+   to Windows `Win+V`.
+
+All Windows and macOS cases above are currently **NOT RUN**. Passing the local
+tests, generating a document, or observing a fake `sounddevice` stream cannot
+close this gate.
 
 ## Unknowns and explicit non-claims
 

@@ -1,30 +1,40 @@
-# Findings register — 107 Voice Studio
+# Findings register — VOICE Studio
 
-Baseline: `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`. `P0` confirmed: **none**.
+Integrated W1 evidence baseline: `672577ef63d6107b7f7a78910574924dc9f2775f`;
+original audit baseline: `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`.
+`P0` confirmed: **none**. Customer-facing brand is **VOICE Studio**; existing
+`hermes_*` package/storage/CLI compatibility names remain.
 
 Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial, `P` performance/cost, `E` engineering accuracy, `M` maintainability. Evidence labels are `Observed`, `Inferred`, `Unknown` or `Blocked`.
+W1 state `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` means the approved
+implementation and headless regression evidence exist, while the required
+physical Windows/macOS/native gate remains **NOT RUN**. This state is used only
+for `COR-002`, `COR-004`, `PRV-003`, `REL-001`, and the microphone-temp portion
+of `PRV-001` below.
 
 ## P1 — high / release blockers
 
 ### COR-002 — wrong JSON setting types escape recovery
 
+- **Current W1 state:** `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 - **Category / severity:** Correctness/reliability; P1. Impact `C3 S1 Cm2 P0 E0 M1`.
-- **Evidence / affected:** Observed in `src/hermes_voice_studio/models.py:102-142`, `src/hermes_voice_studio/config.py:40-50`, `src/hermes_voice_studio/app.py:44-49`, `src/hermes_voice_studio/cli.py:457-463`; current tests cover malformed object/range but not types.
-- **Observed / expected:** Valid JSON such as `{"model":1}` can raise `AttributeError`/`TypeError`, preventing GUI startup or producing CLI traceback; corrupted/incompatible settings should be normalized/migrated or produce one recoverable message.
-- **Root hypothesis / confidence:** Dataclass construction trusts JSON values while validation assumes Python types; high.
+- **Evidence / affected:** `Settings._validate_types()` and `Settings.from_dict()` now reject wrong string/boolean/integer JSON types; `HermesVoiceApp` catches the validation error and uses safe defaults. Regression coverage is in `tests/test_config_app.py::test_settings_reject_wrong_json_types` and the full frozen suite.
+- **Observed / expected:** Wrong JSON values such as `{"model":1}`, nulls or lists produce a concrete settings error and recoverable GUI defaults rather than an unhandled traceback. The native Tk startup/recovery experience still requires physical acceptance.
+- **Root hypothesis / confidence:** Resolved in the approved headless implementation; native confidence remains pending.
 - **Impact:** Paying customer can become unable to launch after manual edit, restore or version drift.
-- **Recommended / alternative:** Strict typed decode with per-field migration/default and quarantined bad file; alternative schema validator before `Settings.from_dict`.
-- **Verification / dependencies / commercial relevance:** Wrong-type/null/list/overflow matrix across GUI/CLI/backup restore; no external dependency; desktop RC blocker.
+- **Recommended / alternative:** Retain strict typed decode with per-field migration/default and a clear recoverable message; future backup/restore and native startup matrix remains required.
+- **Verification / dependencies / commercial relevance:** Headless wrong-type matrix is covered and passed; physical Windows/macOS launch/recovery is **NOT RUN**; no external dependency; desktop RC blocker remains until native acceptance.
 
 ### COR-004 — unsaved editor changes can be silently lost
 
+- **Current W1 state:** `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 - **Category / severity:** Correctness/UX/data safety; P1. Impact `C3 S0 Cm3 P0 E0 M2`.
-- **Evidence / affected:** Observed in `src/hermes_voice_studio/app.py:480-484,596-599,658-669,1204-1211`; selecting history replaces editor content, save is explicit, and close destroys the app without a dirty-state check. No regression tests cover unsaved navigation/close.
-- **Observed / expected:** Manual customer edits can disappear when another record is selected or the app closes; edited work needs a visible dirty state and safe save/discard/cancel or durable autosave contract.
-- **Root hypothesis / confidence:** Editor buffer and persisted `corrected_text` have no explicit synchronization/state machine; high.
+- **Evidence / affected:** `HermesVoiceApp` tracks an editor baseline and guards history navigation, delete, AI cleanup and close with `messagebox.askyesnocancel`; Save persists only `corrected_text` plus formatting. Behavioral coverage is in `tests/test_editor_state_app.py` and the frozen focused suite.
+- **Observed / expected:** A dirty editor now offers Save, Discard or Cancel; failed Save and Cancel keep the current editor/window in place. No autosave or crash-recovery draft is claimed. Native Tk prompts and close timing remain **NOT RUN**.
+- **Root hypothesis / confidence:** Resolved in the approved headless/UI-boundary implementation; physical interaction confidence remains pending.
 - **Impact:** Paying customer loses work without an error, undermining transcript history as a dependable record.
-- **Recommended / alternative:** Track persisted revision/dirty buffer and prompt on navigation/close with crash-safe draft; alternative autosave every validated change with versioned undo.
-- **Verification / dependencies / commercial relevance:** Behavioral tests for switch/close/crash/save failure and AI cleanup/undo interaction; UI state design; desktop commercial blocker.
+- **Recommended / alternative:** Retain the explicit dirty-state prompt and add crash-safe draft only through a separately approved change; do not infer autosave from this W1 slice.
+- **Verification / dependencies / commercial relevance:** Headless navigation/close/save-error/AI-cleanup guards pass; physical Windows/macOS Tk interaction is **NOT RUN**; desktop commercial blocker remains pending native acceptance.
 
 ### ENG-001 — Hermes merged overlap text is discarded
 
@@ -88,13 +98,14 @@ Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial
 
 ### REL-001 — recording is unbounded and capture degradation can be silent
 
+- **Current W1 state:** `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 - **Category / severity:** Reliability/performance/privacy; P1. Impact `C2 S1 Cm2 P3 E0 M1`.
-- **Evidence / affected:** Observed in `src/hermes_voice_studio/recorder.py:12-18,31-72`; continuous UI at `src/hermes_voice_studio/app.py:381-414`; callback ignores sounddevice `status` at `src/hermes_voice_studio/recorder.py:34-37`; no behavioral recorder tests.
-- **Observed / expected:** All frames accumulate in an unbounded queue, then list/concatenation/bytes duplicate data; overflow/dropout status is discarded. Recording must be streamed, bounded/durable and surface capture integrity warnings.
-- **Root hypothesis / confidence:** prototype in-memory callback was exposed as indefinite mode without a health/error channel; high.
+- **Evidence / affected:** `src/hermes_voice_studio/recorder.py` now streams fixed 100 ms (`BLOCK_FRAMES=1_600` at 16 kHz) blocks through `MAX_PENDING_BLOCKS=64`, writes a recorder-owned private WAV on a writer thread, aggregates sounddevice status/drop metadata, and enforces `MAX_RECORDING_SECONDS=7_200`. App integration displays the warning and defaults degraded capture to rejection. `tests/test_recorder_app.py` and `tests/test_recording_lifecycle_app.py` cover the contract.
+- **Observed / expected:** Headless tests prove bounded queue behavior, writer lifecycle, status/drop reporting, two-hour limit metadata, path ownership, default degraded rejection and cleanup. Actual microphone overflow, device disconnect, disk pressure and two-hour wall-clock behavior remain **NOT RUN**.
+- **Root hypothesis / confidence:** Resolved in the approved headless recorder/app implementation; native device confidence remains pending.
 - **Impact:** RAM exhaustion, lost recording, silently degraded transcript and sensitive data residue.
-- **Recommended / alternative:** private streamed WAV with duration/byte/disk caps, status aggregation/visible failure and crash recovery; alternative remove continuous mode and cap clips.
-- **Verification / dependencies / commercial relevance:** long-record/disk-full/status-overflow/stop/close tests and measured peak RAM; OS audio; desktop RC blocker.
+- **Recommended / alternative:** Retain private streamed WAV, bounded queue, duration cap, visible warning and default rejection; complete native OS/device matrix before release. No secure deletion or absolute delete-by-handle guarantee is claimed.
+- **Verification / dependencies / commercial relevance:** Frozen focused suite (72 passed) and full suite (179 passed, 2 skipped, 5 subtests) pass; native long-record/disk-full/status-overflow/device/close acceptance is **NOT RUN**; desktop RC blocker remains.
 
 ### REL-002 — cancel/timeout does not cover prepare/hash/copy
 
@@ -109,12 +120,12 @@ Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial
 ### REL-003 — close/daemon lifecycle can strand temp audio or interrupt restore
 
 - **Category / severity:** Reliability/privacy/data safety; P1. Impact `C3 S2 Cm3 P1 E0 M2`.
-- **Evidence / affected:** Observed temp flow `src/hermes_voice_studio/app.py:402-469,277-315,1204-1211`; inferred restore window `src/hermes_voice_studio/app.py:1127-1193`, `src/hermes_voice_studio/backup.py:212-223`.
-- **Observed / expected:** Tk destruction can prevent temp cleanup; daemon shutdown can stop restore between directory swaps. App close must own, await/cancel and recover every resource transition.
-- **Root hypothesis / confidence:** cleanup is event-loop mediated and background tasks lack coordinated shutdown; high for temp, medium for interpreter restore timing.
+- **Evidence / affected:** W1 now covers recorder-owned microphone temp cleanup in `src/hermes_voice_studio/app.py`; the inferred restore window remains `src/hermes_voice_studio/app.py:1127-1193`, `src/hermes_voice_studio/backup.py:212-223`.
+- **Observed / expected:** The microphone-temp sub-slice has scoped cancel/close cleanup and visible identity ambiguity. Daemon shutdown can still stop restore between directory swaps, and crash/forced-close behavior is not natively verified. App close must own, await/cancel and recover every resource transition.
+- **Root hypothesis / confidence:** recorder temp ownership is improved in W1; background restore lifecycle remains uncoordinated, with high temp confidence before W1 and medium restore timing confidence.
 - **Impact:** private residue, unavailable active data root and manual recovery burden.
 - **Recommended / alternative:** explicit resource registry/state machine, non-daemon restore with close gate and startup recovery; alternative prohibit close during critical restore and clean orphan temp files at startup.
-- **Verification / dependencies / commercial relevance:** forced close/crash at every transition; OS/process tests; data-safety blocker.
+- **Verification / dependencies / commercial relevance:** microphone headless tests pass, but forced close/crash restore/process tests and physical OS evidence are **NOT RUN**; data-safety blocker remains open.
 
 ### SEC-001 — untrusted media parses in parent/native boundary
 
@@ -158,13 +169,14 @@ Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial
 
 ### PRV-003 — automatic clipboard copy expands the data boundary
 
+- **Current W1 state:** `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 - **Category / severity:** Privacy/product behavior; P1 commercial / P2 controlled personal use. Impact `C1 S3 Cm3 P0 E0 M1`.
-- **Evidence / affected:** Observed: `Settings.auto_copy=True` at `src/hermes_voice_studio/models.py:94`; successful results are copied at `src/hermes_voice_studio/app.py:512-513,570-573`. Clipboard/history/sync behavior is controlled by the OS and other applications.
-- **Observed / expected:** A transcript may leave the app’s storage boundary automatically after success; sensitive workflows need explicit action/default-off and a clear OS clipboard-history/sync disclosure.
-- **Root hypothesis / confidence:** convenience default was modeled as local behavior without treating clipboard as external shared state; high for app behavior, environment-dependent disclosure.
+- **Evidence / affected:** `Settings.auto_copy=False` is the current default; successful results call copy only when the setting is explicitly enabled, while the toolbar Copy action remains explicit. Settings UI text discloses OS clipboard history/sync. `tests/test_config_app.py::test_clipboard_copy_is_private_by_default` and GUI contract tests cover the app boundary.
+- **Observed / expected:** Headless settings and UI contracts prove no automatic copy by default and explicit copy remains user initiated. Clipboard manager retention, Windows history, macOS manager behavior and Universal Clipboard are OS-dependent and **NOT RUN**.
+- **Root hypothesis / confidence:** Resolved for the approved default behavior; environment-dependent disclosure confidence remains pending native acceptance.
 - **Impact:** confidential transcript can be retained by clipboard manager, synchronized to another device or read by another process.
-- **Recommended / alternative:** default-off explicit copy with preview/short-lived clear option and admin policy; alternative preserve auto-copy only in an explicitly named non-sensitive profile with first-use warning.
-- **Verification / dependencies / commercial relevance:** settings migration, success/error/cancel tests, supported-OS clipboard/history guidance; product privacy decision; blocker for strong privacy-first commercial claim.
+- **Recommended / alternative:** Retain default-off explicit copy and disclosure; any auto-copy profile or clipboard clearing policy needs a separate approved product decision.
+- **Verification / dependencies / commercial relevance:** Frozen settings/UI suite passes; physical Windows/macOS clipboard history/manager/sync procedure is **NOT RUN**; blocker for a strong privacy-first commercial claim remains.
 
 ### QA-001 — Hermes path is not deterministic in CI
 
@@ -269,10 +281,11 @@ Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial
 ### PRV-001 — diagnostics and temp lifecycle can expose private paths/audio
 
 - **Category/severity:** privacy P2/P1 temp; impact `C1 S3 Cm2 P0 E0 M1`.
-- **Evidence/affected:** `src/hermes_voice_studio/diagnostics.py:17-38,87-174`; mic temp lifecycle `src/hermes_voice_studio/app.py:402-469,277-315,1204-1211`.
-- **Observed/expected/root/confidence:** non-home/UNC/error paths remain and close can strand raw WAV; literal-prefix/event-loop cleanup is incomplete; high.
+- **Current W1 microphone-temp state:** `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`. The broader diagnostics/path-disclosure portion remains open and is not closed by this slice.
+- **Evidence/affected:** Diagnostics remains at `src/hermes_voice_studio/diagnostics.py`; microphone temp lifecycle now uses `src/hermes_voice_studio/app.py` private `cache_dir()/recordings` ownership, tracked direct-child paths, scoped cleanup on success/error/cancel/close/preflight, and structured ambiguity reporting. `tests/test_recording_lifecycle_app.py` covers ownership, preflight exits, close, original preservation and ambiguous residues.
+- **Observed/expected/root/confidence:** The approved microphone-temp slice no longer relies on an unscoped Tk cleanup event: recorder-owned temp paths are tracked and only identity-safe paths are removed. Identity ambiguity intentionally retains residue and reports it; diagnostics non-home/UNC/error-path disclosure remains open. Native close/crash/device evidence is **NOT RUN**.
 - **Impact/recommendation/alternative:** support report or temp directory disclosure; allowlisted diagnostics + owned private temp registry/startup cleanup, or omit paths/mic temp feature.
-- **Verification/dependencies/commercial:** custom path/case/UNC/error and forced-close tests; OS support; privacy promise.
+- **Verification/dependencies/commercial:** Headless microphone ownership/cleanup tests pass; physical Windows/macOS close/crash/ACL and broader diagnostics custom-path/UNC/error matrix is **NOT RUN**. Do not infer secure deletion, delete-by-handle protection, or closure of `REL-003` restore/shutdown behavior.
 
 ### QA-002 — current tests over-rely on fakes/source assertions and lack quality gates
 
@@ -327,5 +340,13 @@ Impact codes use `0–3`: `C` correctness, `S` security/privacy, `Cm` commercial
 - **COR-001 retracted:** An early static/research pass suspected that `gpt-transcribe` was unsupported. The current official [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio/createTranscription) explicitly lists it. This is not a product defect on the audited date. Live service behavior remains `NOT RUN`; a contract/drift test is still recommended. Retaining this reconciliation prevents the discarded hypothesis from being silently revived.
 - P1/P2 reflects current local desktop assumptions. Shared directories, exchanged archives and paid distribution increase security/privacy severity.
 - Findings based on lifecycle/native exploitability are explicitly labeled inferred; no exploit was claimed.
-- Documentation corrections do not close the underlying product finding. A finding closes only after approved implementation and required verification.
+- Documentation corrections alone do not close a product finding. W1 records
+  `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` only for `COR-002`, `COR-004`,
+  `PRV-003`, `REL-001`, and the microphone-temp portion of `PRV-001`; required
+  native evidence is still open, and no broader finding is closed.
+- The accepted recorder cleanup residual is identity ambiguity after the final
+  identity check, including a malicious same-account replacement outside the
+  selected OS-account/full-disk-encryption boundary. Residue is retained and
+  reported; secure deletion and absolute delete-by-handle protection are not
+  claimed.
 - Desktop/faster-whisper can reach release readiness independently. Hermes findings remain mandatory before Hermes is marketed or distributed as production capability.
