@@ -349,46 +349,69 @@ def test_inspection_rejects_regular_file_ancestor_conflicts(
         inspect_zip(archive_path, make_budget())
 
 
-def test_hierarchy_check_does_not_scan_all_prior_identities(
+def test_hierarchy_check_does_not_scan_all_prior_identities() -> None:
+    trie = archive_module._CanonicalPathTrie()
+    for index in range(2_000):
+        trie.add((f"sibling-{index}",), f"sibling-{index}", is_directory=False)
+
+    assert trie.node_count == 2_001
+
+
+def test_deep_canonical_path_uses_one_trie_node_per_component() -> None:
+    components = tuple(f"component-{index}" for index in range(4_000))
+    trie = archive_module._CanonicalPathTrie()
+
+    trie.add(components, "deep-member", is_directory=False)
+
+    assert trie.node_count == len(components) + 1
+    node = trie.root
+    for component in components:
+        node = node.children[component]
+    assert node.is_member is True
+    assert node.is_regular_file is True
+    assert node.is_directory is False
+
+
+def test_deep_member_metadata_does_not_slice_prefix_tuples(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    archive_path = tmp_path / "many-siblings.zip"
-    write_zip(
-        archive_path,
-        [(f"sibling-{index}.txt", b"x") for index in range(2_000)],
-    )
-    scan_count = [0]
+    archive_path = tmp_path / "deep-metadata.zip"
+    write_zip(archive_path, [("placeholder", b"x")])
+    deep_name = "/".join(f"part-{index}" for index in range(4_000))
+    slice_count = [0]
 
-    class CountingCanonicalNames(dict):
-        def items(self):  # type: ignore[no-untyped-def]
-            scan_count[0] += 1
-            return super().items()
+    class CountingIdentity(tuple):
+        def __new__(cls, values: tuple[str, ...]):
+            instance = super().__new__(cls, values)
+            instance.slice_count = slice_count
+            return instance
 
-    original_check = archive_module._check_canonical_hierarchy
+        def __getitem__(self, item):  # type: ignore[no-untyped-def]
+            result = super().__getitem__(item)
+            if isinstance(item, slice):
+                self.slice_count[0] += 1
+                return CountingIdentity(result)
+            return result
 
-    def check_spy(
-        canonical_names: dict[tuple[str, ...], tuple[str, bool]],
-        canonical_identity: tuple[str, ...],
-        name: str,
-        is_directory: bool,
-        **kwargs: object,
-    ) -> None:
-        original_check(
-            CountingCanonicalNames(canonical_names),
-            canonical_identity,
-            name,
-            is_directory,
-            **kwargs,
-        )
+    identity = CountingIdentity(tuple(f"component-{index}" for index in range(4_000)))
+    original_infolist = zipfile.ZipFile.infolist
 
-    monkeypatch.setattr(archive_module, "_check_canonical_hierarchy", check_spy)
-    inspection = inspect_zip(
-        archive_path,
-        make_budget(max_members=2_000, max_total_bytes=2_000),
+    def deep_infolist(self: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+        info = original_infolist(self)[0]
+        info.filename = deep_name
+        return [info]
+
+    monkeypatch.setattr(zipfile.ZipFile, "infolist", deep_infolist)
+    monkeypatch.setattr(
+        archive_module,
+        "_portable_member_identity",
+        lambda name, is_directory: identity,
     )
 
-    assert inspection.member_count == 2_000
-    assert scan_count[0] == 0
+    inspection = inspect_zip(archive_path, make_budget())
+
+    assert inspection.member_count == 1
+    assert slice_count[0] == 0
 
 
 def test_inspection_rejects_truncated_eocd_before_zipfile_load(

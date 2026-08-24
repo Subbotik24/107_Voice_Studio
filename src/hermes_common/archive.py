@@ -463,35 +463,71 @@ def _portable_member_identity(name: str, is_directory: bool) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", segment).casefold() for segment in segments)
 
 
-def _check_canonical_hierarchy(
-    canonical_names: dict[tuple[str, ...], tuple[str, bool]],
-    canonical_identity: tuple[str, ...],
-    name: str,
-    is_directory: bool,
-    *,
-    regular_file_identities: set[tuple[str, ...]],
-    ancestor_prefixes: set[tuple[str, ...]],
-    ancestor_prefix_names: dict[tuple[str, ...], str],
-) -> None:
-    previous_entry = canonical_names.get(canonical_identity)
-    if previous_entry is not None:
-        raise ValueError(
-            "zip archive member aliases an existing path: "
-            f"name={name!r}, existing={previous_entry[0]!r}"
-        )
-    for prefix_length in range(1, len(canonical_identity)):
-        prefix_identity = canonical_identity[:prefix_length]
-        if prefix_identity in regular_file_identities:
-            ancestor_entry = canonical_names[prefix_identity]
+class _CanonicalPathNode:
+    __slots__ = (
+        "children",
+        "first_descendant_name",
+        "is_directory",
+        "is_member",
+        "is_regular_file",
+        "member_name",
+    )
+
+    def __init__(self) -> None:
+        self.children: dict[str, _CanonicalPathNode] = {}
+        self.first_descendant_name: str | None = None
+        self.is_directory = False
+        self.is_member = False
+        self.is_regular_file = False
+        self.member_name: str | None = None
+
+
+class _CanonicalPathTrie:
+    __slots__ = ("node_count", "root")
+
+    def __init__(self) -> None:
+        self.root = _CanonicalPathNode()
+        self.node_count = 1
+
+    def add(
+        self,
+        canonical_identity: tuple[str, ...],
+        name: str,
+        *,
+        is_directory: bool,
+    ) -> None:
+        node = self.root
+        path_nodes = [node]
+        for component in canonical_identity:
+            if node.is_regular_file:
+                raise ValueError(
+                    "zip archive member has a regular-file ancestor: "
+                    f"name={name!r}, ancestor={node.member_name!r}"
+                )
+            child = node.children.get(component)
+            if child is None:
+                child = _CanonicalPathNode()
+                node.children[component] = child
+                self.node_count += 1
+            node = child
+            path_nodes.append(node)
+        if node.is_member:
             raise ValueError(
-                "zip archive member has a regular-file ancestor: "
-                f"name={name!r}, ancestor={ancestor_entry[0]!r}"
+                "zip archive member aliases an existing path: "
+                f"name={name!r}, existing={node.member_name!r}"
             )
-    if not is_directory and canonical_identity in ancestor_prefixes:
-        raise ValueError(
-            "zip archive regular file conflicts with descendant path: "
-            f"name={name!r}, descendant={ancestor_prefix_names[canonical_identity]!r}"
-        )
+        if not is_directory and node.first_descendant_name is not None:
+            raise ValueError(
+                "zip archive regular file conflicts with descendant path: "
+                f"name={name!r}, descendant={node.first_descendant_name!r}"
+            )
+        node.member_name = name
+        node.is_directory = is_directory
+        node.is_member = True
+        node.is_regular_file = not is_directory
+        for ancestor in path_nodes[:-1]:
+            if ancestor.first_descendant_name is None:
+                ancestor.first_descendant_name = name
 
 
 def _unsafe_name_reason(name: str, *, is_directory: bool = False) -> str | None:
@@ -564,10 +600,7 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
                 f"reported={directory_metadata.member_count}, actual={len(infos)}"
             )
         seen: set[str] = set()
-        canonical_names: dict[tuple[str, ...], tuple[str, bool]] = {}
-        regular_file_identities: set[tuple[str, ...]] = set()
-        ancestor_prefixes: set[tuple[str, ...]] = set()
-        ancestor_prefix_names: dict[tuple[str, ...], str] = {}
+        canonical_paths = _CanonicalPathTrie()
         members: list[ZipMember] = []
         total_expanded = 0
         total_compressed = 0
@@ -587,22 +620,11 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
             if is_directory and not budget.allow_directories:
                 raise ValueError(f"zip archive directory member is not allowed: {name!r}")
             canonical_identity = _portable_member_identity(name, is_directory)
-            _check_canonical_hierarchy(
-                canonical_names,
+            canonical_paths.add(
                 canonical_identity,
                 name,
-                is_directory,
-                regular_file_identities=regular_file_identities,
-                ancestor_prefixes=ancestor_prefixes,
-                ancestor_prefix_names=ancestor_prefix_names,
+                is_directory=is_directory,
             )
-            canonical_names[canonical_identity] = (name, is_directory)
-            if not is_directory:
-                regular_file_identities.add(canonical_identity)
-            for prefix_length in range(1, len(canonical_identity)):
-                prefix_identity = canonical_identity[:prefix_length]
-                ancestor_prefixes.add(prefix_identity)
-                ancestor_prefix_names.setdefault(prefix_identity, name)
             if info.compress_type not in _SUPPORTED_COMPRESSION_METHODS:
                 raise ValueError(
                     "zip archive uses unsupported compression method: "
