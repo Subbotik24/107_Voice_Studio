@@ -9,9 +9,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 _USES_RE = re.compile(r"^\s*(?:-\s*)?uses\s*:\s*(?P<value>\S+)")
-_UNSUPPORTED_USES_RE = re.compile(
-    r"^\s*(?:-\s*)?(?:['\"]uses['\"]\s*:|\{\s*['\"]?uses['\"]?\s*:|,\s*['\"]?uses['\"]?\s*:)")
+_USES_KEY_RE = re.compile(r"(?:^|[\s,{])['\"]?uses['\"]?\s*:")
 _KEY_RE = re.compile(r"^(?P<key>[A-Za-z0-9_.-]+)\s*:\s*(?P<value>.*?)\s*$")
+_BLOCK_SCALAR_RE = re.compile(r":\s*[|>](?:[1-9]?[-+]?)?\s*(?:#.*)?$")
 _IMMUTABLE_REF_RE = re.compile(r"^[^@\s]+@[0-9a-f]{40}$")
 
 
@@ -24,6 +24,34 @@ def _workflow_files(path: Path) -> Iterable[Path]:
         yield path
     elif path.is_dir():
         yield from sorted((*path.glob("*.yml"), *path.glob("*.yaml")))
+
+
+def _without_inline_comment(line: str) -> str:
+    return re.split(r"\s+#", line, maxsplit=1)[0].rstrip()
+
+
+def _structural_lines(lines: list[str]) -> list[str]:
+    """Blank comments and block-scalar bodies before structural inspection."""
+
+    structural: list[str] = []
+    scalar_parent_indent: int | None = None
+    for line in lines:
+        if scalar_parent_indent is not None:
+            if not line.strip() or line.lstrip().startswith("#"):
+                structural.append("")
+                continue
+            if _indent(line) > scalar_parent_indent:
+                structural.append("")
+                continue
+            scalar_parent_indent = None
+        if line.lstrip().startswith("#"):
+            structural.append("")
+            continue
+        visible = _without_inline_comment(line)
+        structural.append(visible)
+        if _BLOCK_SCALAR_RE.search(visible):
+            scalar_parent_indent = _indent(line)
+    return structural
 
 
 def _step_bounds(lines: list[str], uses_index: int) -> tuple[int, int]:
@@ -119,12 +147,12 @@ def check_workflow_paths(paths: Iterable[str | Path]) -> list[str]:
             continue
         for workflow in files:
             try:
-                lines = workflow.read_text(encoding="utf-8").splitlines()
+                lines = _structural_lines(workflow.read_text(encoding="utf-8").splitlines())
             except OSError as exc:
                 violations.append(f"{workflow}: cannot read workflow ({exc})")
                 continue
             for line_number, line in enumerate(lines, start=1):
-                if _UNSUPPORTED_USES_RE.match(line):
+                if not _USES_RE.match(line) and _USES_KEY_RE.search(line):
                     violations.append(
                         f"{workflow}:{line_number}: unsupported uses syntax; use a canonical "
                         "unquoted 'uses: owner/action@<40 lowercase hexadecimal SHA>' mapping"

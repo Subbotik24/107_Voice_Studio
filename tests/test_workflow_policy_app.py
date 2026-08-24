@@ -142,3 +142,49 @@ def test_accepts_flow_style_with_mapping(tmp_path: Path) -> None:
     )
 
     assert violations == []
+
+
+def test_rejects_flow_style_uses_mapping_when_uses_is_not_first(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        """jobs:
+  test:
+    steps:
+      - {name: bypass, uses: actions/checkout@v7}
+""",
+    )
+
+    assert any("unsupported" in violation for violation in violations)
+
+
+def test_does_not_treat_following_name_scalar_as_checkout_with(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        name: |
+          with:
+            persist-credentials: false
+""",
+    )
+
+    assert any("persist-credentials: false" in violation for violation in violations)
+
+
+def test_ignores_over_indented_comments_and_nested_scalar_text(tmp_path: Path) -> None:
+    violations = _violations(
+        tmp_path,
+        f"""jobs:
+  test:
+    steps:
+      - uses: actions/checkout@{CHECKOUT_SHA}
+        with:
+            # over-indented comment
+          sparse-checkout: |
+            persist-credentials: false
+""",
+    )
+
+    assert any("persist-credentials: false" in violation for violation in violations)
