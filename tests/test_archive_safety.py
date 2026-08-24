@@ -259,6 +259,60 @@ def test_central_directory_size_is_rejected_before_zipfile_load(
         )
 
 
+def test_eocd_preflight_uses_last_signature_candidate_before_zipfile_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "forged-last-eocd.zip"
+    write_zip(archive_path, [("payload.bin", b"x" * 500_000)])
+    payload = bytearray(archive_path.read_bytes())
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    assert eocd_offset >= 0
+    assert int.from_bytes(payload[eocd_offset + 12 : eocd_offset + 16], "little") == 57
+
+    forged_eocd = struct.pack(
+        "<4s4H2LH",
+        b"PK\x05\x06",
+        0,
+        0,
+        1,
+        1,
+        500_000,
+        0,
+        1,
+    )
+    payload[eocd_offset + 20 : eocd_offset + 22] = len(forged_eocd).to_bytes(2, "little")
+    archive_path.write_bytes(bytes(payload) + forged_eocd)
+
+    def zipfile_must_not_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ZipFile must not load a forged last EOCD")
+
+    monkeypatch.setattr(archive_module.zipfile, "ZipFile", zipfile_must_not_load)
+    with pytest.raises(ValueError, match="central directory"):
+        inspect_zip(
+            archive_path,
+            make_budget(max_central_directory_bytes=100),
+        )
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        [("parent", b"one"), ("parent/child", b"two")],
+        [("parent/child", b"two"), ("parent", b"one")],
+        [("Dir", b"one"), ("dir/child", b"two")],
+        [("dir/child", b"two"), ("Dir", b"one")],
+    ],
+)
+def test_inspection_rejects_regular_file_ancestor_conflicts(
+    tmp_path: Path, entries: list[tuple[str, bytes]]
+) -> None:
+    archive_path = tmp_path / "file-ancestor-conflict.zip"
+    write_zip(archive_path, entries)
+
+    with pytest.raises(ValueError, match="ancestor|hierarchy|file|path"):
+        inspect_zip(archive_path, make_budget())
+
+
 def test_inspection_rejects_truncated_eocd_before_zipfile_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

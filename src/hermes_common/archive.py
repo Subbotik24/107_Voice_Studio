@@ -311,19 +311,13 @@ def _read_eocd(stream: BinaryIO, file_size: int) -> tuple[int, tuple[object, ...
     tail = stream.read(file_size - start)
     if len(tail) != file_size - start:
         raise ValueError("truncated ZIP EOCD search window")
-    cursor = len(tail)
-    while True:
-        relative = tail.rfind(_EOCD_SIGNATURE, 0, cursor)
-        if relative < 0:
-            break
-        if relative + _EOCD_STRUCT.size <= len(tail):
-            fields = _EOCD_STRUCT.unpack_from(tail, relative)
-            comment_size = fields[-1]
-            absolute = start + relative
-            if absolute + _EOCD_STRUCT.size + comment_size == file_size:
-                return absolute, fields
-        cursor = relative
-    raise ValueError("malformed or missing ZIP EOCD record")
+    relative = tail.rfind(_EOCD_SIGNATURE)
+    if relative < 0:
+        raise ValueError("malformed or missing ZIP EOCD record")
+    if relative + _EOCD_STRUCT.size > len(tail):
+        raise ValueError("truncated ZIP EOCD record")
+    absolute = start + relative
+    return absolute, _EOCD_STRUCT.unpack_from(tail, relative)
 
 
 def _read_zip_directory_metadata(
@@ -468,6 +462,34 @@ def _portable_member_identity(name: str, is_directory: bool) -> tuple[str, ...]:
     return tuple(unicodedata.normalize("NFC", segment).casefold() for segment in segments)
 
 
+def _check_canonical_hierarchy(
+    canonical_names: dict[tuple[str, ...], tuple[str, bool]],
+    canonical_identity: tuple[str, ...],
+    name: str,
+    is_directory: bool,
+) -> None:
+    previous_entry = canonical_names.get(canonical_identity)
+    if previous_entry is not None:
+        raise ValueError(
+            "zip archive member aliases an existing path: "
+            f"name={name!r}, existing={previous_entry[0]!r}"
+        )
+    for prefix_length in range(1, len(canonical_identity)):
+        ancestor_entry = canonical_names.get(canonical_identity[:prefix_length])
+        if ancestor_entry is not None and not ancestor_entry[1]:
+            raise ValueError(
+                "zip archive member has a regular-file ancestor: "
+                f"name={name!r}, ancestor={ancestor_entry[0]!r}"
+            )
+    if not is_directory:
+        for existing_identity, existing_entry in canonical_names.items():
+            if existing_identity[: len(canonical_identity)] == canonical_identity:
+                raise ValueError(
+                    "zip archive regular file conflicts with descendant path: "
+                    f"name={name!r}, descendant={existing_entry[0]!r}"
+                )
+
+
 def _unsafe_name_reason(name: str, *, is_directory: bool = False) -> str | None:
     if not name:
         return "empty"
@@ -538,7 +560,7 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
                 f"reported={directory_metadata.member_count}, actual={len(infos)}"
             )
         seen: set[str] = set()
-        canonical_names: dict[tuple[str, ...], str] = {}
+        canonical_names: dict[tuple[str, ...], tuple[str, bool]] = {}
         members: list[ZipMember] = []
         total_expanded = 0
         total_compressed = 0
@@ -558,13 +580,13 @@ def inspect_zip(path: str | os.PathLike[str], budget: ZipBudget) -> ZipInspectio
             if is_directory and not budget.allow_directories:
                 raise ValueError(f"zip archive directory member is not allowed: {name!r}")
             canonical_identity = _portable_member_identity(name, is_directory)
-            previous_name = canonical_names.get(canonical_identity)
-            if previous_name is not None:
-                raise ValueError(
-                    "zip archive member aliases an existing path: "
-                    f"name={name!r}, existing={previous_name!r}"
-                )
-            canonical_names[canonical_identity] = name
+            _check_canonical_hierarchy(
+                canonical_names,
+                canonical_identity,
+                name,
+                is_directory,
+            )
+            canonical_names[canonical_identity] = (name, is_directory)
             if info.compress_type not in _SUPPORTED_COMPRESSION_METHODS:
                 raise ValueError(
                     "zip archive uses unsupported compression method: "
