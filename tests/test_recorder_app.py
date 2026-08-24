@@ -628,6 +628,86 @@ def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
     assert not next_destination.exists()
 
 
+def test_cleanup_close_failure_reports_destination_and_quarantine_residue(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+    real_mkstemp = recorder_module.tempfile.mkstemp
+    real_close = recorder_module.os.close
+    created_paths: list[Any] = []
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("primary cleanup-close error")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    def track_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        fd, name = real_mkstemp(*args, **kwargs)
+        created_paths.append(name)
+        return fd, name
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    monkeypatch.setattr(recorder_module.tempfile, "mkstemp", track_mkstemp)
+    recorder = AudioRecorder()
+    destination = recorder.start(tmp_path)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+    assert recorder._writer_done.wait(2)
+
+    foreign = tmp_path / "foreign-user-file.bin"
+    foreign.write_bytes(b"foreign user data")
+    close_failed = False
+
+    def close_once_with_reported_failure(fd: int) -> None:
+        nonlocal close_failed
+        real_close(fd)
+        if not close_failed:
+            close_failed = True
+            raise OSError("quarantine close reported failure")
+
+    monkeypatch.setattr(recorder_module.os, "close", close_once_with_reported_failure)
+
+    with pytest.raises(OSError, match="primary cleanup-close error") as raised:
+        recorder.stop()
+
+    assert close_failed
+    assert len(created_paths) == 2
+    quarantine = recorder_module.Path(created_paths[1])
+    assert destination.exists()
+    assert quarantine.exists()
+    cleanup = getattr(raised.value, "cleanup_error", None)
+    assert isinstance(cleanup, recorder_module.RecorderCleanupError)
+    assert cleanup.residue_paths == (destination, quarantine)
+    assert set(cleanup.diagnostic["residue_paths"]) == {
+        str(destination),
+        str(quarantine),
+    }
+    assert foreign.read_bytes() == b"foreign user data"
+
+    # The reporting failure happened after the real close; rename confirms no
+    # recorder-owned descriptor remained attached to the quarantined residue.
+    probe = quarantine.with_name(quarantine.name + ".probe")
+    quarantine.rename(probe)
+    probe.rename(quarantine)
+    _assert_no_writer_threads()
+
+    monkeypatch.setattr(recorder_module.os, "close", real_close)
+    monkeypatch.setattr(recorder_module.wave, "open", real_open)
+    next_destination = recorder.start(tmp_path)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    recorder.cancel()
+    assert not next_destination.exists()
+    _assert_no_writer_threads()
+
+
 def test_recorder_full_queue_writer_failure_stops_promptly(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:

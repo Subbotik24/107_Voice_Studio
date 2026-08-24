@@ -458,9 +458,9 @@ class AudioRecorder:
                 prefix=f".{path.name}.recorder-",
                 dir=str(path.parent),
             )
-            os.close(quarantine_fd)
             quarantine = Path(quarantine_name)
             self._quarantine_path = quarantine
+            os.close(quarantine_fd)
             quarantine.unlink()
             os.rename(path, quarantine)
 
