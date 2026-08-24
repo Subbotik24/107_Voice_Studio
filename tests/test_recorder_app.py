@@ -478,6 +478,7 @@ def test_cleanup_preserves_foreign_destination_without_hard_links(
     destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
+    assert recorder._writer_done.wait(2)
     foreign = tmp_path / "foreign-destination.bin"
     foreign.write_bytes(b"foreign destination")
     destination.unlink()
@@ -525,6 +526,7 @@ def test_cleanup_preserves_dangling_replacement_with_structured_residue(
     destination = recorder.start(tmp_path)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
     assert wrote.wait(2)
+    assert recorder._writer_done.wait(2)
 
     destination.unlink()
     target = tmp_path / "missing-dangling-target.wav"
