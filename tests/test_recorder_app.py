@@ -401,6 +401,97 @@ def test_recorder_write_failure_cleans_partial_but_not_replacement(
     _assert_no_writer_threads()
 
 
+def test_cleanup_preserves_foreign_quarantine_when_destination_collides(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "quarantine-collision.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("primary write failed")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+
+    real_rename = recorder_module.os.rename
+
+    def collision_rename(source: Any, target: Any) -> Any:
+        result = real_rename(source, target)
+        if source == destination:
+            foreign = tmp_path / "foreign.bin"
+            foreign.write_bytes(b"foreign quarantine")
+            recorder_module.os.link(target, destination)
+            target.unlink()
+            real_rename(foreign, target)
+        return result
+
+    monkeypatch.setattr(recorder_module.os, "rename", collision_rename)
+    with pytest.raises(OSError, match="primary write failed"):
+        recorder.stop()
+
+    assert destination.exists()
+    assert destination.read_bytes().startswith(b"RIFF")
+    assert recorder.quarantine_path is not None
+    assert recorder.quarantine_path.read_bytes() == b"foreign quarantine"
+    _assert_no_writer_threads()
+
+
+def test_cleanup_does_not_depend_on_hard_links(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "no-hard-link.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("write failed")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    monkeypatch.setattr(
+        recorder_module.os,
+        "link",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("hard links unsupported")),
+    )
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+    foreign = tmp_path / "foreign-destination.bin"
+    foreign.write_bytes(b"foreign destination")
+    destination.unlink()
+    foreign.replace(destination)
+
+    with pytest.raises(OSError, match="write failed"):
+        recorder.stop()
+
+    assert recorder.quarantine_path is not None
+    assert recorder.quarantine_path.exists()
+    assert recorder.quarantine_path.read_bytes() == b"foreign destination"
+    _assert_no_writer_threads()
+
+
 def test_recorder_close_failure_propagates_and_cleans_partial(
     tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -416,8 +507,7 @@ def test_recorder_close_failure_propagates_and_cleans_partial(
             return getattr(self._raw, name)
 
         def close(self) -> None:
-            self._raw.close()
-            raise OSError("close failed")
+            raise OSError("close before release failed")
 
     def open_close_failing(path: Any) -> Any:
         return CloseFailingFile(real_open_destination(path))
@@ -426,13 +516,61 @@ def test_recorder_close_failure_propagates_and_cleans_partial(
     recorder.start(destination)
     _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
 
-    with pytest.raises(OSError, match="close failed"):
+    with pytest.raises(OSError, match="close before release failed"):
         recorder.stop()
 
     assert not destination.exists()
     assert not recorder._writer_thread
     assert recorder._writer_done.is_set()
     _assert_no_writer_threads()
+
+
+def test_cleanup_failure_does_not_mask_writer_error_and_session_restarts(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    destination = tmp_path / "cleanup-failed.wav"
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+    real_mkstemp = recorder_module.tempfile.mkstemp
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("primary write error")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    recorder.start(destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+    monkeypatch.setattr(
+        recorder_module.tempfile,
+        "mkstemp",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("cleanup unavailable")),
+    )
+
+    with pytest.raises(OSError, match="primary write error"):
+        recorder.stop()
+
+    assert destination.exists()
+    assert recorder.destination is None
+    assert recorder.recording is False
+    _assert_no_writer_threads()
+
+    monkeypatch.setattr(recorder_module.wave, "open", real_open)
+    monkeypatch.setattr(recorder_module.tempfile, "mkstemp", real_mkstemp)
+    next_destination = tmp_path / "restart.wav"
+    recorder.start(next_destination)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    recorder.cancel()
+    assert not next_destination.exists()
 
 
 def test_recorder_full_queue_writer_failure_stops_promptly(

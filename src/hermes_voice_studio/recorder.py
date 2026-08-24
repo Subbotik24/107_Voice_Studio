@@ -18,6 +18,10 @@ MAX_STATUS_CATEGORIES = 32
 MAX_STATUS_LENGTH = 200
 
 
+class RecorderCleanupError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class RecordingResult:
     path: Path
@@ -50,6 +54,7 @@ class AudioRecorder:
         self._destination_owned = False
         self._expected_identity: tuple[int, int] | None = None
         self._destination_identity: tuple[int, int] | None = None
+        self._quarantine_path: Path | None = None
         self._sentinel = object()
 
     @property
@@ -63,6 +68,10 @@ class AudioRecorder:
     @property
     def destination(self) -> Path | None:
         return self._destination
+
+    @property
+    def quarantine_path(self) -> Path | None:
+        return self._quarantine_path
 
     def start(self, destination: Path) -> None:
         with self._lifecycle_lock:
@@ -90,6 +99,7 @@ class AudioRecorder:
             self._destination_owned = False
             self._expected_identity = expected_identity
             self._destination_identity = None
+            self._quarantine_path = None
             self._writer_error = None
             self._writer_done.clear()
             self._frames_written = 0
@@ -172,15 +182,22 @@ class AudioRecorder:
         writer_error = self._writer_error
         path = self._destination
         if stream_error is not None or writer_error is not None:
-            self._remove_owned_partial()
+            cleanup_error = self._remove_owned_partial()
             self._clear_session()
-            raise stream_error or writer_error
+            raise stream_error or writer_error or cleanup_error
         if path is None or self._frames_written <= 0 or not path.exists():
-            self._remove_owned_partial()
+            cleanup_error = self._remove_owned_partial()
             self._clear_session()
+            if cleanup_error is not None:
+                raise cleanup_error
             raise RuntimeError("no audio was captured")
         if not self._path_has_destination_identity():
+            cleanup_error = self._remove_owned_partial()
             self._clear_session()
+            if cleanup_error is not None:
+                raise FileExistsError(
+                    f"recording destination was replaced: {path}"
+                ) from cleanup_error
             raise FileExistsError(f"recording destination was replaced: {path}")
 
         with self._state_lock:
@@ -223,13 +240,20 @@ class AudioRecorder:
 
     def _cancel_impl(self) -> None:
         self._recording.clear()
+        close_error: BaseException | None = None
         try:
             self._close_stream()
+        except BaseException as exc:
+            close_error = exc
         finally:
             self._drain_queue()
             self._finish_writer()
-            self._remove_owned_partial()
-            self._clear_session()
+        cleanup_error = self._remove_owned_partial()
+        self._clear_session()
+        if close_error is not None:
+            raise close_error
+        if cleanup_error is not None:
+            raise cleanup_error
 
     def _writer_loop(self, path: Path) -> None:
         raw = None
@@ -249,7 +273,7 @@ class AudioRecorder:
                         self._frames_written += frame_count
         except BaseException as exc:
             with self._state_lock:
-                self._writer_error = exc
+                self._writer_error = self._detach_error(exc)
         finally:
             try:
                 if raw is not None:
@@ -257,9 +281,25 @@ class AudioRecorder:
             except BaseException as exc:
                 with self._state_lock:
                     if self._writer_error is None:
-                        self._writer_error = exc
+                        self._writer_error = self._detach_error(exc)
+                try:
+                    if raw is not None:
+                        os.close(raw.fileno())
+                except BaseException:
+                    pass
             finally:
                 self._writer_done.set()
+
+    @staticmethod
+    def _detach_error(exc: BaseException) -> BaseException:
+        try:
+            detached = type(exc)(str(exc))
+        except BaseException:
+            detached = RuntimeError(str(exc))
+        detached.__traceback__ = None
+        detached.__cause__ = None
+        detached.__context__ = None
+        return detached
 
     def _open_destination(self, path: Path) -> Any:
         expected = self._expected_identity
@@ -292,6 +332,8 @@ class AudioRecorder:
             except queue.Full:
                 continue
         thread.join()
+        if not self._writer_done.is_set():
+            self._writer_done.set()
         self._writer_thread = None
 
     def _close_stream(self) -> None:
@@ -336,33 +378,35 @@ class AudioRecorder:
             except queue.Empty:
                 return
 
-    def _remove_owned_partial(self) -> None:
+    def _remove_owned_partial(self) -> BaseException | None:
         path = self._destination
         identity = self._destination_identity
         if not self._destination_owned or path is None or identity is None:
-            return
-        quarantine_fd, quarantine_name = tempfile.mkstemp(
-            prefix=f".{path.name}.recorder-", dir=str(path.parent)
-        )
-        os.close(quarantine_fd)
-        quarantine = Path(quarantine_name)
+            return None
+        quarantine: Path | None = None
         try:
+            quarantine_fd, quarantine_name = tempfile.mkstemp(
+                prefix=f".{path.name}.recorder-", dir=str(path.parent)
+            )
+            os.close(quarantine_fd)
+            quarantine = Path(quarantine_name)
+            self._quarantine_path = quarantine
             quarantine.unlink()
             os.rename(path, quarantine)
             moved_identity = self._file_identity(quarantine.stat())
             if moved_identity == identity:
                 quarantine.unlink()
-                return
-            try:
-                os.link(quarantine, path)
-            except FileExistsError:
-                return
-            quarantine.unlink()
-        except FileNotFoundError:
-            return
-        finally:
-            if quarantine.exists() and self._path_has_destination_identity():
-                quarantine.unlink()
+                self._quarantine_path = None
+                return None
+            return RecorderCleanupError(
+                f"recorder preserved foreign destination entry at {quarantine}"
+            )
+        except BaseException as exc:
+            if quarantine is None:
+                return RecorderCleanupError(f"could not prepare recorder cleanup: {exc}")
+            return RecorderCleanupError(
+                f"recorder preserved partial entry at {quarantine}: {exc}"
+            )
 
     def _clear_session(self) -> None:
         self._stream = None
