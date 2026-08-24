@@ -103,6 +103,45 @@ def test_editor_formatting_is_saved_without_changing_raw_or_corrected_text(tmp_p
     assert updated.metadata["editor_formatting"]["bold"] == [["1.0", "1.4"]]
 
 
+def test_editor_state_update_persists_text_and_formatting_atomically(tmp_path):
+    store = LocalStore(tmp_path)
+    item = transcript()
+    store.save(item)
+
+    updated = store.update_editor_state(
+        "1", "corrected together", {"bold": [("1.0", "1.4")], "italic": []}
+    )
+
+    assert updated.corrected_text == "corrected together"
+    assert updated.raw_text == item.raw_text
+    persisted = store.get("1")
+    assert persisted.corrected_text == "corrected together"
+    assert persisted.metadata["editor_formatting"]["bold"] == [["1.0", "1.4"]]
+
+
+def test_editor_state_update_rolls_back_when_database_write_fails(tmp_path):
+    store = LocalStore(tmp_path)
+    item = transcript()
+    store.save(item)
+    with store._connect() as db:
+        db.execute(
+            """
+            CREATE TRIGGER fail_editor_state_update
+            BEFORE UPDATE ON transcripts
+            BEGIN
+                SELECT RAISE(ABORT, 'editor state write failed');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="editor state write failed"):
+        store.update_editor_state("1", "must not persist", {"bold": []})
+
+    persisted = store.get("1")
+    assert persisted.corrected_text == item.corrected_text
+    assert "editor_formatting" not in persisted.metadata
+
+
 def test_schema_version_and_legacy_engine_migration(tmp_path):
     db_path = tmp_path / "history.sqlite3"
     with sqlite3.connect(db_path) as db:

@@ -54,6 +54,8 @@ class HermesVoiceApp(tk.Tk):
         self.hotkey: GlobalHotkey | None = None
         self.current: Transcript | None = None
         self._editor_baseline = snapshot_editor("", {})
+        self._cleanup_snapshot = None
+        self._cleanup_transcript_id: str | None = None
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
         self._history_items: list[Transcript] = []
         self._busy = False
@@ -365,14 +367,19 @@ class HermesVoiceApp(tk.Tk):
                         "Застосувати цей AI cleanup?"
                     )
                     if messagebox.askyesno("AI cleanup preview", preview, parent=self):
+                        if not self._confirm_editor_transition():
+                            continue
+                        if not self._cleanup_result_is_current(transcript):
+                            self.status.set("AI cleanup застарів — правки не застосовано")
+                            continue
                         updated = self.store.apply_ai_cleanup(
                             transcript.id,
                             proposal.to_dict(),
                             provider="openai",
                             model=self.settings.openai_cleanup_model,
                         )
-                        if self._try_show_result(updated, refresh=True):
-                            self.status.set("AI cleanup застосовано; raw text не змінено")
+                        self._show_result(updated, refresh=True)
+                        self.status.set("AI cleanup застосовано; raw text не змінено")
                     else:
                         self.status.set("AI cleanup proposal не застосовано")
                 elif event == "cleanup_error":
@@ -606,6 +613,7 @@ class HermesVoiceApp(tk.Tk):
             if select_id and item.id == select_id:
                 selected_index = index
         if selected_index is not None:
+            self.history.selection_clear(0, "end")
             self.history.selection_set(selected_index)
             self.history.see(selected_index)
 
@@ -615,6 +623,7 @@ class HermesVoiceApp(tk.Tk):
             selected = self._history_items[selection[0]]
             if self._try_show_result(selected, copy=False, refresh=False):
                 return
+            self.history.selection_clear(0, "end")
             if self.current:
                 for index, item in enumerate(self._history_items):
                     if item.id == self.current.id:
@@ -678,6 +687,8 @@ class HermesVoiceApp(tk.Tk):
         if self.current and self.current.id == transcript.id:
             self.current = None
             self.editor.delete("1.0", "end")
+            self._apply_editor_formatting({})
+            self._editor_baseline = snapshot_editor("", {})
             self._set_readonly_text(self.raw_editor, "")
             self._set_readonly_text(self.details, "")
         self._refresh_history()
@@ -685,7 +696,9 @@ class HermesVoiceApp(tk.Tk):
 
     def _editor_is_dirty(self) -> bool:
         if not self.current:
-            return False
+            return snapshot_editor(
+                self.editor.get("1.0", "end-1c"), self._editor_formatting()
+            ) != snapshot_editor("", {})
         current = snapshot_editor(self.editor.get("1.0", "end-1c"), self._editor_formatting())
         return current != self._editor_baseline
 
@@ -704,14 +717,18 @@ class HermesVoiceApp(tk.Tk):
 
     def _save_edits(self) -> bool:
         if not self.current:
+            if self._editor_is_dirty():
+                messagebox.showerror(
+                    "Збереження правок",
+                    "Немає вибраного транскрипту для збереження правок.",
+                    parent=self,
+                )
+                return False
             return True
         try:
-            self.current = self.store.update_corrected_text(
+            self.current = self.store.update_editor_state(
                 self.current.id,
                 self.editor.get("1.0", "end-1c"),
-            )
-            self.current = self.store.update_editor_formatting(
-                self.current.id,
                 self._editor_formatting(),
             )
         except Exception as exc:
@@ -722,6 +739,18 @@ class HermesVoiceApp(tk.Tk):
         )
         self.status.set("Правки збережено")
         return True
+
+    def _cleanup_result_is_current(self, transcript: Transcript) -> bool:
+        if self.current is None or self.current.id != transcript.id:
+            return False
+        expected = getattr(self, "_cleanup_snapshot", None)
+        expected_id = getattr(self, "_cleanup_transcript_id", None)
+        if expected is None:
+            return False
+        if expected_id is not None and expected_id != transcript.id:
+            return False
+        current = snapshot_editor(self.editor.get("1.0", "end-1c"), self._editor_formatting())
+        return current == expected
 
     def _ai_cleanup(self) -> None:
         if not self.current:
@@ -740,6 +769,10 @@ class HermesVoiceApp(tk.Tk):
         if not self._save_edits():
             return
         transcript = self.current
+        self._cleanup_transcript_id = transcript.id
+        self._cleanup_snapshot = snapshot_editor(
+            self.editor.get("1.0", "end-1c"), self._editor_formatting()
+        )
         self._set_busy(True)
 
         def work() -> None:

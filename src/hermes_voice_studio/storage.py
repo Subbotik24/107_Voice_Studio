@@ -272,6 +272,50 @@ class LocalStore:
         self.save(transcript)
         return transcript
 
+    def update_editor_state(
+        self,
+        transcript_id: str,
+        corrected_text: str,
+        formatting: dict[str, list[tuple[str, str]]],
+    ) -> Transcript:
+        """Persist corrected text and presentation tags in one transaction."""
+
+        allowed_tags = {"bold", "italic"}
+        normalized: dict[str, list[list[str]]] = {}
+        for tag, ranges in formatting.items():
+            if tag not in allowed_tags:
+                raise ValueError(f"unsupported editor formatting tag: {tag}")
+            normalized[tag] = [[str(start), str(end)] for start, end in ranges]
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT payload_json FROM transcripts WHERE id = ?", (transcript_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"transcript not found: {transcript_id}")
+            transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            transcript.corrected_text = corrected_text
+            transcript.metadata = {**transcript.metadata, "editor_formatting": normalized}
+            payload = json.dumps(transcript.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            db.execute(
+                """
+                UPDATE transcripts
+                SET created_at = ?, source_sha256 = ?, language = ?, engine = ?, model = ?,
+                    status = ?, payload_json = ?
+                WHERE id = ?
+                """,
+                (
+                    transcript.created_at,
+                    transcript.source_sha256,
+                    transcript.language,
+                    transcript.engine,
+                    transcript.model,
+                    transcript.status,
+                    payload,
+                    transcript.id,
+                ),
+            )
+            return transcript
+
     def get(self, transcript_id: str) -> Transcript | None:
         with self._connect() as db:
             row = db.execute(

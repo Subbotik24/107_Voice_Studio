@@ -42,7 +42,7 @@ class FakeHistory:
         self.inserted: list[str] = []
 
     def curselection(self) -> tuple[int, ...]:
-        return (self.selected,)
+        return () if self.selected < 0 else (self.selected,)
 
     def selection_clear(self, _start: int, _end: str) -> None:
         self.selected = -1
@@ -82,6 +82,40 @@ class FakeStore:
         self.transcript.metadata["editor_formatting"] = formatting
         return self.transcript
 
+    def update_editor_state(
+        self,
+        transcript_id: str,
+        text: str,
+        formatting: dict[str, list[tuple[str, str]]],
+    ) -> Transcript:
+        self.calls.append(("state", (transcript_id, text, formatting)))
+        if self.fail:
+            raise self.fail
+        self.transcript.corrected_text = text
+        self.transcript.metadata["editor_formatting"] = formatting
+        return self.transcript
+
+    def apply_ai_cleanup(self, *args: object, **kwargs: object) -> Transcript:
+        self.calls.append(("cleanup", (args, kwargs)))
+        return self.transcript
+
+    def list(self, **_kwargs: object) -> list[Transcript]:
+        return list(getattr(self, "history", [self.transcript]))
+
+
+class FakeReadonly:
+    def __init__(self) -> None:
+        self.text = ""
+
+    def configure(self, **_kwargs: object) -> None:
+        return None
+
+    def delete(self, _start: str, _end: str) -> None:
+        self.text = ""
+
+    def insert(self, _start: str, text: str) -> None:
+        self.text = text
+
 
 def _transcript(text: str = "original") -> Transcript:
     return Transcript(
@@ -104,12 +138,12 @@ def _app(*, text: str = "original", fail: Exception | None = None) -> HermesVoic
     app.current = transcript
     app.editor = FakeEditor(text)
     app.editor.tags["bold"] = [("1.0", "1.4")]
-    app.raw_editor = object()
-    app.details = object()
+    app.raw_editor = FakeReadonly()
+    app.details = FakeReadonly()
     app.store = FakeStore(transcript, fail=fail)
     app.status = SimpleNamespace(values=[], set=lambda value: app.status.values.append(value))
     app._editor_baseline = snapshot_editor(text, app.editor.tags)
-    app.settings = SimpleNamespace(auto_copy=False)
+    app.settings = SimpleNamespace(auto_copy=False, openai_cleanup_model="test-model")
     app._history_items = [transcript, _transcript("other")]
     app.history = FakeHistory(0)
     app.hotkey = SimpleNamespace(stop=lambda: setattr(app, "hotkey_stopped", True))
@@ -117,6 +151,7 @@ def _app(*, text: str = "original", fail: Exception | None = None) -> HermesVoic
     app._cancel_event = SimpleNamespace(set=lambda: setattr(app, "cancelled", True))
     app.job_controller = SimpleNamespace(close=lambda: setattr(app, "controller_closed", True))
     app.destroy = lambda: setattr(app, "destroyed", True)
+    app.after = lambda *_args: None
     return app
 
 
@@ -144,8 +179,7 @@ def test_dirty_transition_save_continues_only_after_success(
     monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
     assert app._confirm_editor_transition() is True
     assert app.store.calls == [
-        ("text", ("id-1", "edited")),
-        ("formatting", ("id-1", {"bold": [("1.0", "1.4")], "italic": []})),
+        ("state", ("id-1", "edited", {"bold": [("1.0", "1.4")], "italic": []}))
     ]
     assert app._editor_is_dirty() is False
     assert app.current.raw_text == "raw immutable"
@@ -202,14 +236,107 @@ def test_history_cancel_restores_current_selection(monkeypatch: pytest.MonkeyPat
     assert app.history.selected == 0
 
 
-def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_history_cancel_clears_selection_when_current_is_not_in_filtered_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = _app()
+    app.editor.text = "edited"
+    other = _transcript("other")
+    other.id = "id-2"
+    app._history_items = [other]
+    app.history.selected = 0
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: None)
+    app._select_history()
+    assert app.history.curselection() == ()
+
+
+def test_current_none_draft_is_dirty_and_save_cancel_reports_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.current = None
+    app.editor.text = "unsaveable draft"
+    errors: list[tuple[object, ...]] = []
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+    assert app._editor_is_dirty() is True
+    assert app._confirm_editor_transition() is False
+    assert errors and "транскрипт" in str(errors[0]).lower()
+    assert app.editor.text == "unsaveable draft"
+
+
+def test_close_current_none_draft_stays_open_when_save_cannot_proceed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.current = None
+    app.editor.text = "unsaveable draft"
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **kwargs: None)
+    app._close()
+    with pytest.raises(AttributeError):
+        object.__getattribute__(app, "destroyed")
+
+
+def test_result_current_none_draft_is_not_replaced_when_save_cannot_proceed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.current = None
+    app.editor.text = "unsaveable draft"
+    replacement = _transcript("replacement")
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **kwargs: None)
+    assert app._try_show_result(replacement) is False
+    assert app.current is None
+    assert app.editor.text == "unsaveable draft"
+
+
+def test_show_result_captures_baseline_after_editor_load() -> None:
+    app = _app()
+    replacement = _transcript("replacement")
+    app._show_result(replacement, refresh=False)
+    assert app.current is replacement
+    assert app.editor.text == "replacement"
+    assert app._editor_is_dirty() is False
+    assert app.raw_editor.text == "raw immutable"
+
+
+def test_cleanup_cancel_does_not_apply_durable_stale_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.editor.text = "edited while cleanup ran"
+    app._cleanup_snapshot = snapshot_editor("original", app.editor.tags)
+    proposal = SimpleNamespace(corrected_text="cleanup", to_dict=lambda: {"segments": []})
     app.events = queue.Queue()
-    app.events.put(("done", (_transcript("background"), None)))
+    app.events.put(("cleanup_proposal", (app.current, proposal)))
     app._set_busy = lambda _value: None
     app.after = lambda *_args: None
-    refreshed: list[bool] = []
-    app._refresh_history = lambda **_kwargs: refreshed.append(True)
-    app._try_show_result = lambda *_args, **_kwargs: False
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: None)
     app._poll_events()
-    assert refreshed == [True]
+    assert not [call for call in app.store.calls if call[0] == "cleanup"]
+    assert app.current.corrected_text == "original"
+    assert app.current.raw_text == "raw immutable"
+
+
+def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = _app()
+    app.editor.text = "edited"
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    result = _transcript("background")
+    result.id = "id-2"
+    app.events = queue.Queue()
+    app.events.put(("done", (result, None)))
+    app._confirm_editor_transition = lambda: False
+    app._refresh_history = lambda **_kwargs: app._history_items.append(result)
+    app._poll_events()
+    assert app.current.id == "id-1"
+    assert app.editor.text == "edited"
+    assert result in app._history_items
