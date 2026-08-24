@@ -858,7 +858,10 @@ class HermesVoiceApp(tk.Tk):
         )
         ttk.Checkbutton(
             dialog,
-            text="Копіювати новий результат у буфер автоматично",
+            text=(
+                "Автокопіювання нового результату (може потрапити в історію/"
+                "синхронізацію буфера ОС)"
+            ),
             variable=variables["auto_copy"],
         ).grid(row=9, column=1, columnspan=2, sticky="w", padx=10, pady=5)
         ttk.Checkbutton(

@@ -45,6 +45,27 @@ def test_task_timeout_is_bounded():
         Settings(task_timeout_seconds=30).validate()
 
 
+@pytest.mark.parametrize(
+    ("payload", "field", "expected"),
+    [
+        ({"model": 1}, "model", "string"),
+        ({"task_timeout_seconds": "bad"}, "task_timeout_seconds", "integer"),
+        ({"task_timeout_seconds": True}, "task_timeout_seconds", "integer"),
+        ({"auto_copy": "yes"}, "auto_copy", "boolean"),
+        ({"offline_only": 1}, "offline_only", "boolean"),
+    ],
+)
+def test_settings_reject_wrong_json_types(payload, field, expected):
+    with pytest.raises(ValueError, match=rf"{field}.*{expected}"):
+        Settings.from_dict(payload)
+
+
+def test_clipboard_copy_is_private_by_default():
+    assert Settings().auto_copy is False
+    assert Settings.from_dict({}).auto_copy is False
+    assert Settings.from_dict({"auto_copy": True}).auto_copy is True
+
+
 def test_application_directories_can_be_isolated_with_environment(monkeypatch, tmp_path):
     config = tmp_path / "config"
     data = tmp_path / "data"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 SUPPORTED_LANGUAGES = ("auto", "uk", "cs", "en")
 SUPPORTED_ENGINES = ("faster-whisper", "hermes-whisper", "openai-cloud")
@@ -81,6 +81,27 @@ class Transcript:
 
 @dataclass
 class Settings:
+    STRING_FIELDS: ClassVar[tuple[str, ...]] = (
+        "language",
+        "engine",
+        "model",
+        "hermes_bundle",
+        "device",
+        "compute_type",
+        "hotkey",
+        "retention",
+        "output_dir",
+        "dictionary_path",
+        "cloud_provider",
+        "openai_transcription_model",
+        "openai_cleanup_model",
+    )
+    BOOLEAN_FIELDS: ClassVar[tuple[str, ...]] = (
+        "auto_copy",
+        "insert_to_active_app",
+        "offline_only",
+    )
+
     language: str = "uk"
     engine: str = "faster-whisper"
     model: str = "small"
@@ -91,7 +112,7 @@ class Settings:
     retention: str = "keep"
     output_dir: str = ""
     dictionary_path: str = ""
-    auto_copy: bool = True
+    auto_copy: bool = False
     insert_to_active_app: bool = False
     offline_only: bool = False
     task_timeout_seconds: int = 7_200
@@ -99,7 +120,18 @@ class Settings:
     openai_transcription_model: str = "gpt-transcribe"
     openai_cleanup_model: str = "gpt-4.1-mini-2025-04-14"
 
+    def _validate_types(self) -> None:
+        for name in self.STRING_FIELDS:
+            if not isinstance(getattr(self, name), str):
+                raise ValueError(f"settings.{name} must be a string")
+        for name in self.BOOLEAN_FIELDS:
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"settings.{name} must be a boolean")
+        if type(self.task_timeout_seconds) is not int:
+            raise ValueError("settings.task_timeout_seconds must be an integer")
+
     def validate(self) -> None:
+        self._validate_types()
         if self.language not in SUPPORTED_LANGUAGES:
             raise ValueError(f"unsupported language: {self.language}")
         if self.engine not in SUPPORTED_ENGINES:
