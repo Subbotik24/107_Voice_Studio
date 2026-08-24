@@ -6,6 +6,7 @@ from .dictionary import TerminologyDictionary
 from .engines.base import EngineResult, SpeechEngine
 from .media import validate_media_file
 from .models import Segment, Transcript, utc_now
+from .operation import OperationBudget
 from .storage import LocalStore
 
 
@@ -27,12 +28,37 @@ class TranscriptionService:
         self.engine = engine
         self.dictionary = dictionary or TerminologyDictionary()
 
-    def prepare(self, source: Path, retention: str) -> PreparedSource:
-        validate_media_file(source)
-        if retention not in {"keep", "delete_after_transcription"}:
-            raise ValueError(f"unsupported retention policy: {retention}")
-        retained_source, source_hash = self.store.import_source(source)
-        return PreparedSource(source, retained_source, source_hash)
+    def prepare(
+        self,
+        source: Path,
+        retention: str,
+        budget: OperationBudget | None = None,
+        *,
+        max_bytes: int | None = None,
+    ) -> PreparedSource:
+        prepared: PreparedSource | None = None
+        try:
+            if budget is not None:
+                budget.checkpoint("prepare")
+            if retention not in {"keep", "delete_after_transcription"}:
+                raise ValueError(f"unsupported retention policy: {retention}")
+            import_kwargs = {}
+            if budget is not None:
+                import_kwargs["budget"] = budget
+            if max_bytes is not None:
+                import_kwargs["max_bytes"] = max_bytes
+            retained_source, source_hash = self.store.import_source(source, **import_kwargs)
+            prepared = PreparedSource(source, retained_source, source_hash)
+            if budget is not None:
+                budget.checkpoint("prepare")
+            validate_media_file(prepared.managed)
+            if budget is not None:
+                budget.checkpoint("prepare")
+            return prepared
+        except BaseException:
+            if prepared is not None:
+                self.cleanup(prepared)
+            raise
 
     def finalize(
         self,
@@ -40,6 +66,7 @@ class TranscriptionService:
         result: EngineResult,
         language: str,
         retention: str,
+        budget: OperationBudget | None = None,
     ) -> Transcript:
         raw = result.text
         corrected = self.dictionary.apply(raw)
@@ -71,6 +98,8 @@ class TranscriptionService:
             real_time_factor=result.real_time_factor,
             metadata=dict(result.metadata),
         )
+        if budget is not None:
+            budget.checkpoint("saving")
         self.store.save(transcript)
         if retention == "delete_after_transcription":
             self.store.delete_audio(transcript)
@@ -79,13 +108,23 @@ class TranscriptionService:
     def cleanup(self, prepared: PreparedSource) -> None:
         self.store.remove_unreferenced_source(prepared.managed, prepared.sha256)
 
-    def run(self, source: Path, language: str, retention: str) -> Transcript:
+    def run(
+        self,
+        source: Path,
+        language: str,
+        retention: str,
+        budget: OperationBudget | None = None,
+        *,
+        max_bytes: int | None = None,
+    ) -> Transcript:
         if self.engine is None:
             raise RuntimeError("a speech engine is required for synchronous transcription")
-        prepared = self.prepare(source, retention)
+        prepared = self.prepare(source, retention, budget, max_bytes=max_bytes)
         try:
+            if budget is not None:
+                budget.checkpoint("inference")
             result = self.engine.transcribe(prepared.managed, language)
-            return self.finalize(prepared, result, language, retention)
+            return self.finalize(prepared, result, language, retention, budget=budget)
         except BaseException:
             self.cleanup(prepared)
             raise

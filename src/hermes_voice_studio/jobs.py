@@ -10,12 +10,9 @@ from typing import Any
 
 from .dictionary import TerminologyDictionary
 from .models import Settings, Transcript
+from .operation import JobCancelled, OperationBudget
 from .service import TranscriptionService
 from .storage import LocalStore
-
-
-class JobCancelled(RuntimeError):
-    pass
 
 
 def _engine_worker(
@@ -114,7 +111,8 @@ class TranscriptionJobController:
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[str, float], None] | None = None,
     ) -> Transcript:
-        timeout = timeout_seconds or settings.task_timeout_seconds
+        timeout = settings.task_timeout_seconds if timeout_seconds is None else timeout_seconds
+        budget = OperationBudget(timeout, cancelled)
         service = TranscriptionService(self.store, engine=None, dictionary=dictionary)
         started = time.monotonic()
 
@@ -122,12 +120,15 @@ class TranscriptionJobController:
             if progress:
                 progress(phase, time.monotonic() - started)
 
-        report("importing")
-        prepared = service.prepare(source, settings.retention)
-        job_id = uuid.uuid4().hex
+        prepared = None
         try:
+            report("importing")
+            prepared = service.prepare(source, settings.retention, budget)
+            job_id = uuid.uuid4().hex
+            budget.checkpoint("loading")
             self._ensure_worker()
             report("loading")
+            budget.checkpoint("loading")
             self._requests.put(
                 {
                     "job_id": job_id,
@@ -138,19 +139,13 @@ class TranscriptionJobController:
             )
             report("transcribing")
             while True:
-                if cancelled and cancelled():
-                    self._terminate_worker()
-                    raise JobCancelled("transcription cancelled")
-                elapsed = time.monotonic() - started
-                if elapsed > timeout:
-                    self._terminate_worker()
-                    raise TimeoutError(f"transcription timed out after {timeout} seconds")
+                wait_seconds = budget.remaining("inference", ceiling=0.1)
                 if self._process is None or not self._process.is_alive():
                     exit_code = self._process.exitcode if self._process is not None else "unknown"
                     self._terminate_worker()
                     raise RuntimeError(f"transcription worker stopped unexpectedly: {exit_code}")
                 try:
-                    response = self._results.get(timeout=0.1)
+                    response = self._results.get(timeout=wait_seconds)
                 except queue.Empty:
                     continue
                 if response.get("job_id") != job_id:
@@ -163,9 +158,13 @@ class TranscriptionJobController:
                     response["result"],
                     settings.language,
                     settings.retention,
+                    budget=budget,
                 )
                 report("completed")
                 return transcript
-        except BaseException:
-            service.cleanup(prepared)
+        except BaseException as exc:
+            if isinstance(exc, (JobCancelled, TimeoutError)):
+                self._terminate_worker()
+            if prepared is not None:
+                service.cleanup(prepared)
             raise

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from hermes_voice_studio.dictionary import DictionaryRule, TerminologyDictionary
 from hermes_voice_studio.engines.base import EngineResult
 from hermes_voice_studio.models import Segment
@@ -113,3 +115,76 @@ def test_save_failure_cleans_managed_copy(tmp_path, make_wav):
         raise AssertionError("expected save failure")
     assert source.exists()
     assert list(store.sources.iterdir()) == []
+
+
+def test_cancel_during_prepare_does_not_start_engine_request(tmp_path, make_wav):
+    from hermes_voice_studio.jobs import JobCancelled
+    from hermes_voice_studio.operation import OperationBudget
+
+    source = make_wav(tmp_path / "input.wav")
+    store = LocalStore(tmp_path / "data")
+    requests = []
+
+    class RecordingEngine(FakeEngine):
+        def transcribe(self, source: Path, language: str | None) -> EngineResult:
+            requests.append(source)
+            return super().transcribe(source, language)
+
+    budget = OperationBudget(10.0, cancelled=lambda: True)
+    with pytest.raises(JobCancelled, match="prepare|import"):
+        TranscriptionService(store, RecordingEngine()).run(
+            source, "uk", "keep", budget=budget
+        )
+
+    assert requests == []
+    assert source.exists()
+    assert list(store.sources.iterdir()) == []
+
+
+def test_store_commit_wins_after_pre_save_checkpoint(tmp_path, make_wav):
+    from hermes_voice_studio.operation import OperationBudget
+
+    source = make_wav(tmp_path / "input.wav")
+    cancelled = False
+
+    class CommitWinsStore(LocalStore):
+        def save(self, transcript):
+            nonlocal cancelled
+            cancelled = True
+            super().save(transcript)
+
+    store = CommitWinsStore(tmp_path / "data")
+    budget = OperationBudget(10.0, cancelled=lambda: cancelled)
+    result = TranscriptionService(store, FakeEngine()).run(
+        source, "uk", "keep", budget=budget
+    )
+
+    assert cancelled is True
+    assert store.get(result.id).raw_text == result.raw_text
+    assert result.audio_retained
+
+
+def test_validation_after_import_cleans_only_unreferenced_managed_snapshot(
+    tmp_path, make_wav, monkeypatch
+):
+    from hermes_voice_studio import service as service_module
+
+    source = make_wav(tmp_path / "input.wav")
+    store = LocalStore(tmp_path / "data")
+    unrelated = store.sources / "unrelated.wav"
+    unrelated.write_bytes(b"keep")
+    validated = []
+
+    def reject_managed(path):
+        validated.append(path)
+        if path.parent.resolve() == store.sources.resolve():
+            raise ValueError("validation failed")
+
+    monkeypatch.setattr(service_module, "validate_media_file", reject_managed)
+    with pytest.raises(ValueError, match="validation failed"):
+        TranscriptionService(store, FakeEngine()).run(source, "uk", "keep")
+
+    assert len(validated) == 1
+    assert validated[0].parent.resolve() == store.sources.resolve()
+    assert source.exists()
+    assert list(store.sources.iterdir()) == [unrelated]

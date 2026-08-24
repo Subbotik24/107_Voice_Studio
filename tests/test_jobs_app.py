@@ -1,5 +1,6 @@
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -36,6 +37,13 @@ def fixture_worker(requests: Any, results: Any, _cache: str, _models: str) -> No
 def slow_worker(requests: Any, _results: Any, _cache: str, _models: str) -> None:
     requests.get()
     time.sleep(30)
+
+
+def recording_worker(requests: Any, _results: Any, cache: str, _models: str) -> None:
+    marker = Path(cache) / "started"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("started", encoding="utf-8")
+    requests.get()
 
 
 def test_spawn_worker_is_reused_for_completed_jobs(tmp_path, make_wav):
@@ -118,3 +126,29 @@ def test_timeout_restarts_cleanly_for_next_job(tmp_path, make_wav):
 
     assert recovered.raw_text == "local result"
     assert source.exists()
+
+
+def test_cancel_during_prepare_never_starts_worker_request(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    marker = tmp_path / "cache" / "started"
+
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=recording_worker,
+    )
+    try:
+        with pytest.raises(JobCancelled, match="prepare|import"):
+            controller.run(
+                source,
+                Settings(model="fixture"),
+                TerminologyDictionary(),
+                cancelled=lambda: True,
+            )
+    finally:
+        controller.close()
+
+    assert not marker.exists()
+    assert source.exists()
+    assert list(store.sources.iterdir()) == []

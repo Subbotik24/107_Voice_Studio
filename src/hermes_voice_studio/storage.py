@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import sqlite3
+import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from .models import Transcript
+from .operation import OperationBudget
 
 IMMUTABLE_TRANSCRIPT_FIELDS = (
     "created_at",
@@ -20,6 +21,7 @@ IMMUTABLE_TRANSCRIPT_FIELDS = (
     "raw_text",
 )
 SCHEMA_VERSION = 1
+_SOURCE_PROMOTION_LOCK = threading.Lock()
 
 
 def sha256_file(path: Path) -> str:
@@ -90,18 +92,66 @@ class LocalStore:
             )
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
-    def import_source(self, path: Path) -> tuple[Path, str]:
+    def import_source(
+        self,
+        path: Path,
+        budget: OperationBudget | None = None,
+        *,
+        max_bytes: int | None = None,
+    ) -> tuple[Path, str]:
         path = path.expanduser()
         if not path.is_file():
             raise FileNotFoundError(path)
-        source_hash = sha256_file(path)
-        suffix = path.suffix.lower() or ".bin"
-        target = self.sources / f"{source_hash}{suffix}"
-        if not target.exists():
-            temporary = target.with_suffix(target.suffix + ".tmp")
-            shutil.copy2(path, temporary)
-            temporary.replace(target)
-        return target, source_hash
+        if max_bytes is not None and max_bytes < 0:
+            raise ValueError("max_bytes must be non-negative")
+
+        partial = self.sources / f".{uuid.uuid4().hex}.partial"
+        digest = hashlib.sha256()
+        copied = 0
+        partial_created = False
+        promoted = False
+        try:
+            if budget is not None:
+                budget.checkpoint("import")
+            with path.open("rb") as source, partial.open("xb") as destination:
+                partial_created = True
+                while True:
+                    if budget is not None:
+                        budget.checkpoint("import")
+                    block = source.read(1024 * 1024)
+                    if not block:
+                        break
+                    copied += len(block)
+                    if max_bytes is not None and copied > max_bytes:
+                        raise ValueError(
+                            f"source exceeds max_bytes limit of {max_bytes} bytes"
+                        )
+                    if budget is not None:
+                        budget.checkpoint("import")
+                    written = destination.write(block)
+                    if written != len(block):
+                        raise OSError(
+                            f"managed import wrote {written} of {len(block)} bytes"
+                        )
+                    digest.update(block)
+                    if budget is not None:
+                        budget.checkpoint("import")
+            source_hash = digest.hexdigest()
+            suffix = path.suffix.lower() or ".bin"
+            target = self.sources / f"{source_hash}{suffix}"
+            with _SOURCE_PROMOTION_LOCK:
+                if budget is not None:
+                    budget.checkpoint("import")
+                partial.replace(target)
+            promoted = True
+            return target, source_hash
+        except BaseException:
+            if partial_created and not promoted:
+                try:
+                    partial.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise
 
     def remove_unreferenced_source(self, target: Path, source_hash: str) -> None:
         """Remove an imported source only when no transcript still references it."""
