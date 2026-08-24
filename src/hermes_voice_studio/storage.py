@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
 from .models import Transcript
-from .operation import OperationBudget
+from .operation import OperationBudget, OwnedPartialCleanupError
 
 IMMUTABLE_TRANSCRIPT_FIELDS = (
     "created_at",
@@ -21,7 +20,6 @@ IMMUTABLE_TRANSCRIPT_FIELDS = (
     "raw_text",
 )
 SCHEMA_VERSION = 1
-_SOURCE_PROMOTION_LOCK = threading.Lock()
 
 
 def sha256_file(path: Path) -> str:
@@ -41,6 +39,7 @@ class LocalStore:
         self.db_path = self.root / "history.sqlite3"
         for path in (self.root, self.sources, self.exports, self.models):
             path.mkdir(parents=True, exist_ok=True)
+        self._source_ownership: dict[Path, object] = {}
         self._init_db()
 
     @contextmanager
@@ -138,39 +137,100 @@ class LocalStore:
                         budget.checkpoint("import")
             source_hash = digest.hexdigest()
             suffix = path.suffix.lower() or ".bin"
-            target = self.sources / f"{source_hash}{suffix}"
-            with _SOURCE_PROMOTION_LOCK:
-                if budget is not None:
-                    budget.checkpoint("import")
-                partial.replace(target)
+            # Keep the UUID fragment compact so managed paths remain usable on
+            # Windows installations where legacy MAX_PATH is still enforced.
+            target = self.sources / f"{source_hash}-{uuid.uuid4().hex[:8]}{suffix}"
+            if budget is not None:
+                budget.checkpoint("import")
+            partial.replace(target)
             promoted = True
+            self._source_ownership[target.resolve()] = object()
             return target, source_hash
-        except BaseException:
+        except BaseException as primary:
             if partial_created and not promoted:
                 try:
                     partial.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                except BaseException as cleanup_error:
+                    raise OwnedPartialCleanupError(partial, cleanup_error) from primary
             raise
 
-    def remove_unreferenced_source(self, target: Path, source_hash: str) -> None:
+    def source_ownership_token(self, target: Path) -> object | None:
+        """Return the process-local capability for this managed import."""
+
+        try:
+            resolved_target = target.expanduser().resolve()
+        except OSError:
+            return None
+        return self._source_ownership.get(resolved_target)
+
+    def remove_unreferenced_source(
+        self,
+        target: Path,
+        source_hash: str,
+        *,
+        ownership: object | None = None,
+        exclude_transcript_id: str | None = None,
+    ) -> None:
         """Remove an imported source only when no transcript still references it."""
 
         try:
-            target.resolve().relative_to(self.sources.resolve())
+            resolved_target = target.expanduser().resolve()
+            resolved_target.relative_to(self.sources.resolve())
         except (OSError, ValueError):
             return
+        if ownership is not None and self._source_ownership.get(resolved_target) is not ownership:
+            return
+        # A second immediately adjacent read closes the check/unlink window
+        # exercised by concurrent transcript commits. Unique final paths also
+        # ensure this capability can never target a peer import.
+        if exclude_transcript_id is None:
+            referenced = self._source_is_referenced(resolved_target, source_hash)
+        else:
+            referenced = self._source_is_referenced(
+                resolved_target,
+                source_hash,
+                exclude_transcript_id=exclude_transcript_id,
+            )
+        if referenced:
+            return
+        if exclude_transcript_id is None:
+            referenced = self._source_is_referenced(resolved_target, source_hash)
+        else:
+            referenced = self._source_is_referenced(
+                resolved_target,
+                source_hash,
+                exclude_transcript_id=exclude_transcript_id,
+            )
+        if referenced:
+            return
+        resolved_target.unlink(missing_ok=True)
+        self._source_ownership.pop(resolved_target, None)
+
+    def _source_is_referenced(
+        self,
+        target: Path,
+        source_hash: str,
+        *,
+        exclude_transcript_id: str | None = None,
+    ) -> bool:
         with self._connect() as db:
-            rows = db.execute(
-                "SELECT payload_json FROM transcripts WHERE source_sha256 = ?",
-                (source_hash,),
-            ).fetchall()
-        resolved_target = target.resolve()
-        referenced = any(
-            self._payload_references_target(row["payload_json"], resolved_target) for row in rows
+            if exclude_transcript_id is None:
+                rows = db.execute(
+                    "SELECT payload_json FROM transcripts WHERE source_sha256 = ?",
+                    (source_hash,),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """
+                    SELECT payload_json
+                    FROM transcripts
+                    WHERE source_sha256 = ? AND id <> ?
+                    """,
+                    (source_hash, exclude_transcript_id),
+                ).fetchall()
+        return any(
+            self._payload_references_target(row["payload_json"], target) for row in rows
         )
-        if not referenced:
-            target.unlink(missing_ok=True)
 
     @staticmethod
     def _payload_references_target(payload_json: str, target: Path) -> bool:
@@ -463,8 +523,8 @@ class LocalStore:
                 target.resolve().relative_to(self.sources.resolve())
             except (OSError, ValueError):
                 return
-            # Sources are deduplicated by SHA-256. Keep the shared file while any
-            # other transcript record still references the same content.
+            # Keep the managed file while any other transcript record references
+            # this immutable, uniquely owned import.
             with self._connect() as db:
                 rows = db.execute(
                     """
@@ -480,7 +540,11 @@ class LocalStore:
                 for row in rows
             )
             if not other_references:
-                target.unlink(missing_ok=True)
+                self.remove_unreferenced_source(
+                    target,
+                    transcript.source_sha256,
+                    exclude_transcript_id=transcript.id,
+                )
         transcript.source_path = None
         transcript.audio_retained = False
         self.save(transcript)

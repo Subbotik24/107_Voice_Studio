@@ -11,10 +11,17 @@ from .storage import LocalStore
 
 
 class PreparedSource:
-    def __init__(self, original: Path, managed: Path, sha256: str):
+    def __init__(
+        self,
+        original: Path,
+        managed: Path,
+        sha256: str,
+        ownership: object | None = None,
+    ):
         self.original = original
         self.managed = managed
         self.sha256 = sha256
+        self.ownership = ownership
 
 
 class TranscriptionService:
@@ -48,7 +55,12 @@ class TranscriptionService:
             if max_bytes is not None:
                 import_kwargs["max_bytes"] = max_bytes
             retained_source, source_hash = self.store.import_source(source, **import_kwargs)
-            prepared = PreparedSource(source, retained_source, source_hash)
+            prepared = PreparedSource(
+                source,
+                retained_source,
+                source_hash,
+                self.store.source_ownership_token(retained_source),
+            )
             if budget is not None:
                 budget.checkpoint("prepare")
             validate_media_file(prepared.managed)
@@ -106,7 +118,11 @@ class TranscriptionService:
         return transcript
 
     def cleanup(self, prepared: PreparedSource) -> None:
-        self.store.remove_unreferenced_source(prepared.managed, prepared.sha256)
+        self.store.remove_unreferenced_source(
+            prepared.managed,
+            prepared.sha256,
+            ownership=prepared.ownership,
+        )
 
     def run(
         self,

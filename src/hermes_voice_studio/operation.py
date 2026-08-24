@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 
 class JobCancelled(RuntimeError):
@@ -10,6 +11,24 @@ class JobCancelled(RuntimeError):
 
 class OperationTimeout(TimeoutError):
     """Raised when a bounded operation reaches its absolute deadline."""
+
+
+class OwnedPartialCleanupError(RuntimeError):
+    """Raised when an owned managed-import residue cannot be removed."""
+
+    def __init__(self, residue_path: Path, cleanup_error: BaseException) -> None:
+        self.residue_path = Path(residue_path)
+        self.cleanup_error = cleanup_error
+        super().__init__(
+            "managed import partial cleanup failed; residue retained at "
+            f"{self.residue_path}: {cleanup_error}"
+        )
+
+
+# Keep descriptive aliases available to callers that use the operation error
+# vocabulary rather than the storage implementation vocabulary.
+ManagedImportCleanupError = OwnedPartialCleanupError
+PartialCleanupError = OwnedPartialCleanupError
 
 
 OperationCancelled = JobCancelled
@@ -58,7 +77,10 @@ class OperationBudget:
 
 __all__ = [
     "JobCancelled",
+    "ManagedImportCleanupError",
     "OperationBudget",
     "OperationCancelled",
     "OperationTimeout",
+    "OwnedPartialCleanupError",
+    "PartialCleanupError",
 ]

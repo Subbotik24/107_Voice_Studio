@@ -149,10 +149,31 @@ def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkey
     with ThreadPoolExecutor(max_workers=2) as pool:
         first, second = pool.map(lambda _: store.import_source(source), range(2))
 
-    assert first[0] == second[0]
+    assert first[0] != second[0]
+    assert first[1] in first[0].name
+    assert second[1] in second[0].name
     assert len(replace_paths) == 2
     assert len({path.name for path in replace_paths}) == 2
     assert source.exists()
+
+
+def test_import_source_never_replaces_an_existing_final_target(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "same.wav"
+    source.write_bytes(b"same-content")
+    first, _digest = store.import_source(source)
+    real_replace = Path.replace
+
+    def reject_existing(self, target):
+        assert not target.exists(), "final target replacement is unsafe on Windows"
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", reject_existing)
+    second, _ = store.import_source(source)
+
+    assert first != second
+    assert first.exists()
+    assert second.exists()
 
 
 def test_import_source_cancellation_cleans_owned_partial_only(tmp_path):
@@ -334,6 +355,71 @@ def test_import_source_promotion_failure_cleans_owned_partial_only(tmp_path, mon
     assert source.exists()
     assert unrelated.exists()
     assert list(store.sources.iterdir()) == [unrelated]
+
+
+def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
+    tmp_path, monkeypatch
+):
+    import importlib
+
+    operation = importlib.import_module("hermes_voice_studio.operation")
+    error_type = getattr(operation, "OwnedPartialCleanupError", None)
+    assert error_type is not None, "structured partial cleanup error is required"
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "cleanup-failure.wav"
+    source.write_bytes(b"cleanup-failure")
+    real_unlink = Path.unlink
+
+    def fail_replace(self, _target):
+        raise OSError("promotion failed")
+
+    def fail_partial_unlink(self, missing_ok=False):
+        if self.name.endswith(".partial"):
+            raise OSError("cleanup denied")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    monkeypatch.setattr(Path, "unlink", fail_partial_unlink)
+    with pytest.raises(error_type) as raised:
+        store.import_source(source)
+
+    error = raised.value
+    assert error.residue_path.exists()
+    assert str(error.residue_path) in str(error)
+    assert isinstance(error.__cause__, OSError)
+    assert str(error.__cause__) == "promotion failed"
+    assert source.exists()
+
+
+def test_cleanup_rechecks_before_unlink_when_a_reference_commits_between_checks(
+    tmp_path, monkeypatch
+):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "race.wav"
+    source.write_bytes(b"race-content")
+    managed, digest = store.import_source(source)
+    item = transcript()
+    item.id = "race-reference"
+    item.source_sha256 = digest
+    item.source_path = str(managed)
+    calls = 0
+    real_check = getattr(store, "_source_is_referenced", None)
+    assert real_check is not None, "source reference check must be centralized"
+
+    def racing_check(target, source_hash):
+        nonlocal calls
+        calls += 1
+        referenced = real_check(target, source_hash)
+        if calls == 1:
+            store.save(item)
+        return referenced
+
+    monkeypatch.setattr(store, "_source_is_referenced", racing_check)
+    store.remove_unreferenced_source(managed, digest)
+
+    assert calls >= 2
+    assert managed.exists()
+    assert store.get(item.id).source_path == str(managed)
 
 
 def test_raw_text_is_immutable_and_corrected_text_has_explicit_update(tmp_path):

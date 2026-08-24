@@ -46,6 +46,10 @@ def recording_worker(requests: Any, _results: Any, cache: str, _models: str) -> 
     requests.get()
 
 
+def idle_worker(requests: Any, _results: Any, _cache: str, _models: str) -> None:
+    requests.get()
+
+
 def test_spawn_worker_is_reused_for_completed_jobs(tmp_path, make_wav):
     source = make_wav(tmp_path / "original.wav")
     store = LocalStore(tmp_path / "data")
@@ -152,3 +156,42 @@ def test_cancel_during_prepare_never_starts_worker_request(tmp_path, make_wav):
     assert not marker.exists()
     assert source.exists()
     assert list(store.sources.iterdir()) == []
+
+
+def test_prepare_consumed_deadline_is_not_reset_for_inference(tmp_path, make_wav, monkeypatch):
+    from hermes_voice_studio import operation
+
+    class ConsumingStore(LocalStore):
+        def import_source(self, path, budget=None, *, max_bytes=None):
+            result = super().import_source(path, budget, max_bytes=max_bytes)
+            clock[0] = 0.8
+            return result
+
+    source = make_wav(tmp_path / "original.wav")
+    clock = [0.0]
+    monkeypatch.setattr(operation.time, "monotonic", lambda: clock[0])
+    original_remaining = operation.OperationBudget.remaining
+
+    def consume_remaining(self, phase, ceiling=None):
+        result = original_remaining(self, phase, ceiling)
+        if phase == "inference":
+            clock[0] = 1.1
+        return result
+
+    monkeypatch.setattr(operation.OperationBudget, "remaining", consume_remaining)
+    controller = TranscriptionJobController(
+        ConsumingStore(tmp_path / "data"),
+        tmp_path / "cache",
+        worker_target=idle_worker,
+    )
+    try:
+        with pytest.raises(TimeoutError, match="inference"):
+            controller.run(
+                source,
+                Settings(model="fixture", task_timeout_seconds=1),
+                TerminologyDictionary(),
+            )
+    finally:
+        controller.close()
+
+    assert source.exists()
