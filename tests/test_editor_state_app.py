@@ -38,23 +38,35 @@ class FakeEditor:
 
 class FakeHistory:
     def __init__(self, selected: int = 0) -> None:
-        self.selected = selected
+        self._selection = {selected} if selected >= 0 else set()
+        self.selection_events: list[object] = []
         self.inserted: list[str] = []
 
+    @property
+    def selected(self) -> int:
+        return min(self._selection, default=-1)
+
+    @selected.setter
+    def selected(self, value: int) -> None:
+        self._selection = {value} if value >= 0 else set()
+
     def curselection(self) -> tuple[int, ...]:
-        return () if self.selected < 0 else (self.selected,)
+        return tuple(sorted(self._selection))
 
     def selection_clear(self, _start: int, _end: str) -> None:
-        self.selected = -1
+        self.selection_events.append("clear")
+        self._selection.clear()
 
     def selection_set(self, index: int) -> None:
-        self.selected = index
+        self.selection_events.append(("set", index))
+        self._selection.add(index)
 
     def see(self, _index: int) -> None:
         return None
 
     def delete(self, _start: int, _end: str) -> None:
         self.inserted = []
+        self._selection.clear()
 
     def insert(self, _where: str, value: str) -> None:
         self.inserted.append(value)
@@ -65,6 +77,9 @@ class FakeStore:
         self.transcript = transcript
         self.fail = fail
         self.calls: list[tuple[str, object]] = []
+        self.history = [transcript]
+        self.cleanup_result: Transcript | None = None
+        self.order: list[str] = []
 
     def update_corrected_text(self, transcript_id: str, text: str) -> Transcript:
         self.calls.append(("text", (transcript_id, text)))
@@ -97,10 +112,13 @@ class FakeStore:
 
     def apply_ai_cleanup(self, *args: object, **kwargs: object) -> Transcript:
         self.calls.append(("cleanup", (args, kwargs)))
+        self.order.append("apply")
+        if self.cleanup_result is not None:
+            self.transcript = self.cleanup_result
         return self.transcript
 
     def list(self, **_kwargs: object) -> list[Transcript]:
-        return list(getattr(self, "history", [self.transcript]))
+        return list(self.history)
 
 
 class FakeReadonly:
@@ -146,6 +164,7 @@ def _app(*, text: str = "original", fail: Exception | None = None) -> HermesVoic
     app.settings = SimpleNamespace(auto_copy=False, openai_cleanup_model="test-model")
     app._history_items = [transcript, _transcript("other")]
     app.history = FakeHistory(0)
+    app.search_var = SimpleNamespace(get=lambda: "")
     app.hotkey = SimpleNamespace(stop=lambda: setattr(app, "hotkey_stopped", True))
     app.recorder = SimpleNamespace(recording=False, cancel=lambda: None)
     app._cancel_event = SimpleNamespace(set=lambda: setattr(app, "cancelled", True))
@@ -234,6 +253,10 @@ def test_history_cancel_restores_current_selection(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: None)
     app._select_history()
     assert app.history.selected == 0
+    assert app.history.curselection() == (0,)
+    assert app.history.selection_events.index("clear") < app.history.selection_events.index(
+        ("set", 0)
+    )
 
 
 def test_history_cancel_clears_selection_when_current_is_not_in_filtered_history(
@@ -248,6 +271,7 @@ def test_history_cancel_clears_selection_when_current_is_not_in_filtered_history
     monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: None)
     app._select_history()
     assert app.history.curselection() == ()
+    assert app.history.selection_events == ["clear"]
 
 
 def test_current_none_draft_is_dirty_and_save_cancel_reports_error(
@@ -325,6 +349,81 @@ def test_cleanup_cancel_does_not_apply_durable_stale_result(
     assert app.current.raw_text == "raw immutable"
 
 
+def test_cleanup_rejects_when_current_transcript_id_changes_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    target = _transcript("original")
+    target.id = "id-1"
+    app._cleanup_snapshot = snapshot_editor("original", app.editor.tags)
+    app._cleanup_transcript_id = "id-1"
+    app.current.id = "id-2"
+    proposal = SimpleNamespace(corrected_text="cleanup", to_dict=lambda: {"segments": []})
+    app.events = queue.Queue()
+    app.events.put(("cleanup_proposal", (target, proposal)))
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    app._confirm_editor_transition = lambda: True
+    app._poll_events()
+    assert not [call for call in app.store.calls if call[0] == "cleanup"]
+    assert app.current.id == "id-2"
+
+
+def test_cleanup_rejects_when_editor_snapshot_changes_before_apply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    target = _transcript("original")
+    app._cleanup_snapshot = snapshot_editor("original", app.editor.tags)
+    app._cleanup_transcript_id = target.id
+    app.editor.text = "edited during cleanup"
+    proposal = SimpleNamespace(corrected_text="cleanup", to_dict=lambda: {"segments": []})
+    app.events = queue.Queue()
+    app.events.put(("cleanup_proposal", (target, proposal)))
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    app._confirm_editor_transition = lambda: True
+    app._poll_events()
+    assert not [call for call in app.store.calls if call[0] == "cleanup"]
+    assert app.editor.text == "edited during cleanup"
+
+
+def test_cleanup_success_guards_before_durable_apply_then_displays_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    target = app.current
+    result = _transcript("cleanup result")
+    result.id = target.id
+    app.store.cleanup_result = result
+    app.store.order = []
+    app.store.history = [target, result]
+    app._cleanup_snapshot = snapshot_editor("original", app.editor.tags)
+    app._cleanup_transcript_id = target.id
+    proposal = SimpleNamespace(corrected_text="cleanup", to_dict=lambda: {"segments": []})
+    app.events = queue.Queue()
+    app.events.put(("cleanup_proposal", (target, proposal)))
+    app._set_busy = lambda _value: None
+    app.after = lambda *_args: None
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    app._confirm_editor_transition = lambda: app.store.order.append("guard") or True
+    original_snapshot_check = app._cleanup_result_is_current
+
+    def record_snapshot_check(transcript: Transcript) -> bool:
+        app.store.order.append("snapshot")
+        return original_snapshot_check(transcript)
+
+    app._cleanup_result_is_current = record_snapshot_check
+    app._poll_events()
+    assert app.store.order == ["guard", "snapshot", "apply"]
+    assert app.store.calls[-1][0] == "cleanup"
+    assert app.store.transcript is result
+    assert app.current is result
+    assert app.editor.text == "cleanup result"
+
+
 def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPatch) -> None:
     app = _app()
     app.editor.text = "edited"
@@ -332,11 +431,13 @@ def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPa
     app.after = lambda *_args: None
     result = _transcript("background")
     result.id = "id-2"
+    app.store.history = [app.current, result]
     app.events = queue.Queue()
     app.events.put(("done", (result, None)))
     app._confirm_editor_transition = lambda: False
-    app._refresh_history = lambda **_kwargs: app._history_items.append(result)
     app._poll_events()
     assert app.current.id == "id-1"
     assert app.editor.text == "edited"
     assert result in app._history_items
+    assert result.source_name in app.history.inserted[-1]
+    assert app.history.curselection() == (0,)
