@@ -416,6 +416,9 @@ class AudioRecorder:
         if path is None or identity is None:
             return False
         try:
+            lexical_entry = self._lexical_entry(path)
+            if lexical_entry is None or stat.S_ISLNK(lexical_entry.st_mode):
+                return False
             return self._file_identity(path.stat()) == identity
         except FileNotFoundError:
             return False
@@ -428,10 +431,31 @@ class AudioRecorder:
                 return
 
     @staticmethod
+    def _lexical_entry(path: Path) -> os.stat_result | None:
+        """Inspect a directory entry without following a final symlink."""
+
+        try:
+            return os.lstat(path)
+        except FileNotFoundError:
+            return None
+
+    @classmethod
+    def _lexical_entry_exists(cls, path: Path) -> bool:
+        try:
+            return cls._lexical_entry(path) is not None
+        except OSError:
+            # If the entry cannot be inspected, retain it conservatively.
+            return True
+
+    @staticmethod
     def _existing_residue_paths(*paths: Path | None) -> tuple[Path, ...]:
         result: list[Path] = []
         for path in paths:
-            if path is not None and path.exists() and path not in result:
+            if (
+                path is not None
+                and AudioRecorder._lexical_entry_exists(path)
+                and path not in result
+            ):
                 result.append(path)
         return tuple(result)
 
@@ -443,11 +467,22 @@ class AudioRecorder:
 
         self._quarantine_path = None
         try:
+            lexical_entry = self._lexical_entry(path)
+            if lexical_entry is None:
+                self._destination_owned = False
+                return None
+            if stat.S_ISLNK(lexical_entry.st_mode):
+                return self._make_cleanup_error(
+                    f"recorder preserved foreign destination entry at {path}",
+                    residue_paths=self._existing_residue_paths(path),
+                )
             try:
                 path_identity = self._file_identity(path.stat())
             except FileNotFoundError:
-                self._destination_owned = False
-                return None
+                return self._make_cleanup_error(
+                    f"recorder preserved dangling destination entry at {path}",
+                    residue_paths=self._existing_residue_paths(path),
+                )
             if path_identity != identity:
                 return self._make_cleanup_error(
                     f"recorder preserved foreign destination entry at {path}",

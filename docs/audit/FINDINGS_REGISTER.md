@@ -295,13 +295,14 @@ of `PRV-001` below.
 - **Impact/recommendation/alternative:** false confidence; behavioral GUI/service tests plus immutable manual/native evidence, or narrow supported claim set.
 - **Verification/dependencies/commercial:** coverage/mutation review and physical matrix; devices/models/accounts; release readiness.
 
-### CI-001 — GitHub Actions are referenced by movable major tags
+### CI-001 — repository-executable action pinning/policy implemented; external controls open
 
+- **Current W0 state:** The repository-executable action-pinning and workflow-policy portion is implemented. Branch protection, release environments, signing, external GitHub controls and release acceptance remain **NOT RUN**/open.
 - **Category/severity:** supply-chain P2; impact `C1 S2 Cm2 P0 E0 M1`.
-- **Evidence/affected:** `.github/workflows/*.yml` uses tags such as `@v4/@v7`; official GitHub secure-use guidance says full commit SHA is immutable.
-- **Observed/expected/root/confidence:** workflow code can change under same tag; action dependencies should be pinned and reviewed; high.
+- **Evidence/affected:** `.github/workflows/*.yml` uses full 40-character lowercase commit SHAs, checkout steps disable persisted credentials, and `scripts/check_workflow_pins.py` enforces the policy. Exact W0 evidence is the introducing commit `ba779710e642fa3c8f190ee69fbcc0b853345d85`, final parser-policy commit `70c6c7c859c10d6098cb176f5a994e7f5fc72b4b`, and `python scripts/check_workflow_pins.py .github/workflows` returning `Workflow policy passed for 1 path(s).` with exit 0.
+- **Observed/expected/root/confidence:** repository workflow code no longer changes under movable major tags; action dependencies still require reviewed updates, and hosted GitHub controls are outside this repository evidence; high.
 - **Impact/recommendation/alternative:** CI/release compromise; full SHA + Dependabot updates, or vendor reviewed actions.
-- **Verification/dependencies/commercial:** workflow policy/static check; maintainer process; release trust.
+- **Verification/dependencies/commercial:** repository policy check is PASS for the W0 portion; branch protection, release environment, signing, external GitHub controls and release acceptance are **NOT RUN**/open; maintainer process and release trust remain required.
 
 ### OPS-001 — support/security observability and lifecycle are incomplete
 

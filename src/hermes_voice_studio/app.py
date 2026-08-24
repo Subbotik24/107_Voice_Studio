@@ -280,11 +280,30 @@ class HermesVoiceApp(tk.Tk):
         if path is None:
             return None
         try:
-            candidate = Path(path).expanduser().resolve(strict=False)
+            lexical_candidate = Path(path).expanduser().absolute()
             recordings_directory = self._recordings_directory()
+            if lexical_candidate.parent.resolve(strict=False) != recordings_directory:
+                return None
+            if lexical_candidate.is_symlink():
+                return None
+            candidate = lexical_candidate.resolve(strict=False)
         except (OSError, RuntimeError, TypeError, ValueError):
             return None
         if candidate.parent != recordings_directory:
+            return None
+        return candidate
+
+    def _lexical_safe_recording_path(self, path: str | Path | None) -> Path | None:
+        """Return a direct-child path without resolving its final entry."""
+
+        if path is None:
+            return None
+        try:
+            candidate = Path(path).expanduser().absolute()
+            recordings_directory = self._recordings_directory()
+            if candidate.parent.resolve(strict=False) != recordings_directory:
+                return None
+        except (OSError, RuntimeError, TypeError, ValueError):
             return None
         return candidate
 
@@ -375,6 +394,8 @@ class HermesVoiceApp(tk.Tk):
         for raw_path in raw_paths:
             safe_path = self._safe_recording_path(raw_path)
             if safe_path is None:
+                safe_path = self._lexical_safe_recording_path(raw_path)
+            if safe_path is None:
                 diagnostics.append(f"Залишок recorder поза app root: {raw_path}")
                 continue
             pending.add(safe_path)
@@ -404,7 +425,7 @@ class HermesVoiceApp(tk.Tk):
         pending = self.__dict__.get("_pending_microphone_files", set())
         ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
         diagnostics = self.__dict__.get("_recording_residue_diagnostics", [])
-        if not ambiguous and not diagnostics:
+        if not pending and not ambiguous and not diagnostics:
             return
         details: list[str] = []
         if ambiguous:
@@ -414,10 +435,11 @@ class HermesVoiceApp(tk.Tk):
             )
         if diagnostics:
             details.append("Діагностика очищення: " + "; ".join(diagnostics))
-        if pending and not ambiguous:
+        unambiguous_pending = pending - ambiguous
+        if unambiguous_pending:
             details.append(
                 "Деякі тимчасові файли залишилися; їх можна перевірити вручну: "
-                + ", ".join(str(path) for path in sorted(pending, key=str))
+                + ", ".join(str(path) for path in sorted(unambiguous_pending, key=str))
             )
         messagebox.showerror("Очищення запису", "\n\n".join(details), parent=self)
 
@@ -681,6 +703,7 @@ class HermesVoiceApp(tk.Tk):
                 from .engines.openai_cloud import OpenAICloudEngine
 
                 OpenAICloudEngine.validate_upload(source)
+                source_size = source.stat().st_size
             except Exception as exc:
                 messagebox.showerror("Cloud STT", str(exc), parent=self)
                 if cleanup:
@@ -690,7 +713,7 @@ class HermesVoiceApp(tk.Tk):
             if not messagebox.askyesno(
                 "Передати аудіо OpenAI?",
                 f"Provider: OpenAI\nФайл: {source.name}\n"
-                f"Розмір: {source.stat().st_size / 1_000_000:.1f} MB\n\n"
+                f"Розмір: {source_size / 1_000_000:.1f} MB\n\n"
                 "Аудіо буде передано третій стороні для транскрипції. Продовжити?",
                 parent=self,
             ):

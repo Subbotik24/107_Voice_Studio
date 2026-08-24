@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 import sys
 import threading
 import time
@@ -489,6 +491,69 @@ def test_cleanup_preserves_foreign_destination_without_hard_links(
     cleanup = getattr(raised.value, "cleanup_error", None)
     assert isinstance(cleanup, recorder_module.RecorderCleanupError)
     assert cleanup.residue_paths == (destination,)
+    _assert_no_writer_threads()
+
+
+def test_cleanup_preserves_dangling_replacement_with_structured_residue(
+    tmp_path: Any, fake_sounddevice: type[FakeInputStream], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches treating a dangling replacement as absent during cleanup.
+
+    The real symlink path is used when the Windows runtime permits it.  On a
+    runtime without symlink creation rights, a narrow ``os.lstat`` boundary
+    fake represents the dangling entry so the production cleanup branch is
+    still exercised; that fallback cannot assert a physical symlink remains.
+    """
+
+    wrote = threading.Event()
+    real_open = recorder_module.wave.open
+
+    def fail_after_write(*args: Any, **kwargs: Any) -> Any:
+        handle = real_open(*args, **kwargs)
+        writeframes = handle.writeframes
+
+        def write_then_fail(data: bytes) -> Any:
+            writeframes(data)
+            wrote.set()
+            raise OSError("primary dangling replacement error")
+
+        handle.writeframes = write_then_fail
+        return handle
+
+    monkeypatch.setattr(recorder_module.wave, "open", fail_after_write)
+    recorder = AudioRecorder()
+    destination = recorder.start(tmp_path)
+    _stream().emit(np.zeros((1_600, 1), dtype=np.int16))
+    assert wrote.wait(2)
+
+    destination.unlink()
+    target = tmp_path / "missing-dangling-target.wav"
+    real_symlink = True
+    try:
+        os.symlink(target, destination)
+    except (NotImplementedError, OSError):
+        real_symlink = False
+        fake_link_stat = os.stat_result(
+            (stat.S_IFLNK | 0o777, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+        )
+        real_lstat = recorder_module.os.lstat
+
+        def fake_lstat(path: Any) -> os.stat_result:
+            if recorder_module.Path(path) == destination:
+                return fake_link_stat
+            return real_lstat(path)
+
+        monkeypatch.setattr(recorder_module.os, "lstat", fake_lstat)
+
+    with pytest.raises(OSError, match="primary dangling replacement error") as raised:
+        recorder.stop()
+
+    cleanup = getattr(raised.value, "cleanup_error", None)
+    assert isinstance(cleanup, recorder_module.RecorderCleanupError)
+    assert cleanup.residue_paths == (destination,)
+    assert tuple(cleanup.diagnostic["residue_paths"]) == (str(destination),)
+    if real_symlink:
+        assert destination.is_symlink()
     _assert_no_writer_threads()
 
 

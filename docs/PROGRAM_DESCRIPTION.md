@@ -27,8 +27,9 @@ VOICE Studio — customer-facing назва privacy-first desktop-застосу
 - може надсилати файл в OpenAI STT лише після явної згоди для конкретної дії;
 - зберігає незмінний `raw_text` і окремий `corrected_text`;
 - застосовує словникові заміни, ручне редагування та опціональне AI cleanup;
-- має `auto_copy=false` за замовчуванням; копіювання в OS clipboard виконується
-  лише явною дією користувача і супроводжується disclosure про history/sync;
+- має `auto_copy=false` за замовчуванням; автоматичне копіювання відбувається
+  лише коли користувач явно вмикає `auto_copy`, інакше Copy є явною дією;
+  disclosure про history/sync зберігається;
 - зберігає історію в локальній SQLite БД і керовані аудіокопії;
 - експортує TXT, Markdown, JSON, SRT і VTT;
 - створює та відновлює локальні backup-архіви;
@@ -61,7 +62,7 @@ disconnect, limit і close на Windows/macOS ще **NOT RUN**.
 |---|---|---|
 | Settings | Typed JSON fields; пошкоджений/неправильний тип дає recoverable error і безпечні defaults | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
 | Editor | Save/Discard/Cancel перед history navigation, AI cleanup, delete або close; Save змінює лише `corrected_text` | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
-| Clipboard | `auto_copy` off by default; explicit Copy only; OS history/manager/sync disclosure | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
+| Clipboard | `auto_copy` off by default; automatic copy only after explicit `auto_copy` opt-in, otherwise Copy is explicit; OS history/manager/sync disclosure | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
 | Recorder | Private recorder-owned WAV; 100 ms / 64 blocks / two-hour cap; visible degraded warning; default rejection | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
 | Microphone temp | Tracked scoped cleanup on success/error/cancel/close/preflight; ambiguous identity residue retained and reported | `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE` |
 

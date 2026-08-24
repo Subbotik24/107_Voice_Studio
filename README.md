@@ -106,8 +106,9 @@ editing and AI cleanup operate on `corrected_text`. API keys are resolved from
 `OPENAI_API_KEY` first, then OS Keychain/Credential Manager; they are not put in
 settings, backups, worker messages, diagnostics or Git.
 
-Clipboard disclosure is opt-in: `auto_copy` defaults to `false`, and the user
-must use the explicit Copy action to place text in the OS clipboard. Clipboard
+Clipboard disclosure is opt-in: `auto_copy` defaults to `false`; automatic
+copying occurs only when the user explicitly enables `auto_copy`. Otherwise,
+placing text in the OS clipboard requires the explicit Copy action. Clipboard
 history, manager processes and OS sync can retain or disclose copied text.
 Unsaved editor changes trigger a Save/Discard/Cancel prompt before history
 navigation or close; Save persists only `corrected_text` and formatting.

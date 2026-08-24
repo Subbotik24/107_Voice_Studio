@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import queue
 import threading
 from pathlib import Path
@@ -447,3 +448,93 @@ def test_close_cancels_recorder_then_deletes_pending_temps_but_not_original(
     assert original.exists()
     assert app.job_controller.closed
     assert app.destroyed
+
+
+def test_reporting_does_not_suppress_pending_residue_without_ambiguity_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches close/reporting returning silently when only pending remains."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    app = _app(tmp_path, FakeRecorder(root=root))
+    retained = root / "retained-after-close.wav"
+    app._pending_microphone_files.add(retained)
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app._report_recording_residues()
+
+    assert errors
+    assert "тимчасові файли" in str(errors[0]).lower()
+
+
+def test_cloud_preflight_stat_failure_cleans_tracked_microphone_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches an unguarded prompt-size stat retaining an owned microphone temp."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    app.settings.engine = "openai-cloud"
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+    from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+
+    monkeypatch.setattr(OpenAICloudEngine, "validate_upload", lambda _source: None)
+    real_stat = Path.stat
+
+    def fail_source_stat(candidate: Path, *args: Any, **kwargs: Any) -> Any:
+        if candidate == path and kwargs.get("follow_symlinks", True):
+            raise OSError("source disappeared during cloud preflight")
+        return real_stat(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_source_stat)
+
+    assert app._process(path, cleanup=True) is False
+    assert not os.path.exists(path)
+    assert app.job_controller.sources == []
+    assert errors and "source disappeared" in str(errors[0]).lower()
+
+
+def test_cloud_preflight_stat_failure_never_deletes_original_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches applying microphone cleanup ownership to an original source."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    app = _app(tmp_path, FakeRecorder(root=root))
+    original = tmp_path / "user-original.wav"
+    original.write_bytes(b"original")
+    app.settings.engine = "openai-cloud"
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+    from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+
+    monkeypatch.setattr(OpenAICloudEngine, "validate_upload", lambda _source: None)
+    real_stat = Path.stat
+
+    def fail_source_stat(candidate: Path, *args: Any, **kwargs: Any) -> Any:
+        if candidate == original and kwargs.get("follow_symlinks", True):
+            raise OSError("source disappeared during cloud preflight")
+        return real_stat(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_source_stat)
+
+    assert app._process(original, cleanup=False) is False
+    assert original.read_bytes() == b"original"
+    assert app.job_controller.sources == []
+    assert errors and "source disappeared" in str(errors[0]).lower()

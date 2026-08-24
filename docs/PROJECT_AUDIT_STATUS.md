@@ -13,10 +13,10 @@ sensitive-data protection, reproducible supply chain, native acceptance та
 `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`. Cloud model default підтверджено
 офіційним API; активний cloud diagnostics finding є P2.
 
-Історичний audit `main` змінював лише документацію/Codex instructions. Перед
-цим W1 integrated implementation tree змінив тільки дозволені product modules
-і regression tests; поточний documentation increment змінює лише шість
-дозволених Markdown-файлів. Під час історичного audit була створена
+Історичний audit `main` змінював лише документацію/Codex instructions. W1
+integrated implementation tree і цей final fix wave змінюють лише дозволені
+product modules, regression tests та audit/product Markdown-файли. Під час
+історичного audit була створена
 непроіндексована product-code чернетка в окремому linked worktree; після
 повторної перевірки read-only constraint її і тимчасову гілку повністю
 видалено, без коміту або перенесення в `main`. Інцидент зафіксований у ledger,
@@ -49,9 +49,12 @@ No production service, live OpenAI call, destructive migration, dependency updat
 | Check | Status | Evidence |
 |---|---|---|
 | `git status`, branch, SHA, remote | PASS | W1 worktree and allowlisted docs scope recorded |
+| W0 workflow action pinning/policy | PASS, repository-executable portion | Final W0 policy commit `70c6c7c859c10d6098cb176f5a994e7f5fc72b4b` (introduced by `ba779710e642fa3c8f190ee69fbcc0b853345d85`); `python scripts/check_workflow_pins.py .github/workflows` passed with exit 0 |
 | frozen `python -m compileall -q src tests scripts packaging` | PASS | Python 3.12.13; exit 0, no output |
-| frozen focused W1 suite | PASS | `tests/test_config_app.py tests/test_editor_state_app.py tests/test_gui_contract_app.py tests/test_recorder_app.py tests/test_recording_lifecycle_app.py`; `72 passed` |
-| frozen `PYTHONPATH=src python -m pytest -q` | PASS | `179 passed, 2 skipped, 5 subtests passed` |
+| frozen focused W1 suite (initial W1 baseline) | PASS | `tests/test_config_app.py tests/test_editor_state_app.py tests/test_gui_contract_app.py tests/test_recorder_app.py tests/test_recording_lifecycle_app.py`; `72 passed` |
+| frozen focused final-review fix-wave suite | PASS | same exact W1 focused paths; `82 passed` |
+| frozen `PYTHONPATH=src python -m pytest -q` (initial W1 baseline) | PASS | `179 passed, 2 skipped, 5 subtests passed` |
+| frozen `PYTHONPATH=src python -m pytest -q` (final-review fix wave) | PASS | `189 passed, 2 skipped, 5 subtests passed` |
 | frozen `python -m ruff check .` | PASS | `All checks passed!` |
 | frozen `python -m build` | BLOCKED | `No module named build`; no installation attempted |
 | frozen `python -m pip check` | BLOCKED | `No module named pip`; no installation attempted |
@@ -129,7 +132,7 @@ Weak areas: GUI behavioral tests frequently inspect source strings; platform acc
 
 ## Dependency and supply-chain assessment
 
-Direct dependency ranges and upper bounds exist, and prior CI included `pip-audit`. There is no frozen resolved graph, hashes, wheelhouse provenance, SBOM or complete bundled license inventory. Current GitHub workflows reference action major tags; [GitHub recommends pinning third-party actions to a full commit SHA](https://docs.github.com/en/actions/reference/security/secure-use?learn=getting_started&learnProduct=actions). A past audit of one resolver snapshot cannot establish the vulnerability state of every future range resolution.
+Direct dependency ranges and upper bounds exist, and prior CI included `pip-audit`. There is no frozen resolved graph, hashes, wheelhouse provenance, SBOM or complete bundled license inventory. The W0 repository-executable action-pinning and workflow-policy portion is implemented and passes the local policy check above; branch protection, release environments, signing, external GitHub controls and release acceptance remain **NOT RUN**/open. [GitHub recommends pinning third-party actions to a full commit SHA](https://docs.github.com/en/actions/reference/security/secure-use?learn=getting_started&learnProduct=actions). A past audit of one resolver snapshot cannot establish the vulnerability state of every future range resolution.
 
 ## Performance, scalability and cost
 

@@ -191,6 +191,29 @@ def test_editor_snapshot_is_immutable_and_normalizes_supported_ranges() -> None:
         snapshot.text = "changed"  # type: ignore[misc]
 
 
+@pytest.mark.parametrize(
+    "invalid_range",
+    [
+        (1, "1.4"),
+        ("1.0", 4),
+        ("1.0", "end"),
+        ("0.0", "1.4"),
+        ("1.0", "not-a-tk-index"),
+        ("1.0", "1.04 chars"),
+    ],
+)
+def test_editor_snapshot_ignores_noncanonical_tk_indices(
+    invalid_range: tuple[object, object],
+) -> None:
+    """Catches coercing arbitrary two-item values into persisted formatting."""
+
+    snapshot = snapshot_editor(
+        "text", {"bold": [("1.0", "1.4"), invalid_range]}  # type: ignore[list-item]
+    )
+
+    assert snapshot.formatting == (("bold", (("1.0", "1.4"),)), ("italic", ()))
+
+
 def test_dirty_transition_save_continues_only_after_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

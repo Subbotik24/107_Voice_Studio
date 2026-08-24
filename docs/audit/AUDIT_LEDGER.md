@@ -14,6 +14,20 @@ is recorded below rather than hidden.
 Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`,
 `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`.
 
+## Checkpoint identities
+
+Every timing, status and scope claim below must be read against one of these
+explicit anchors; a later checkpoint does not retroactively change an earlier
+result.
+
+| Checkpoint | Exact anchor | Meaning and scope |
+|---|---|---|
+| Historical audit baseline | `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511` | 2026-08-20 read-only audit and its historical timings/statuses; no W0 or W1 product changes included |
+| W0 workflow baseline | `70c6c7c859c10d6098cb176f5a994e7f5fc72b4b` (introduced by `ba779710e642fa3c8f190ee69fbcc0b853345d85`) | Repository-executable action pinning and workflow-policy implementation; hosted GitHub controls and release acceptance remain open |
+| Initial W1 implementation | `672577ef63d6107b7f7a78910574924dc9f2775f` | Integrated desktop data-safety slice before this final review fix wave |
+| Final pre-commit | `a12c7a38fd0932c254268a682bbd69c56ecd5972` plus the uncommitted allowlisted fix-wave worktree | Exact base required by the final-review brief; RED/GREEN and final pre-commit checks belong here |
+| Post-commit | The fix-wave commit produced from the final pre-commit tree; exact SHA is recorded in `final-review-fix-report.md` | Only post-commit status/diff claims may be attributed to this resulting commit |
+
 ## Ledger
 
 | Phase | Area | Status | Command/evidence | Result/findings | Confidence / next step |
@@ -37,7 +51,8 @@ Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`,
 | 3 | CI coverage review | FAIL gap | `.github/workflows/ci.yml`, tests | `[hermes]`/Torch not deterministic; no coverage/type gate; GUI/platform tests heavily fake/static | high; QA-001/002 |
 | 4 | OpenAI contract | PASS static / live NOT RUN | `Settings` default; official current Audio API docs | `gpt-transcribe` is explicitly supported; earlier contrary hypothesis retracted; live account call not authorized | high for model list; add drift contract |
 | 4 | Dependency versions | INCONCLUSIVE | official PyPI metadata on 2026-08-20; repo ranges | current versions identified, but no resolved lock/environment means exact vuln/license state unknown | high; SUP-001 |
-| 4 | Actions pinning | FAIL hardening | workflows; official GitHub secure-use docs | movable major tags used; full-SHA recommendation not met | high; CI-001 |
+| 4 (historical baseline) | Actions pinning | FAIL hardening | workflows; official GitHub secure-use docs | movable major tags used at the historical baseline; full-SHA recommendation was not met there | high; CI-001; see W0 checkpoint below |
+| 4/W0 | Actions pinning and workflow policy | PASS, repository-executable portion | `ba779710e642fa3c8f190ee69fbcc0b853345d85` through `70c6c7c859c10d6098cb176f5a994e7f5fc72b4b`; `python scripts/check_workflow_pins.py .github/workflows` | full-SHA action pins, checkout credential policy and fail-closed parser checks pass; hosted GitHub controls/signing/release acceptance remain open | high for repository portion; CI-001 remains partially open |
 | 4 | Packaging standard | FAIL gap | pyproject/lock inventory; Python Packaging docs | no standard lock/hashes/SBOM | high; SUP-001 |
 | 5A/B | Desktop independent audit | PASS review | read-only subagent, anchored code/tests | no P0; settings, diagnostics, recording, lifecycle, UI blocking, atomicity findings | high; reconciled register |
 | 5C | Security/privacy independent audit | PASS review | threat-model subagent, anchored source/workflows | no P0; model/native/archive/storage/release/supply-chain P1s | high; security docs created |
@@ -98,6 +113,26 @@ or upgrade was attempted.
 The focused suite and full suite are local behavioral evidence only. Missing
 build/pip/pip-audit modules are recorded as `BLOCKED`; they were not repaired by
 installing dependencies.
+
+### Final-review fix-wave verification — final pre-commit checkpoint
+
+These results belong to the final pre-commit checkpoint
+`a12c7a38fd0932c254268a682bbd69c56ecd5972` plus the allowlisted worktree
+changes, not to the historical baseline or initial W1 table above.
+
+| Command | Status | Exact output/result |
+|---|---|---|
+| `python -m compileall -q src tests` | PASS | exit 0, no output |
+| `PYTHONPATH=src python -m pytest -q tests/test_config_app.py tests/test_editor_state_app.py tests/test_gui_contract_app.py tests/test_recorder_app.py tests/test_recording_lifecycle_app.py` | PASS | `82 passed` |
+| `PYTHONPATH=src python -m pytest -q` | PASS | `189 passed, 2 skipped, 5 subtests passed` |
+| `python -m ruff check .` | PASS | `All checks passed!` |
+| `python scripts/check_workflow_pins.py .github/workflows` | PASS | `Workflow policy passed for 1 path(s).` |
+| `git diff --check` | PASS | exit 0 |
+| build / pip check / pip-audit probes | BLOCKED | modules `build`, `pip` and `pip_audit` absent; no install or upgrade attempted |
+
+The corresponding commit SHA and full RED/GREEN mutation map are recorded in
+the external `final-review-fix-report.md`; post-commit status is not inferred
+from this pre-commit table.
 
 ### Native/manual acceptance
 

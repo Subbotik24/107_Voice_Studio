@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+
+_CANONICAL_TK_INDEX = re.compile(r"^[1-9][0-9]*\.(?:0|[1-9][0-9]*)$")
 
 
 @dataclass(frozen=True)
 class EditorSnapshot:
     text: str
     formatting: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
+
+
+def _is_canonical_tk_index(value: object) -> bool:
+    return isinstance(value, str) and _CANONICAL_TK_INDEX.fullmatch(value) is not None
 
 
 def snapshot_editor(
@@ -26,7 +33,9 @@ def snapshot_editor(
             for item in ranges:
                 if not isinstance(item, (list, tuple)) or len(item) != 2:
                     continue
-                valid.append((str(item[0]), str(item[1])))
+                if not _is_canonical_tk_index(item[0]) or not _is_canonical_tk_index(item[1]):
+                    continue
+                valid.append((item[0], item[1]))
         except TypeError:
             pass
         normalized.append((tag, tuple(sorted(valid))))
