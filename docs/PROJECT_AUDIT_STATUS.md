@@ -56,9 +56,9 @@ No production service, live OpenAI call, destructive migration, dependency updat
 | frozen `python -m build` | BLOCKED | `No module named build`; no installation attempted |
 | frozen `python -m pip check` | BLOCKED | `No module named pip`; no installation attempted |
 | frozen `python -m pip_audit` | BLOCKED | `No module named pip_audit`; no installation attempted |
-| GitHub CI run `31278777131` | PASS, remote historical evidence | exact baseline SHA; macOS 14/Windows 2022, Python 3.11/3.12; compile/Ruff/pytest/wheel/pip check/pip-audit jobs succeeded |
-| GitHub CodeQL run `31278777138` | PASS, remote historical evidence | exact baseline SHA |
-| Scheduled CodeQL `31992968536` | PASS, remote historical evidence | exact baseline SHA; 2026-08-17 |
+| GitHub CI run `31278777131` | PASS, remote historical evidence | resolved against original audited SHA `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`; macOS 14/Windows 2022, Python 3.11/3.12; compile/Ruff/pytest/wheel/pip check/pip-audit jobs succeeded; not W1 `672577ef63d6107b7f7a78910574924dc9f2775f` evidence |
+| GitHub CodeQL run `31278777138` | PASS, remote historical evidence | resolved against original audited SHA `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`; not W1 `672577ef63d6107b7f7a78910574924dc9f2775f` evidence |
+| Scheduled CodeQL `31992968536` | PASS, remote historical evidence | resolved against original audited SHA `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`; 2026-08-17; not W1 `672577ef63d6107b7f7a78910574924dc9f2775f` evidence |
 | Numerical spot checks | PASS/PARTIAL | mel inverse, frame count, sample-count resampling, WER/CER, timestamps, LR schedule and parameter estimate independently recomputed |
 | NaN manifest probe | FAIL | non-finite duration was accepted |
 | Native GUI/mic/hotkey/codecs/models | NOT RUN | requires real devices, models and supported OS acceptance environment |
@@ -78,7 +78,7 @@ Scale: `0` absent/unknown, `1` prototype, `2` major blockers, `3` credible Test-
 | Desktop architecture | 3.0/5 | engine/service/store boundaries exist; large UI module and mixed sync/async lifecycle debt |
 | Desktop correctness/reliability | 2.5/5 | W1 settings/editor/recorder/temp slices have headless evidence; preparation/restore lifecycle, native acceptance and cloud health-report gaps remain |
 | Security/privacy | 2.0/5 | explicit consent and archive controls are good; unsigned models, native parsing, plaintext data and mutable supply chain remain |
-| Tests/QA | 2.5/5 | strong unit contracts and prior CI; many GUI tests are source assertions/fakes, local suite blocked, no physical/live/Hermes deterministic gate |
+| Tests/QA | 2.5/5 | strong unit contracts and prior CI; local compile, focused/full pytest and Ruff PASS, while build/pip check/pip-audit are BLOCKED; many GUI tests are source assertions/fakes and physical/live/Hermes gates remain |
 | Dependencies/release | 1.5/5 | CI/audits exist; no lock/hashes/SBOM/attestation/signing or symmetric current OS gate |
 | Performance/resource efficiency | 1.5/5 | recorder queue/duration bounds are implemented; native disk/device behavior and main-thread/archive/model/decoder resource budgets remain unmeasured |
 | Hermes engineering validity | 1.0/5 | formulas partly sound; integration overlap, leakage, fingerprint, metrics, CTC/resampling and provenance block claims |
@@ -182,6 +182,26 @@ visible messages and whether each expected file remained or was removed.
    profile. In Settings confirm `auto_copy` is off, select a local engine/model,
    and grant Microphone permission only when Windows asks. Do not enable
    clipboard history for the first run.
+1a. **WIN-SET-01 wrong-type settings recovery:** quit the app, back up the
+    disposable profile's settings JSON, and run three isolated launches. Before
+    each launch edit one value to a valid JSON value of the wrong type: set
+    `"model"` to `1`, then `"auto_copy"` to `"yes"`, then
+    `"task_timeout_seconds"` to `null`. Launch VOICE Studio each time and
+    record the visible settings warning, safe-default startup and absence of an
+    unhandled traceback. Restore the backup between runs. This case is **NOT
+    RUN** until Windows evidence exists.
+1b. **WIN-EDIT-01 dirty navigation:** create/select a disposable transcript,
+    change its editor text and apply one formatting tag, then select another
+    history row in three separate runs. Choose Save and verify the first record
+    reopens with the changed `corrected_text`/formatting; choose Discard and
+    verify navigation proceeds without the edit; choose Cancel and verify the
+    current row and edits remain. Record each prompt choice and result; all
+    three transitions are **NOT RUN**.
+1c. **WIN-EDIT-02 dirty close:** make an editor change and close with Alt+F4 in
+    three separate runs. Save must persist before close, Discard must close
+    without persisting the edit, and Cancel must leave the window open with the
+    edit visible. Do not infer crash-draft or backup-restore safety; this case
+    is **NOT RUN**.
 2. **WIN-CAP-01 normal capture:** hold the capture button, speak for 5–10 s,
    release, and wait for the local transcript. Confirm the UI reports success,
    `raw_text` remains unchanged, the result is in history, and the private
@@ -226,6 +246,24 @@ visible messages and whether each expected file remained or was removed.
    disposable profile. In System Settings → Privacy & Security → Microphone,
    grant access only to the tested app; confirm `auto_copy` is off and select a
    local engine/model. Do not use production audio.
+1a. **MAC-SET-01 wrong-type settings recovery:** quit the app, back up the
+    disposable profile's settings JSON, and perform three isolated launches
+    with one wrong-type value at a time: `"model": 1`,
+    `"auto_copy": "yes"`, and `"task_timeout_seconds": null`. Launch after
+    each edit, record the visible settings warning, safe-default startup and
+    absence of an unhandled traceback, then restore the backup before the next
+    run. This case is **NOT RUN** until macOS evidence exists.
+1b. **MAC-EDIT-01 dirty navigation:** create/select a disposable transcript,
+    edit text and one formatting tag, then select another history row in three
+    runs. Save must persist the first record's `corrected_text`/formatting,
+    Discard must navigate without the edit, and Cancel must keep the current row
+    and edit. Record every prompt choice and outcome; all three transitions are
+    **NOT RUN**.
+1c. **MAC-EDIT-02 dirty close:** edit the current transcript and close the
+    window or press Cmd+Q in three separate runs. Save must persist before close,
+    Discard must close without persisting, and Cancel must keep the window open
+    with the edit visible. Do not infer crash-draft or backup-restore safety;
+    this case is **NOT RUN**.
 2. **MAC-CAP-01 normal capture:** hold the capture button, speak for 5–10 s,
    release, and wait for the local transcript. Confirm success/history,
    immutable `raw_text`, removal of the private recorder temp, and no change to

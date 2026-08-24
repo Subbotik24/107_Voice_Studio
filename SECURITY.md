@@ -18,6 +18,10 @@
   two-hour limit, surfaces sounddevice status/queue-drop warnings, and rejects
   degraded capture by default. Cleanup is scoped to tracked recorder-owned
   paths; identity ambiguity retains and reports residue rather than guessing.
+  A malicious same-account replacement after the final identity check is an
+  accepted residual outside the selected OS-account/full-disk-encryption
+  boundary; this is not secure deletion and no absolute delete-by-handle
+  guarantee is claimed.
 - Source content має SHA‑256 provenance.
 - training checkpoint вимагає exact SHA‑256 manifest для всіх обов'язкових
   files; `latest.json` не може посилатися за межі training run.

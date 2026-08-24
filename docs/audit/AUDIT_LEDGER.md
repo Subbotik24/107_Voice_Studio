@@ -32,8 +32,8 @@ Status vocabulary: `PASS`, `FAIL`, `BLOCKED`, `NOT RUN`, `INCONCLUSIVE`,
 | 3 | Ruff | BLOCKED | `python -m ruff` probe | module absent | high |
 | 3 | Build | BLOCKED | `python -m build` probe | module absent | high |
 | 3 | pip-audit | BLOCKED | `python -m pip_audit` probe | module absent | high |
-| 3 | Remote CI | PASS historical | GitHub Actions run `31278777131` | exact baseline SHA; four OS/Python jobs and defined checks successful | high for that run only |
-| 3 | Remote CodeQL | PASS historical | runs `31278777138`, `31992968536` | exact baseline push/scheduled scans successful | high for those runs only |
+| 3 | Remote CI | PASS historical | GitHub Actions run `31278777131` | resolved against original audited SHA `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`; four OS/Python jobs and defined checks successful; not W1 `672577ef63d6107b7f7a78910574924dc9f2775f` evidence | high for that historical run only |
+| 3 | Remote CodeQL | PASS historical | runs `31278777138`, `31992968536` | resolved against original audited SHA `fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`; exact baseline push/scheduled scans successful; not W1 `672577ef63d6107b7f7a78910574924dc9f2775f` evidence | high for those historical runs only |
 | 3 | CI coverage review | FAIL gap | `.github/workflows/ci.yml`, tests | `[hermes]`/Torch not deterministic; no coverage/type gate; GUI/platform tests heavily fake/static | high; QA-001/002 |
 | 4 | OpenAI contract | PASS static / live NOT RUN | `Settings` default; official current Audio API docs | `gpt-transcribe` is explicitly supported; earlier contrary hypothesis retracted; live account call not authorized | high for model list; add drift contract |
 | 4 | Dependency versions | INCONCLUSIVE | official PyPI metadata on 2026-08-20; repo ranges | current versions identified, but no resolved lock/environment means exact vuln/license state unknown | high; SUP-001 |
@@ -76,8 +76,10 @@ diagnostics disclosure in `PRV-001`, and all W2+ findings remain open.
 
 ### Frozen local verification
 
-All commands used the existing frozen interpreter
-`C:\Users\Enerfis-User\Desktop\107_Voice_Studio-worktrees\voice-recorder-core\.venv\Scripts\python.exe`; no install or upgrade was attempted.
+All commands used the existing approved frozen runtime (Python 3.12.13) from
+the isolated verification environment; committed documentation intentionally
+records only repository-neutral command forms and no host/user path. No install
+or upgrade was attempted.
 
 | Command | Status | Exact output/result |
 |---|---|---|

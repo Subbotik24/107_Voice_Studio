@@ -119,6 +119,10 @@ cleans only tracked recorder-owned temporary files; an identity-ambiguous
 cleanup residue is retained and reported for inspection. These contracts have
 headless test evidence, while real microphones, device disconnects, OS
 clipboard history/sync and physical Windows/macOS acceptance remain **NOT RUN**.
+Cleanup is not secure deletion: a malicious same-account replacement after the
+final identity check is an accepted residual outside the selected
+OS-account/full-disk-encryption boundary, and no absolute delete-by-handle
+guarantee is claimed.
 
 Use `hermes-voice diagnostics --export report.json` for a redacted forum report.
 Do not share private audio, transcripts, databases, API keys, or full user paths.
