@@ -99,6 +99,42 @@ def make_zip64_fixture(path: Path) -> None:
     path.write_bytes(payload[:eocd_offset] + zip64_eocd + locator + legacy_eocd)
 
 
+def make_nonsentinel_zip64_fixture(path: Path) -> None:
+    write_zip(path, [("payload.bin", b"x" * 499_902)])
+    payload = path.read_bytes()
+    eocd_offset = payload.rfind(b"PK\x05\x06")
+    assert eocd_offset == 500_000
+    entries = int.from_bytes(payload[eocd_offset + 10 : eocd_offset + 12], "little")
+    directory_size = int.from_bytes(payload[eocd_offset + 12 : eocd_offset + 16], "little")
+    directory_offset = int.from_bytes(payload[eocd_offset + 16 : eocd_offset + 20], "little")
+    zip64_eocd = struct.pack(
+        "<4sQHHIIQQQQ",
+        b"PK\x06\x06",
+        44,
+        45,
+        45,
+        0,
+        0,
+        entries,
+        entries,
+        500_000,
+        0,
+    )
+    locator = struct.pack("<4sLQL", b"PK\x06\x07", 0, eocd_offset, 1)
+    legacy_eocd = struct.pack(
+        "<4s4H2LH",
+        b"PK\x05\x06",
+        0,
+        0,
+        entries,
+        entries,
+        directory_size,
+        directory_offset,
+        0,
+    )
+    path.write_bytes(payload[:eocd_offset] + zip64_eocd + locator + legacy_eocd)
+
+
 def test_value_objects_are_immutable_and_inspection_has_frozen_members(tmp_path: Path) -> None:
     archive_path = tmp_path / "valid.zip"
     write_zip(archive_path, [("hello.txt", b"hello")])
@@ -347,6 +383,29 @@ def test_inspection_accepts_bounded_zip64_metadata(tmp_path: Path) -> None:
     inspection = inspect_zip(archive_path, make_budget())
 
     assert inspection.member_count == 1
+
+
+def test_inspection_rejects_nonsentinel_zip64_budget_before_zipfile_load(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive_path = tmp_path / "nonsentinel-zip64.zip"
+    make_nonsentinel_zip64_fixture(archive_path)
+    assert central_directory_size(archive_path) == 57
+    with archive_path.open("rb") as stream:
+        stdlib_end_record = zipfile._EndRecData(stream)
+    assert stdlib_end_record is not None
+    assert stdlib_end_record[zipfile._ECD_ENTRIES_TOTAL] == 1
+    assert stdlib_end_record[zipfile._ECD_SIZE] == 500_000
+
+    def zipfile_must_not_load(*args: object, **kwargs: object) -> None:
+        raise AssertionError("ZipFile must not load before nonsentinel ZIP64 preflight")
+
+    monkeypatch.setattr(archive_module.zipfile, "ZipFile", zipfile_must_not_load)
+    with pytest.raises(ValueError, match="central directory"):
+        inspect_zip(
+            archive_path,
+            make_budget(max_central_directory_bytes=100),
+        )
 
 
 def test_inspection_rejects_zip64_sentinel_without_locator(tmp_path: Path) -> None:

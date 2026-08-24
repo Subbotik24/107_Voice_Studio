@@ -347,8 +347,9 @@ def _read_zip_directory_metadata(
             or directory_offset == 0xFFFFFFFF
         )
         directory_end_marker = eocd_offset
-        if zip64_required:
-            locator_offset = eocd_offset - _ZIP64_LOCATOR_STRUCT.size
+        locator_offset = eocd_offset - _ZIP64_LOCATOR_STRUCT.size
+        locator_signature = None
+        if locator_offset >= 0:
             locator_payload = _read_exact(
                 stream,
                 locator_offset,
@@ -356,14 +357,14 @@ def _read_zip_directory_metadata(
                 file_size,
                 "ZIP64 locator",
             )
+            locator_signature = locator_payload[:4]
+        if locator_signature == _ZIP64_LOCATOR_SIGNATURE:
             (
-                locator_signature,
+                _,
                 locator_disk,
                 zip64_offset,
                 total_disks,
             ) = _ZIP64_LOCATOR_STRUCT.unpack(locator_payload)
-            if locator_signature != _ZIP64_LOCATOR_SIGNATURE:
-                raise ValueError("ZIP64 EOCD sentinel has no valid ZIP64 locator")
             if locator_disk != 0 or total_disks != 1:
                 raise ValueError("unsupported multi-disk ZIP64 archive")
             if zip64_offset >= locator_offset:
@@ -394,13 +395,13 @@ def _read_zip_directory_metadata(
                 raise ValueError("contradictory ZIP64 EOCD record bounds")
             if zip64_disk_number != 0 or zip64_directory_disk != 0:
                 raise ValueError("unsupported multi-disk ZIP64 archive")
-            if disk_number != 0 or directory_disk != 0:
-                raise ValueError("unsupported multi-disk ZIP archive")
             entries_on_disk = zip64_entries_on_disk
             entries_total = zip64_entries_total
             directory_bytes = zip64_directory_bytes
             directory_offset = zip64_directory_offset
             directory_end_marker = zip64_offset
+        elif zip64_required:
+            raise ValueError("ZIP64 EOCD sentinel has no valid ZIP64 locator")
         else:
             if disk_number != 0 or directory_disk != 0:
                 raise ValueError("unsupported multi-disk ZIP archive")
