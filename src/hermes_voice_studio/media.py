@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -27,6 +29,14 @@ SUPPORTED_MEDIA_EXTENSIONS = {
 MAX_SOURCE_BYTES = 2 * 1024**3
 MAX_MEDIA_SECONDS = 7_200
 PROBE_TIMEOUT_SECONDS = 30.0
+
+# Two hours of 16 kHz mono PCM s16le, matching MAX_MEDIA_SECONDS.
+MAX_CANONICAL_OUTPUT_BYTES = 230_404_096
+CONVERT_TIMEOUT_SECONDS = 900.0
+
+# Only the head of a converter's diagnostics is kept, so a chatty failure cannot
+# be turned into unbounded memory by a crafted input.
+MAX_CONVERTER_STDERR_BYTES = 8 * 1024
 
 # A probe that cannot be reaped politely is killed; give it a short grace period
 # first so a normal exit is not escalated.
@@ -119,6 +129,77 @@ def _terminate(process: object) -> None:
         process.join(timeout=_PROBE_TERMINATE_GRACE_SECONDS)
 
 
+def _kill_tree(process: subprocess.Popen) -> None:
+    """Kill the converter and everything it started.
+
+    On POSIX the child leads its own session, so one signal reaches the whole
+    group. Killing only the direct child would leave a descendant holding the
+    output file and the CPU.
+    """
+
+    if process.poll() is not None:
+        return
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        else:
+            process.kill()
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        process.wait(timeout=_PROBE_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:  # pragma: no cover - the kill is unconditional
+        pass
+
+
+def _run_contained(argv: list[str], *, timeout: float, stderr_path: Path) -> int:
+    """Run an external converter so it cannot outlive or outlast this call.
+
+    Establishes a process group (POSIX) or a new process group (Windows) before
+    the child runs, bounds it with a deadline, and kills the whole group on
+    expiry. Failing to establish containment is fatal rather than degraded.
+    """
+
+    creation: dict[str, object] = {}
+    if os.name == "posix":
+        creation["start_new_session"] = True
+    else:  # pragma: no cover - exercised on Windows CI
+        creation["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
+    try:
+        handle = stderr_path.open("wb")
+    except OSError as exc:
+        raise MediaContainmentError(f"cannot capture converter diagnostics: {exc}") from exc
+    try:
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=handle,
+                **creation,
+            )
+        except Exception as exc:
+            raise MediaContainmentError(
+                f"cannot establish a contained media converter, refusing to run it: {exc}"
+            ) from exc
+    finally:
+        handle.close()
+
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(process)
+        raise MediaValidationError(
+            f"media conversion exceeded {timeout} seconds and was stopped"
+        ) from None
+    finally:
+        _kill_tree(process)
+
+
 def validate_media_file(path: Path, *, timeout: float = PROBE_TIMEOUT_SECONDS) -> None:
     """Validate untrusted media without parsing it in this process.
 
@@ -190,7 +271,8 @@ def canonical_wav(path: Path, *, sample_rate: int = 16_000) -> Iterator[Path]:
         )
     with tempfile.TemporaryDirectory(prefix="hermes-voice-media-") as directory:
         target = Path(directory) / "audio.wav"
-        process = subprocess.run(
+        diagnostics = Path(directory) / "ffmpeg.err"
+        returncode = _run_contained(
             [
                 ffmpeg,
                 "-nostdin",
@@ -207,13 +289,33 @@ def canonical_wav(path: Path, *, sample_rate: int = 16_000) -> Iterator[Path]:
                 str(sample_rate),
                 "-c:a",
                 "pcm_s16le",
+                # Stop writing at the ceiling rather than discovering it after
+                # the disk is already full.
+                "-fs",
+                str(MAX_CANONICAL_OUTPUT_BYTES),
                 str(target),
             ],
-            capture_output=True,
-            text=True,
-            check=False,
+            timeout=CONVERT_TIMEOUT_SECONDS,
+            stderr_path=diagnostics,
         )
-        if process.returncode != 0 or not target.is_file():
-            detail = process.stderr.strip() or "unknown ffmpeg error"
-            raise RuntimeError(f"cannot convert media to WAV: {detail}")
+        if returncode != 0 or not target.is_file():
+            raise RuntimeError(f"cannot convert media to WAV: {_converter_detail(diagnostics)}")
+        produced = target.stat().st_size
+        if produced >= MAX_CANONICAL_OUTPUT_BYTES:
+            raise MediaValidationError(
+                "converted audio reached the "
+                f"{MAX_CANONICAL_OUTPUT_BYTES} byte ceiling and was rejected"
+            )
         yield target
+
+
+def _converter_detail(stderr_path: Path) -> str:
+    """Return a bounded, human-readable head of the converter's diagnostics."""
+
+    try:
+        with stderr_path.open("rb") as handle:
+            head = handle.read(MAX_CONVERTER_STDERR_BYTES)
+    except OSError:
+        return "unknown converter error"
+    text = head.decode("utf-8", errors="replace").strip()
+    return text or "unknown converter error"

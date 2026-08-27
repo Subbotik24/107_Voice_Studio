@@ -8,8 +8,10 @@ in the parent would never reach it.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import time
 import wave
 from pathlib import Path
 
@@ -209,3 +211,90 @@ def test_unsupported_extension_and_empty_file_are_still_rejected(tmp_path):
     odd.write_bytes(b"hello")
     with pytest.raises(ValueError, match="unsupported media extension"):
         validate_media_file(odd)
+
+
+# --- external converter containment -----------------------------------------
+
+
+def test_a_converter_that_never_exits_is_killed_at_the_deadline(tmp_path):
+    start = time.monotonic()
+    with pytest.raises(MediaValidationError, match="exceeded"):
+        media_module._run_contained(
+            [sys.executable, "-c", "import time; time.sleep(600)"],
+            timeout=1.0,
+            stderr_path=tmp_path / "err",
+        )
+    assert time.monotonic() - start < 30, "the deadline must not wait for the child"
+
+
+@pytest.mark.skipif(
+    os.name != "posix",
+    reason="process groups are POSIX; Windows containment is covered by the deadline tests",
+)
+def test_killing_the_converter_also_kills_its_descendants(tmp_path):
+    """The SEC-001 sub-claim: an ffmpeg descendant must not survive the kill.
+
+    Killing only the direct child leaves a grandchild holding the CPU and the
+    output file.
+    """
+
+    marker = tmp_path / "grandchild.pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])\n"
+        f"open({str(marker)!r}, 'w').write(str(child.pid))\n"
+        "time.sleep(600)\n"
+    )
+
+    with pytest.raises(MediaValidationError, match="exceeded"):
+        media_module._run_contained(
+            [sys.executable, "-c", script], timeout=3.0, stderr_path=tmp_path / "err"
+        )
+
+    grandchild = int(marker.read_text())
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
+    pytest.fail(f"grandchild {grandchild} survived the contained kill")
+
+
+def test_a_successful_converter_returns_its_exit_code(tmp_path):
+    assert (
+        media_module._run_contained(
+            [sys.executable, "-c", "raise SystemExit(0)"],
+            timeout=60.0,
+            stderr_path=tmp_path / "err",
+        )
+        == 0
+    )
+    assert (
+        media_module._run_contained(
+            [sys.executable, "-c", "raise SystemExit(3)"],
+            timeout=60.0,
+            stderr_path=tmp_path / "err",
+        )
+        == 3
+    )
+
+
+def test_a_converter_that_cannot_be_started_fails_closed(tmp_path):
+    with pytest.raises(MediaContainmentError, match="refusing to run it"):
+        media_module._run_contained(
+            [str(tmp_path / "no-such-executable")],
+            timeout=5.0,
+            stderr_path=tmp_path / "err",
+        )
+
+
+def test_converter_diagnostics_are_truncated_not_held_whole(tmp_path):
+    noisy = tmp_path / "err"
+    noisy.write_bytes(b"E" * (media_module.MAX_CONVERTER_STDERR_BYTES * 4))
+
+    detail = media_module._converter_detail(noisy)
+
+    assert len(detail) <= media_module.MAX_CONVERTER_STDERR_BYTES
+    assert media_module._converter_detail(tmp_path / "missing") == "unknown converter error"
