@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from hermes_voice_studio.models import Transcript
-from hermes_voice_studio.storage import LocalStore, _compact_uuid
+from voice_studio.models import Transcript
+from voice_studio.storage import LocalStore, _compact_uuid
 
 
 def process_import_source(root: str, source: str) -> str:
@@ -134,7 +134,7 @@ def test_import_source_enforces_growing_source_cap_and_cleans_partial(tmp_path):
 
 
 def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkeypatch):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "same.wav"
@@ -170,7 +170,7 @@ def test_simultaneous_imports_have_distinct_owned_partial_paths(tmp_path, monkey
 
 
 def test_import_source_never_replaces_an_existing_final_target(tmp_path, monkeypatch):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "same.wav"
@@ -212,7 +212,7 @@ def test_concurrent_process_imports_never_overwrite_each_other(tmp_path):
 def test_import_retries_full_uuid_collision_without_touching_existing_target(
     tmp_path, monkeypatch
 ):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "collision.wav"
@@ -252,8 +252,8 @@ def test_import_retries_full_uuid_collision_without_touching_existing_target(
 def test_repeated_uuid_collision_has_bounded_allocation_and_cleans_partial(
     tmp_path, monkeypatch
 ):
-    import hermes_voice_studio.operation as operation
-    import hermes_voice_studio.storage as storage
+    import voice_studio.operation as operation
+    import voice_studio.storage as storage
 
     limit = getattr(storage, "MAX_MANAGED_TARGET_ATTEMPTS", None)
     assert limit is not None, "managed target allocation must be bounded"
@@ -298,9 +298,9 @@ def test_repeated_uuid_collision_has_bounded_allocation_and_cleans_partial(
 
 
 def test_link_failure_cleanup_failure_surfaces_owned_residue(tmp_path, monkeypatch):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
-    operation = __import__("hermes_voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
+    operation = __import__("voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "link-failure.wav"
     source.write_bytes(b"link-failure")
@@ -326,9 +326,9 @@ def test_link_failure_cleanup_failure_surfaces_owned_residue(tmp_path, monkeypat
 
 
 def test_link_success_partial_unlink_failure_surfaces_residue(tmp_path, monkeypatch):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
-    operation = __import__("hermes_voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
+    operation = __import__("voice_studio.operation", fromlist=["OwnedPartialCleanupError"])
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "unlink-failure.wav"
     source.write_bytes(b"unlink-failure")
@@ -352,8 +352,8 @@ def test_link_success_partial_unlink_failure_surfaces_residue(tmp_path, monkeypa
 
 
 def test_import_source_cancellation_cleans_owned_partial_only(tmp_path):
-    from hermes_voice_studio.jobs import JobCancelled
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio.jobs import JobCancelled
+    from voice_studio.operation import OperationBudget
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "cancel.wav"
@@ -370,7 +370,7 @@ def test_import_source_cancellation_cleans_owned_partial_only(tmp_path):
 
 
 def test_import_source_timeout_cleans_owned_partial_only(tmp_path):
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio.operation import OperationBudget
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "timeout.wav"
@@ -387,8 +387,8 @@ def test_import_source_timeout_cleans_owned_partial_only(tmp_path):
 
 
 def test_import_source_timeout_after_a_chunk_cleans_owned_partial_only(tmp_path, monkeypatch):
-    from hermes_voice_studio import operation
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio import operation
+    from voice_studio.operation import OperationBudget
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "timeout-after-chunk.wav"
@@ -412,8 +412,8 @@ def test_import_source_timeout_after_a_chunk_cleans_owned_partial_only(tmp_path,
 
 
 def test_import_source_cancellation_after_a_chunk_cleans_owned_partial_only(tmp_path):
-    from hermes_voice_studio.jobs import JobCancelled
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio.jobs import JobCancelled
+    from voice_studio.operation import OperationBudget
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "cancel-after-chunk.wav"
@@ -514,7 +514,7 @@ def test_import_source_write_failure_cleans_owned_partial_only(tmp_path, monkeyp
 
 
 def test_import_source_promotion_failure_cleans_owned_partial_only(tmp_path, monkeypatch):
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
     store = LocalStore(tmp_path / "data")
     source = tmp_path / "promotion.wav"
@@ -539,9 +539,9 @@ def test_import_source_surfaces_partial_cleanup_failure_with_residue_and_cause(
 ):
     import importlib
 
-    import hermes_voice_studio.storage as storage
+    import voice_studio.storage as storage
 
-    operation = importlib.import_module("hermes_voice_studio.operation")
+    operation = importlib.import_module("voice_studio.operation")
     error_type = getattr(operation, "OwnedPartialCleanupError", None)
     assert error_type is not None, "structured partial cleanup error is required"
     store = LocalStore(tmp_path / "data")

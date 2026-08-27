@@ -9,7 +9,7 @@ if errorlevel 1 set "PYTHON_LAUNCHER=py -3.12"
 if errorlevel 1 set "PYTHON_LAUNCHER=python"
 %PYTHON_LAUNCHER% -c "import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] <= (3, 12) else 2)" >nul 2>nul
 if errorlevel 1 (
-  echo Hermes Voice Studio requires Python 3.11 or 3.12.
+  echo VOICE Studio requires Python 3.11 or 3.12.
   exit /b 2
 )
 if not exist .venv (
@@ -26,16 +26,11 @@ if errorlevel 1 (
   echo Tkinter is unavailable in this Python installation.
   exit /b 2
 )
-where ffmpeg.exe >nul 2>nul
+.venv\Scripts\python.exe -c "import voice_studio" >nul 2>nul
 if errorlevel 1 (
-  echo Continuing without optional FFmpeg.
-  echo Install FFmpeg and add ffmpeg.exe to PATH for Hermes non-WAV conversion.
-)
-.venv\Scripts\python.exe -c "import hermes_voice_studio" >nul 2>nul
-if errorlevel 1 (
-  echo Installing Hermes Voice Studio into .venv ^(first run only^)...
+  echo Installing VOICE Studio into .venv ^(first run only^)...
   .venv\Scripts\python.exe -m pip install -e ".[cloud]"
   if errorlevel 1 exit /b 1
 )
-.venv\Scripts\hermes-voice.exe gui
+.venv\Scripts\voice-studio.exe gui
 exit /b %errorlevel%

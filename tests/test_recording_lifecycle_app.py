@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from hermes_voice_studio import app as app_module
-from hermes_voice_studio.app import HermesVoiceApp
-from hermes_voice_studio.recorder import RecorderCleanupError, RecordingResult
+from voice_studio import app as app_module
+from voice_studio.app import VoiceStudioApp
+from voice_studio.recorder import RecorderCleanupError, RecordingResult
 
 
 class FakeButton:
@@ -94,8 +94,8 @@ class FakeRecorder:
             raise self.cancel_error
 
 
-def _app(tmp_path: Path, recorder: FakeRecorder) -> HermesVoiceApp:
-    app = object.__new__(HermesVoiceApp)
+def _app(tmp_path: Path, recorder: FakeRecorder) -> VoiceStudioApp:
+    app = object.__new__(VoiceStudioApp)
     app.recorder = recorder
     app._pending_microphone_files = set()
     app._active_recording_path = None
@@ -143,7 +143,7 @@ def _recording_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return cache / "recordings"
 
 
-def _start_tracked(app: HermesVoiceApp, root: Path) -> Path:
+def _start_tracked(app: VoiceStudioApp, root: Path) -> Path:
     path = app.recorder.start(root)
     app._pending_microphone_files.add(path)
     app._active_recording_path = path
@@ -387,7 +387,7 @@ def test_owned_microphone_preflight_exit_cleans_without_starting_job(
         lambda *args, **kwargs: consent,
     )
     if validation_error is not None:
-        from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+        from voice_studio.engines.openai_cloud import OpenAICloudEngine
 
         monkeypatch.setattr(
             OpenAICloudEngine,
@@ -488,7 +488,7 @@ def test_cloud_preflight_stat_failure_cleans_tracked_microphone_file(
         "showerror",
         lambda *args, **kwargs: errors.append(args),
     )
-    from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+    from voice_studio.engines.openai_cloud import OpenAICloudEngine
 
     monkeypatch.setattr(OpenAICloudEngine, "validate_upload", lambda _source: None)
     real_stat = Path.stat
@@ -522,7 +522,7 @@ def test_cloud_preflight_stat_failure_never_deletes_original_file(
         "showerror",
         lambda *args, **kwargs: errors.append(args),
     )
-    from hermes_voice_studio.engines.openai_cloud import OpenAICloudEngine
+    from voice_studio.engines.openai_cloud import OpenAICloudEngine
 
     monkeypatch.setattr(OpenAICloudEngine, "validate_upload", lambda _source: None)
     real_stat = Path.stat

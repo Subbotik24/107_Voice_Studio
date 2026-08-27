@@ -17,5 +17,5 @@ Changes to storage must prove that the original user file remains untouched.
 Changes to cloud behavior need tests proving that explicit consent happens before
 network access and that credentials do not enter serialized payloads.
 
-Do not claim Hermes accuracy without trained weights, a closed test set and
-measured WER/CER. Please use the issue templates and redact diagnostic reports.
+Do not claim recognition accuracy without a closed test set and measured WER/CER.
+Please use the issue templates and redact diagnostic reports.

@@ -21,7 +21,7 @@ for item in \
 done
 
 # Defensive post-copy checks. These names must never be part of a public source tree.
-if find "$TARGET" -type f \( -name '*.sqlite*' -o -name '*.hws' -o -name '*.wav' -o \
+if find "$TARGET" -type f \( -name '*.sqlite*' -o -name '*.wav' -o \
   -name '*.mp3' -o -name '*.m4a' -o -name '*.mp4' -o -name 'model.bin' \) -print -quit | grep -q .; then
   echo "error: restricted user data or model binary reached publishing tree" >&2
   exit 2

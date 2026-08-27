@@ -27,4 +27,4 @@ fi
 "$PYTHON_BIN" -m compileall -q src tests scripts packaging
 "$PYTHON_BIN" -m ruff check src tests scripts packaging
 PYTHONPATH=src "$PYTHON_BIN" -m pytest -q
-PYTHONPATH=src "$PYTHON_BIN" -m hermes_voice_studio.cli --version >/dev/null
+PYTHONPATH=src "$PYTHON_BIN" -m voice_studio.cli --version >/dev/null

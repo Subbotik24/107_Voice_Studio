@@ -10,15 +10,15 @@ fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3.11}"
 "$PYTHON_BIN" -c "import build, PyInstaller, pytest, ruff" >/dev/null 2>&1 || {
-  echo "error: install dev/package dependencies with: $PYTHON_BIN -m pip install -e '.[dev,package,hermes,benchmark]'" >&2
+  echo "error: install dev/package dependencies with: $PYTHON_BIN -m pip install -e '.[dev,package,benchmark,cloud]'" >&2
   exit 2
 }
 
 RELEASE_LABEL="0.3.0-test-rc1"
 FINAL_DIRECTORY="$PROJECT_ROOT/dist/$RELEASE_LABEL"
-ACCEPTANCE_RESULT="${HVS_ACCEPTANCE_RESULT:-}"
+ACCEPTANCE_RESULT="${VOICE_STUDIO_ACCEPTANCE_RESULT:-}"
 if [ -z "$ACCEPTANCE_RESULT" ] || [ ! -f "$ACCEPTANCE_RESULT" ]; then
-  echo "error: HVS_ACCEPTANCE_RESULT must point to a passing 50-task acceptance JSON" >&2
+  echo "error: VOICE_STUDIO_ACCEPTANCE_RESULT must point to a passing 50-task acceptance JSON" >&2
   exit 2
 fi
 if [ -e "$FINAL_DIRECTORY" ]; then
@@ -38,27 +38,21 @@ trap cleanup EXIT
   --clean \
   --distpath "$STAGE_DIRECTORY/pyinstaller-dist" \
   --workpath "$STAGE_DIRECTORY/pyinstaller-work" \
-  packaging/hermes_voice_studio.spec
+  packaging/voice_studio.spec
 
-BUILT_APP="$STAGE_DIRECTORY/pyinstaller-dist/Hermes Voice Studio.app"
+BUILT_APP="$STAGE_DIRECTORY/pyinstaller-dist/VOICE Studio.app"
 if [ ! -d "$BUILT_APP" ]; then
   echo "error: PyInstaller did not create the application bundle" >&2
   exit 2
 fi
-FINAL_APP="$STAGE_DIRECTORY/Hermes Voice Studio.app"
+FINAL_APP="$STAGE_DIRECTORY/VOICE Studio.app"
 mv "$BUILT_APP" "$FINAL_APP"
 
-TORCH_JIT_INTERNAL="$FINAL_APP/Contents/Frameworks/torch/_jit_internal.py"
-if [ ! -f "$TORCH_JIT_INTERNAL" ]; then
-  echo "error: packaged PyTorch _jit_internal.py was not found" >&2
-  exit 2
-fi
-"$PYTHON_BIN" scripts/patch_frozen_torch.py --target "$TORCH_JIT_INTERNAL"
 codesign --force --deep --sign - "$FINAL_APP"
 
 RUNTIME_PROBE="$STAGE_DIRECTORY/runtime-probe.json"
-if ! HVS_RUNTIME_PROBE_OUTPUT="$RUNTIME_PROBE" \
-  "$FINAL_APP/Contents/MacOS/Hermes Voice Studio"; then
+if ! VOICE_STUDIO_RUNTIME_PROBE_OUTPUT="$RUNTIME_PROBE" \
+  "$FINAL_APP/Contents/MacOS/VOICE Studio"; then
   if [ -f "$RUNTIME_PROBE" ]; then
     cat "$RUNTIME_PROBE" >&2
   fi
@@ -68,9 +62,9 @@ fi
 plutil -lint "$FINAL_APP/Contents/Info.plist"
 codesign --verify --deep --strict "$FINAL_APP"
 
-DMG_NAME="Hermes-Voice-Studio-${RELEASE_LABEL}-macos-arm64-unsigned.dmg"
+DMG_NAME="VOICE-Studio-${RELEASE_LABEL}-macos-arm64-unsigned.dmg"
 hdiutil create \
-  -volname "Hermes Voice Studio Test RC" \
+  -volname "VOICE Studio Test RC" \
   -srcfolder "$FINAL_APP" \
   -format UDZO \
   "$STAGE_DIRECTORY/$DMG_NAME"
@@ -81,7 +75,7 @@ hdiutil verify "$STAGE_DIRECTORY/$DMG_NAME"
   --no-isolation \
   --outdir "$STAGE_DIRECTORY" \
   "$PROJECT_ROOT"
-WHEEL="$STAGE_DIRECTORY/hermes_voice_studio-0.3.0rc1-py3-none-any.whl"
+WHEEL="$STAGE_DIRECTORY/voice_studio-0.3.0rc1-py3-none-any.whl"
 if [ ! -f "$WHEEL" ]; then
   echo "error: wheel build did not produce the expected artifact" >&2
   exit 2
@@ -107,7 +101,7 @@ rm -rf "$STAGE_DIRECTORY/pyinstaller-dist" "$STAGE_DIRECTORY/pyinstaller-work"
   cd "$STAGE_DIRECTORY"
   shasum -a 256 \
     "$DMG_NAME" \
-    "hermes_voice_studio-0.3.0rc1-py3-none-any.whl" \
+    "voice_studio-0.3.0rc1-py3-none-any.whl" \
     "runtime-probe.json" \
     "acceptance-result.json" \
     "release-manifest.json" \

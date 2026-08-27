@@ -1,4 +1,4 @@
-# Claude Code handoff — Hermes Voice Studio
+# Claude Code handoff — VOICE Studio
 
 This is a privacy-first desktop transcription application. Treat this file and
 `AGENTS.md` as the operating contract for further work.
@@ -20,11 +20,10 @@ This is a privacy-first desktop transcription application. Treat this file and
 
 ## Product and architecture
 
-- `src/hermes_voice_studio/`: Tk GUI, CLI, local SQLite storage, exports,
+- `src/voice_studio/`: Tk GUI, CLI, local SQLite storage, exports,
   settings and STT engine adapters.
-- `src/hermes_whisper/`: experimental research/training runtime. It must not
-  block the desktop release based on `faster-whisper`.
-- `faster-whisper` is the default local engine. `hermes-whisper` is optional.
+- `src/voice_studio/` is the standalone product runtime.
+- `faster-whisper` is the default local engine.
 - `openai-cloud` is explicit opt-in only; it is never a fallback from local.
 - `raw_text` is immutable STT output. Users and AI cleanup may change only
   `corrected_text` and segment `corrected_text`.
@@ -41,8 +40,7 @@ This is a privacy-first desktop transcription application. Treat this file and
   by default.
 - Model archives require HTTPS, exact SHA-256, safe ZIP validation and atomic
   install. Do not commit model weights, audio, databases or backups.
-- Do not claim Hermes accuracy without trained weights, a closed test set and
-  measured WER/CER.
+- Do not claim recognition accuracy without a closed test set and measured WER/CER.
 
 ## Current verified state
 
@@ -66,7 +64,7 @@ verified.
 
 Install Python 3.11/3.12 and run `run_windows.bat`. On first launch, explicitly
 install/import a local model (Tiny is the starter profile). FFmpeg is recommended
-for non-WAV media and Hermes conversion. See `README.md` for commands.
+for all supported media formats. See `README.md` for commands.
 
 ## Change discipline
 

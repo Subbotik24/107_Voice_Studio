@@ -12,8 +12,8 @@ about: Report a reproducible defect
 ## Environment
 
 - OS and version:
-- Hermes Voice Studio version:
+- VOICE Studio version:
 - Engine/model (local or cloud):
 
 Do not attach private audio, transcript text, databases, API keys, model files or
-full user paths. Attach a redacted `hermes-voice diagnostics --export` report if useful.
+full user paths. Attach a redacted `voice-studio diagnostics --export` report if useful.

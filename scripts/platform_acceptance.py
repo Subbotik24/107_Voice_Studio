@@ -15,11 +15,11 @@ from typing import Any
 
 import numpy as np
 
-from hermes_voice_studio.dictionary import TerminologyDictionary
-from hermes_voice_studio.exporters import export_transcript
-from hermes_voice_studio.jobs import TranscriptionJobController
-from hermes_voice_studio.models import Settings
-from hermes_voice_studio.storage import LocalStore, sha256_file
+from voice_studio.dictionary import TerminologyDictionary
+from voice_studio.exporters import export_transcript
+from voice_studio.jobs import TranscriptionJobController
+from voice_studio.models import Settings
+from voice_studio.storage import LocalStore, sha256_file
 
 
 def evidence_path(path: Path, root: Path) -> str:

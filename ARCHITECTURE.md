@@ -1,8 +1,8 @@
-# Архітектура Hermes Voice Studio
+# Архітектура VOICE Studio
 
 ## 1. Межа системи
 
-`Hermes Voice Studio` — одна desktop‑програма з local-first STT та одним
+`VOICE Studio` — одна desktop‑програма з local-first STT та одним
 явно opt-in cloud adapter.
 
 ```text
@@ -12,7 +12,6 @@ Microphone / media file
 TranscriptionService
         │
         ├── EngineManager ── faster-whisper (default, local)
-        │                 ├─ hermes-whisper (.hws, experimental)
         │                 └─ openai-cloud (explicit consent only)
         │
         ├── TerminologyDictionary
@@ -26,14 +25,13 @@ UI та storage не залежать від внутрішньої архіте
 
 | Пакет | Відповідальність |
 |---|---|
-| `hermes_voice_studio.app` | Tkinter GUI, worker thread, hotkey, UX |
-| `hermes_voice_studio.cli` | Єдиний CLI та делегування model‑команд |
-| `hermes_voice_studio.engines` | Adapter contract, local runtime cache і explicit cloud adapter |
-| `hermes_voice_studio.service` | Оркестрація транскрибування |
-| `hermes_voice_studio.storage` | SHA‑256, SQLite, retention |
-| `hermes_voice_studio.dictionary` | Детерміновані термінологічні заміни |
-| `hermes_voice_studio.exporters` | Формати експорту |
-| `hermes_whisper` | Токенізатор, Conformer, decoder, training, evaluation, bundle |
+| `voice_studio.app` | Tkinter GUI, worker thread, hotkey, UX |
+| `voice_studio.cli` | CLI для транскрипції, моделей, backup і diagnostics |
+| `voice_studio.engines` | Adapter contract, local runtime cache і explicit cloud adapter |
+| `voice_studio.service` | Оркестрація транскрибування |
+| `voice_studio.storage` | SHA‑256, SQLite, retention |
+| `voice_studio.dictionary` | Детерміновані термінологічні заміни |
+| `voice_studio.exporters` | Формати експорту |
 
 ## 3. Engine contract
 
@@ -63,21 +61,7 @@ size і факт передачі аудіо перед upload; CLI вимага
 не входить до `Settings`, worker payloads, backups або diagnostics: resolution
 порядкується як `OPENAI_API_KEY`, потім OS Keychain/Credential Manager.
 
-## 4. `.hws` runtime
-
-Bundle містить тільки:
-
-- `bundle.json`;
-- `config.json`;
-- `tokenizer.json`;
-- `model.pt`;
-- `metadata.json`.
-
-`trainer.pt` не входить до runtime bundle. Під час створення bundle metadata переписується на inference‑набір файлів. Перевірка й extraction виконуються потоково, без завантаження всього `model.pt` у RAM. Кеш повторно перевіряється за SHA‑256.
-
-SHA‑256 забезпечує цілісність, але не автентичність видавця. Для production‑дистрибуції потрібен окремий механізм цифрового підпису.
-
-## 5. Потоки та стан
+## 4. Потоки та стан
 
 - Tkinter працює тільки в main thread.
 - UI controller працює у background thread, а engine runtime — в окремому persistent
@@ -88,19 +72,19 @@ SHA‑256 забезпечує цілісність, але не автенти�
 - Події worker → UI передаються через `queue.Queue`.
 - Одночасний запуск двох транскрибувань UI блокує.
 
-## 6. Storage
+## 5. Storage
 
 SQLite зберігає індексовані поля та повний JSON payload. Аудіо дедуплікується за SHA‑256. Видалення керованої копії враховує інші transcript records із тим самим hash.
 
-SQLite використовує `PRAGMA user_version`. `.hvs-backup` містить versioned manifest,
+SQLite використовує `PRAGMA user_version`. `.voice-backup` містить versioned manifest,
 JSONL records, SHA‑256 inventory та опційні managed copies. Restore зберігає попереднє
 сховище в recovery directory.
 
-## 7. Межі поточної версії
+## 6. Межі поточної версії
 
 - hard cancellation виконується на process boundary, не всередині model kernels;
 - transcription progress фазовий, без точного відсотка inference;
 - немає diarization;
 - ручна правка суцільного тексту не перерозподіляється автоматично по subtitle segments;
 - немає підписаних native installers;
-- точність Hermes не заявляється без навчених ваг і закритого benchmark.
+- точність розпізнавання не заявляється без закритого benchmark.

@@ -1,7 +1,7 @@
 import json
 
-from hermes_voice_studio.exporters import export_transcript, timestamp
-from hermes_voice_studio.models import Segment, Transcript
+from voice_studio.exporters import export_transcript, timestamp
+from voice_studio.models import Segment, Transcript
 
 
 def sample() -> Transcript:

@@ -4,7 +4,7 @@ Status: **PROPOSED / NOT AUTHORIZED FOR IMPLEMENTATION**. This is a documentatio
 design artifact from the read-only audit. It may be implemented only after a later,
 explicit `DESIGN -> USER APPROVAL -> IMPLEMENTATION` gate.
 
-Scope: first implementation increment from Phase 0. It closes `COR-002`, `COR-004`, `PRV-003`, `REL-001` and the microphone-temp part of `PRV-001`. It does not address Hermes overlap, cancellable file import, native media isolation or archive limits; those remain later sequential increments.
+Scope: first implementation increment from Phase 0. It closes `COR-002`, `COR-004`, `PRV-003`, `REL-001` and the microphone-temp part of `PRV-001`. It does not address runtime overlap, cancellable file import, native media isolation or archive limits; those remain later sequential increments.
 
 ## Design choice
 

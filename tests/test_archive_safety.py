@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_common import archive as archive_module
-from hermes_common.archive import (
+from voice_studio import archive as archive_module
+from voice_studio.archive import (
     ZipBudget,
     ZipInspection,
     ZipMember,

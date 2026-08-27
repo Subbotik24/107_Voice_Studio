@@ -1,4 +1,4 @@
-from hermes_voice_studio import cli
+from voice_studio import cli
 
 main = cli.main
 
@@ -20,9 +20,9 @@ def test_transcribe_keyboard_interrupt_returns_130_without_traceback(
     tmp_path, capsys, make_wav, monkeypatch
 ):
     source = make_wav(tmp_path / "sample.wav")
-    monkeypatch.setenv("HVS_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("HVS_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.setenv("HVS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
 
     class InterruptedController:
         def __init__(self, *_args, **_kwargs):

@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from hermes_voice_studio.dictionary import DictionaryRule, TerminologyDictionary
-from hermes_voice_studio.engines.base import EngineResult
-from hermes_voice_studio.models import Segment
-from hermes_voice_studio.service import TranscriptionService
-from hermes_voice_studio.storage import LocalStore
+from voice_studio.dictionary import DictionaryRule, TerminologyDictionary
+from voice_studio.engines.base import EngineResult
+from voice_studio.models import Segment
+from voice_studio.service import TranscriptionService
+from voice_studio.storage import LocalStore
 
 
 class FakeEngine:
@@ -19,7 +19,7 @@ class FakeEngine:
             engine=self.name,
             model=self.model_name,
             language=language or "uk",
-            segments=[Segment(0, 1, "гермес готовий.")],
+            segments=[Segment(0, 1, "войс готовий.")],
             audio_seconds=1.0,
             elapsed_seconds=0.25,
         )
@@ -31,12 +31,12 @@ def test_preserves_raw_and_applies_dictionary(tmp_path, make_wav):
     service = TranscriptionService(
         store,
         FakeEngine(),
-        TerminologyDictionary([DictionaryRule("гермес", "Hermes")]),
+        TerminologyDictionary([DictionaryRule("войс", "VOICE")]),
     )
     result = service.run(source, "uk", "keep")
-    assert result.raw_text == "гермес готовий."
-    assert result.corrected_text == "Hermes готовий."
-    assert result.segments[0].display_text == "Hermes готовий."
+    assert result.raw_text == "войс готовий."
+    assert result.corrected_text == "VOICE готовий."
+    assert result.segments[0].display_text == "VOICE готовий."
     assert result.engine == "fake"
     assert result.real_time_factor == 0.25
     assert result.audio_retained
@@ -118,8 +118,8 @@ def test_save_failure_cleans_managed_copy(tmp_path, make_wav):
 
 
 def test_cancel_during_prepare_does_not_start_engine_request(tmp_path, make_wav):
-    from hermes_voice_studio.jobs import JobCancelled
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio.jobs import JobCancelled
+    from voice_studio.operation import OperationBudget
 
     source = make_wav(tmp_path / "input.wav")
     store = LocalStore(tmp_path / "data")
@@ -142,7 +142,7 @@ def test_cancel_during_prepare_does_not_start_engine_request(tmp_path, make_wav)
 
 
 def test_store_commit_wins_after_pre_save_checkpoint(tmp_path, make_wav):
-    from hermes_voice_studio.operation import OperationBudget
+    from voice_studio.operation import OperationBudget
 
     source = make_wav(tmp_path / "input.wav")
     cancelled = False
@@ -167,7 +167,7 @@ def test_store_commit_wins_after_pre_save_checkpoint(tmp_path, make_wav):
 def test_validation_after_import_cleans_only_unreferenced_managed_snapshot(
     tmp_path, make_wav, monkeypatch
 ):
-    from hermes_voice_studio import service as service_module
+    from voice_studio import service as service_module
 
     source = make_wav(tmp_path / "input.wav")
     store = LocalStore(tmp_path / "data")

@@ -5,10 +5,12 @@ import importlib.util
 import json
 import multiprocessing
 import os
+import tempfile
 import traceback
 from pathlib import Path
 
-from hermes_voice_studio.app import main
+from voice_studio.app import main
+from voice_studio.runtime_probe import run_frozen_worker_probe
 
 
 def runtime_probe(output: Path) -> None:
@@ -19,20 +21,13 @@ def runtime_probe(output: Path) -> None:
         "pynput",
         "sounddevice",
         "tkinter",
-        "torch",
-        "hermes_whisper.bundle",
-        "hermes_whisper.decoding",
+        "keyring",
+        "openai",
     )
-    training_only_modules = (
-        "hermes_whisper.trainer",
-        "hermes_whisper.smoke",
-        "hermes_whisper.data",
+    development_only_modules = (
         "PIL",
         "psutil",
         "pytest",
-        "tensorboard",
-        "safetensors",
-        "torch.utils.benchmark",
     )
     imports: dict[str, str] = {}
     loaded: dict[str, object] = {}
@@ -45,34 +40,36 @@ def runtime_probe(output: Path) -> None:
                 f"FAIL: {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
             )
     excluded: dict[str, bool] = {}
-    for name in training_only_modules:
+    for name in development_only_modules:
         try:
             excluded[name] = importlib.util.find_spec(name) is None
         except (ImportError, ModuleNotFoundError):
             excluded[name] = True
-    torch_module = loaded.get("torch")
-    tensor_ready = (
-        torch_module is not None and torch_module.ones(2).sum().item() == 2
-    )
-    rpc_disabled = (
-        torch_module is not None
-        and not torch_module.distributed.rpc.is_available()
-    )
+    try:
+        with tempfile.TemporaryDirectory(prefix="voice-studio-runtime-probe-") as temporary:
+            model_value = os.environ.get(
+                "VOICE_STUDIO_TRANSCRIPTION_PROBE_MODEL", ""
+            ).strip()
+            worker_probe: object = run_frozen_worker_probe(
+                Path(temporary),
+                faster_whisper_model=Path(model_value) if model_value else None,
+            )
+    except BaseException as exc:
+        worker_probe = f"FAIL: {type(exc).__name__}: {exc}\n{traceback.format_exc()}"
     payload = {
         "status": (
             "PASS"
             if (
                 all(value == "PASS" for value in imports.values())
                 and all(excluded.values())
-                and tensor_ready
-                and rpc_disabled
+                and isinstance(worker_probe, dict)
+                and worker_probe.get("status") == "PASS"
             )
             else "FAIL"
         ),
         "runtime_imports": imports,
-        "training_only_excluded": excluded,
-        "torch_tensor_operation": "PASS" if tensor_ready else "FAIL",
-        "torch_distributed_rpc": "disabled-in-inference-profile",
+        "development_only_excluded": excluded,
+        "frozen_worker_roundtrip": worker_probe,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -82,7 +79,7 @@ def runtime_probe(output: Path) -> None:
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    probe_output = os.environ.get("HVS_RUNTIME_PROBE_OUTPUT", "").strip()
+    probe_output = os.environ.get("VOICE_STUDIO_RUNTIME_PROBE_OUTPUT", "").strip()
     if probe_output:
         runtime_probe(Path(probe_output))
     else:

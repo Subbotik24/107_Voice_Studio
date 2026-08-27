@@ -1,6 +1,6 @@
 import unittest
 
-from hermes_whisper.metrics import (
+from voice_studio.metrics import (
     ErrorRateAccumulator,
     character_error_rate,
     edit_distance,

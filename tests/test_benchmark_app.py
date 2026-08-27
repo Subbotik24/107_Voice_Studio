@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from hermes_voice_studio.benchmark import run_benchmark
-from hermes_voice_studio.engines.base import EngineResult
-from hermes_voice_studio.models import Segment, Settings
+from voice_studio.benchmark import run_benchmark
+from voice_studio.engines.base import EngineResult
+from voice_studio.models import Segment, Settings
 
 
 class FakeEngine:
@@ -43,7 +43,7 @@ def test_benchmark_measures_without_claiming_accuracy(tmp_path, make_wav, monkey
         + "\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("hermes_voice_studio.benchmark.EngineManager", FakeManager)
+    monkeypatch.setattr("voice_studio.benchmark.EngineManager", FakeManager)
     result = run_benchmark(
         manifest,
         Settings(model="fixture"),

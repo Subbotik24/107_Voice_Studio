@@ -12,7 +12,7 @@ def _import_state(module: str) -> dict[str, bool]:
                 "import json, sys; "
                 f"import {module}; "
                 "print(json.dumps({name: name in sys.modules for name in "
-                "('torch', 'faster_whisper', 'av')}))"
+                "('faster_whisper', 'av')}))"
             ),
         ],
         check=True,
@@ -30,6 +30,6 @@ def test_gui_and_cli_imports_do_not_load_model_runtimes_in_parent_process():
     the parser were loaded here (SEC-001).
     """
 
-    absent = {"torch": False, "faster_whisper": False, "av": False}
-    assert _import_state("hermes_voice_studio.app") == absent
-    assert _import_state("hermes_voice_studio.cli") == absent
+    absent = {"faster_whisper": False, "av": False}
+    assert _import_state("voice_studio.app") == absent
+    assert _import_state("voice_studio.cli") == absent

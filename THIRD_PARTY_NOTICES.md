@@ -1,8 +1,8 @@
 # Third-party notices
 
-Hermes Voice Studio uses third-party packages distributed under their respective
+VOICE Studio uses third-party packages distributed under their respective
 licenses, including Python, PyAV/FFmpeg, faster-whisper, CTranslate2, NumPy,
-PyTorch (optional), OpenAI Python SDK (optional), keyring (optional), sounddevice
+OpenAI Python SDK (optional), keyring (optional), sounddevice
 and pynput. Installations must retain their package metadata and licenses.
 
 The optional `faster-whisper` Tiny and Small model packs are released separately

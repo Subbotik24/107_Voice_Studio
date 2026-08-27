@@ -12,8 +12,8 @@ from typing import Any
 import numpy as np
 import pytest
 
-import hermes_voice_studio.recorder as recorder_module
-from hermes_voice_studio.recorder import AudioRecorder
+import voice_studio.recorder as recorder_module
+from voice_studio.recorder import AudioRecorder
 
 
 class FakeInputStream:

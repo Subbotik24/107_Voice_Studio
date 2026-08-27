@@ -1,0 +1,11 @@
+model = "gpt-5.6-terra"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+
+developer_instructions = """
+Review this repository without changing files, creating commits, or installing dependencies.
+Focus only on correctness, regressions, reliability, relevant security, missing tests, Windows
+packaging risks, and violations of the supplied acceptance criteria. Report concrete actionable
+findings with priority, file/line evidence, and the command or scenario that demonstrates the
+problem. Do not invent findings and do not report style-only preferences as defects.
+"""

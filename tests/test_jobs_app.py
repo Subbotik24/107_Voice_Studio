@@ -5,11 +5,11 @@ from typing import Any
 
 import pytest
 
-from hermes_voice_studio.dictionary import TerminologyDictionary
-from hermes_voice_studio.engines.base import EngineResult
-from hermes_voice_studio.jobs import JobCancelled, TranscriptionJobController
-from hermes_voice_studio.models import Segment, Settings
-from hermes_voice_studio.storage import LocalStore
+from voice_studio.dictionary import TerminologyDictionary
+from voice_studio.engines.base import EngineResult
+from voice_studio.jobs import JobCancelled, TranscriptionJobController
+from voice_studio.models import Segment, Settings
+from voice_studio.storage import LocalStore
 
 
 def fixture_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
@@ -102,7 +102,13 @@ def test_cancel_terminates_worker_and_cleans_managed_copy(tmp_path, make_wav):
     assert list(store.sources.iterdir()) == []
 
 
-def test_timeout_restarts_cleanly_for_next_job(tmp_path, make_wav):
+def test_timeout_restarts_cleanly_for_next_job(tmp_path, make_wav, monkeypatch):
+    from voice_studio import service as service_module
+
+    # This test owns the inference-worker deadline. The real disposable media
+    # probe has its own integration coverage and Windows spawn startup can
+    # legitimately exceed this deliberately tiny 200 ms test budget.
+    monkeypatch.setattr(service_module, "validate_media_file", lambda *a, **k: None)
     source = make_wav(tmp_path / "original.wav")
     store = LocalStore(tmp_path / "data")
     controller = TranscriptionJobController(
@@ -159,7 +165,12 @@ def test_cancel_during_prepare_never_starts_worker_request(tmp_path, make_wav):
 
 
 def test_prepare_consumed_deadline_is_not_reset_for_inference(tmp_path, make_wav, monkeypatch):
-    from hermes_voice_studio import operation
+    from voice_studio import operation
+    from voice_studio import service as service_module
+
+    # Keep the test clock authoritative. A real child uses wall-clock time and
+    # would turn this budget test into a platform-dependent process-start test.
+    monkeypatch.setattr(service_module, "validate_media_file", lambda *a, **k: None)
 
     class ConsumingStore(LocalStore):
         def import_source(self, path, budget=None, *, max_bytes=None):

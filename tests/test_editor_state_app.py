@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_voice_studio import app as app_module
-from hermes_voice_studio.app import HermesVoiceApp
-from hermes_voice_studio.editor_state import snapshot_editor
-from hermes_voice_studio.models import Segment, Transcript
-from hermes_voice_studio.storage import LocalStore
+from voice_studio import app as app_module
+from voice_studio.app import VoiceStudioApp
+from voice_studio.editor_state import snapshot_editor
+from voice_studio.models import Segment, Transcript
+from voice_studio.storage import LocalStore
 
 
 class FakeEditor:
@@ -151,9 +151,9 @@ def _transcript(text: str = "original") -> Transcript:
     )
 
 
-def _app(*, text: str = "original", fail: Exception | None = None) -> HermesVoiceApp:
+def _app(*, text: str = "original", fail: Exception | None = None) -> VoiceStudioApp:
     transcript = _transcript(text)
-    app = object.__new__(HermesVoiceApp)
+    app = object.__new__(VoiceStudioApp)
     app.current = transcript
     app.editor = FakeEditor(text)
     app.editor.tags["bold"] = [("1.0", "1.4")]
@@ -533,7 +533,7 @@ def test_background_cancel_refreshes_real_store_then_selects_completed_row(
     app.history.selection_clear(0, "end")
     app.history.selection_set(completed_index)
     monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
-    app._confirm_editor_transition = HermesVoiceApp._confirm_editor_transition.__get__(app)
+    app._confirm_editor_transition = VoiceStudioApp._confirm_editor_transition.__get__(app)
     app._select_history()
     assert app.current.id == completed.id
     assert app.editor.text == "completed"
@@ -557,3 +557,93 @@ def test_background_result_cancel_refreshes_history(monkeypatch: pytest.MonkeyPa
     assert result in app._history_items
     assert result.source_name in app.history.inserted[-1]
     assert app.history.curselection() == (0,)
+
+
+def test_restore_does_not_start_when_unsaved_editor_transition_is_cancelled() -> None:
+    app = _app()
+    app._confirm_editor_transition = lambda: False
+    operations: list[tuple[str, object]] = []
+
+    started = app._queue_restore(
+        app_module.Path("restore.voice-backup"),
+        lambda action, callback: operations.append((action, callback)),
+    )
+
+    assert started is False
+    assert operations == []
+    assert "controller_closed" not in app.__dict__
+
+
+def test_restore_start_closes_runtime_only_after_editor_transition_is_resolved() -> None:
+    app = _app()
+    app._confirm_editor_transition = lambda: True
+    operations: list[tuple[str, object]] = []
+
+    started = app._queue_restore(
+        app_module.Path("restore.voice-backup"),
+        lambda action, callback: operations.append((action, callback)),
+    )
+
+    assert started is True
+    assert app.controller_closed is True
+    assert operations and operations[0][0] == "restore"
+    assert callable(operations[0][1])
+
+
+def test_restore_reload_clears_stale_transcript_and_editor_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app(text="stale pre-restore edit")
+    app._cleanup_snapshot = snapshot_editor("stale pre-restore edit", app.editor.tags)
+    app._cleanup_transcript_id = app.current.id
+    calls: list[str] = []
+    restored_settings = SimpleNamespace(ui_language="en")
+    monkeypatch.setattr(app_module, "load_settings", lambda: restored_settings)
+    app._restart_runtime = lambda: calls.append("runtime")
+    app._refresh_history = lambda: calls.append("history")
+    app._refresh_ui_text = lambda: calls.append("ui")
+    app._start_hotkey = lambda: calls.append("hotkey")
+
+    app._reload_after_restore()
+
+    assert app.settings is restored_settings
+    assert app.current is None
+    assert app.editor.text == ""
+    assert app.editor.tags == {"bold": [], "italic": []}
+    assert app.raw_editor.text == ""
+    assert app.details.text == ""
+    assert app._cleanup_snapshot is None
+    assert app._cleanup_transcript_id is None
+    assert app._editor_is_dirty() is False
+    assert calls == ["runtime", "history", "ui", "hotkey"]
+
+
+@pytest.mark.parametrize(
+    ("event", "value"),
+    [
+        (
+            "backup_done",
+            ("restore", {"records": 1, "recovery": "recovery-directory"}),
+        ),
+        ("backup_error", ("restore", RuntimeError("restore failed"))),
+    ],
+)
+def test_restore_completion_and_failure_both_reload_visible_state(
+    event: str,
+    value: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.events = queue.Queue()
+    app.events.put((event, value))
+    app._maintenance_thread = SimpleNamespace()
+    app._set_busy = lambda _value: None
+    app._reload_after_restore = lambda: setattr(app, "restore_reloaded", True)
+    app.after = lambda *_args: None
+    app._t = lambda key, **_values: key
+    monkeypatch.setattr(app_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app_module.messagebox, "showerror", lambda *args, **kwargs: None)
+
+    app._poll_events()
+
+    assert app.restore_reloaded is True

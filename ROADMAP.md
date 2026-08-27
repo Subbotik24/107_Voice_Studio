@@ -1,7 +1,7 @@
 # Roadmap
 
-Current 0.4 RC checkpoint and the ordered cross-computer continuation plan are
-tracked in `IMPLEMENTATION_STATUS.md` and `docs/CONTINUATION_PLAN_0.4.md`.
+Current Test RC status and verified evidence are tracked in
+`IMPLEMENTATION_STATUS.md` and `VERIFICATION.md`.
 
 ## P0 — довести desktop‑застосунок до release candidate
 
@@ -33,11 +33,9 @@ tracked in `IMPLEMENTATION_STATUS.md` and `docs/CONTINUATION_PLAN_0.4.md`.
    - `.app/.dmg` для Apple Silicon та `.exe/.msi` для Windows x64;
    - code signing/notarization;
    - automated clean‑machine install test.
-   - стан: source packaging pipeline та unsigned `0.3.0-test-rc1` release
-     contracts підготовлено; Windows x64 atomic build/runtime-probe/ZIP pipeline
-     готовий, але фактичні 0.3.0 `.exe/.zip`, macOS `.dmg`, clean-machine
-     acceptance і signing/notarization ще TODO. Не вважати попередній 0.2
-     artifact підтвердженням нового RC.
+   - стан: locked Python 3.12 Windows x64 pipeline, atomic build, frozen-worker
+     runtime probe, unsigned `.exe` і portable ZIP перевірено; macOS `.dmg`,
+     clean-machine acceptance і signing/notarization ще TODO.
 
 5. **Storage migrations та backup**
    - versioned schema;
@@ -52,19 +50,6 @@ tracked in `IMPLEMENTATION_STATUS.md` and `docs/CONTINUATION_PLAN_0.4.md`.
    - окремі результати для Mac mini M4 і Windows target.
    - стан: harness і synthetic smoke готові; licensed corpus та production results відсутні.
 
-## P0 — власна Hermes модель, окремий трек
-
-Цей трек не повинен блокувати release застосунку на `faster-whisper`.
-
-1. ліцензований corpus + provenance;
-2. tokenizer corpus і manifest validation;
-3. nano pilot;
-4. закритий test set;
-5. WER/CER/RTF release gate;
-6. лише після цього — distributable `.hws`;
-7. benchmark PyTorch vs ONNX/CoreML/інші runtime;
-8. обраний формат квантизації та memory budget.
-
 ## P1
 
 - speaker diarization;
@@ -73,7 +58,7 @@ tracked in `IMPLEMENTATION_STATUS.md` and `docs/CONTINUATION_PLAN_0.4.md`.
 - batch transcription;
 - profiles словників за проєктами;
 - автоматичне вставлення в active app після окремого security review;
-- локальний REST/IPC adapter для Hermes AI.
+- локальний REST/IPC adapter лише після окремого security review.
 
 ## P2
 

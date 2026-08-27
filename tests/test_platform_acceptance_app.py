@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from hermes_voice_studio.models import Segment, Transcript
 from scripts.platform_acceptance import run_acceptance
+from voice_studio.models import Segment, Transcript
 
 
 class FixtureController:

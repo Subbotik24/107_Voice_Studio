@@ -4,10 +4,13 @@ Set-Location (Join-Path $PSScriptRoot "..")
 $Python = if ($env:PYTHON_BIN) { $env:PYTHON_BIN } else { "python" }
 
 function Invoke-Checked {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Command)
-    & $Command[0] $Command[1..($Command.Length - 1)]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+    )
+    & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "Command failed with exit code $LASTEXITCODE`: $($Command -join ' ')"
+        throw "Command failed with exit code $LASTEXITCODE`: $FilePath $($Arguments -join ' ')"
     }
 }
 
@@ -17,4 +20,4 @@ Invoke-Checked $Python -m compileall -q src tests scripts packaging
 Invoke-Checked $Python -m ruff check src tests scripts packaging
 $env:PYTHONPATH = "src"
 Invoke-Checked $Python -m pytest -q
-Invoke-Checked $Python -m hermes_voice_studio.cli --version
+Invoke-Checked $Python -m voice_studio.cli --version

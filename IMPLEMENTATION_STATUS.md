@@ -1,10 +1,11 @@
-# Implementation status — VOICE Studio 0.4 RC work in progress
+# Implementation status — VOICE Studio 0.3.0 Test RC
 
-Last reviewed: 2026-08-24.
+Last reviewed: 2026-08-27.
 
-The repository is a verified source checkpoint, not a signed production
-release. The canonical continuation instructions are in
-`docs/CONTINUATION_PLAN_0.4.md`.
+The repository contains a verified Windows Test RC, not a signed production
+release. Current executable, test and native-verification evidence is recorded
+in `VERIFICATION.md`; the reproducible build command is documented in
+`WINDOWS_BUILD_README.md`.
 
 ## Verified repository scope
 
@@ -36,25 +37,24 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
 ## Not implemented yet
 
-- `.hws` and backup consumers wired to the generic archive limits;
+- backup consumers wired to the generic archive limits;
 - `cryptography` dependency and encrypted backup v2;
 - journaled restore/startup recovery;
 - coordinated shutdown and multiprocessing queue disposal;
 - SQLite/filesystem/model-catalog reconciliation;
 - all W3 VAD/timestamp/hardware/editor work;
-- W4 reproducible locks, SBOM, signed/notarized installers and updater;
+- W4 SBOM, signed/notarized installers and updater;
 - W5 physical 50-task acceptance per OS;
 - W6 independent release go/no-go.
 
 ## Current environment limitations
 
-The verification interpreter used for this checkpoint did not contain
-`build`, `pip`, `pip_audit` or `cryptography`. No packages were silently
-installed into that frozen environment. These gates remain `BLOCKED` until the
-next dependency increment creates and freezes its own environment.
+The Windows x64 executable, locked Python 3.12 build environment, packaged
+runtime probe and GUI launch were verified. Clean-machine acceptance, signing,
+real microphone/hotkey coverage and production speech-quality measurements
+remain open exactly as listed in `VERIFICATION.md`.
 
 ## Release rule
 
-Do not create `v0.4.0`, publish installers, or call this production-ready until
-W2-W6 and the human signing/native/legal gates in
-`docs/CONTINUATION_PLAN_0.4.md` are complete.
+Do not call this unsigned Test RC a signed production release until the native,
+signing and clean-machine gates in `VERIFICATION.md` are complete.

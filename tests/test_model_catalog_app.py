@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_voice_studio.model_catalog import ModelCatalog
+from voice_studio.model_catalog import ModelCatalog
 
 
 def local_model(path: Path) -> Path:

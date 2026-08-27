@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from hermes_voice_studio.hotkey import (
+from voice_studio.hotkey import (
     GlobalHotkey,
     hotkey_from_tk_event,
 )

@@ -34,7 +34,7 @@ report and asks for a private channel — no details.
 ## Data boundaries
 
 - Customer-facing product name: **VOICE Studio**. The existing
-  `hermes_voice_studio` package and `hermes-voice` CLI names remain
+  `voice_studio` package and `voice-studio` CLI names remain
   compatibility interfaces; this naming does not imply a separate cloud service.
 - User original media is never deleted.
 - `delete_after_transcription` removes only the managed copy, and only when no
@@ -52,9 +52,6 @@ report and asks for a private channel — no details.
   full-disk-encryption boundary. This is not secure deletion, and no absolute
   delete-by-handle guarantee is claimed.
 - Source content carries SHA-256 provenance.
-- A training checkpoint requires an exact SHA-256 manifest for every mandatory
-  file; `latest.json` cannot reference outside its training run.
-- `.hws` verifies internal member SHA-256 values and the exact member set.
 - Model archives require HTTPS, size checks, SHA-256, safe ZIP validation and
   atomic installation. ZIP members extract to fixed names, never to arbitrary
   paths.
@@ -65,16 +62,12 @@ report and asks for a private channel — no details.
 - Native acceptance is still **NOT RUN** on physical Windows and macOS: normal
   and continuous microphone capture, overflow and device disconnect, the
   two-hour limit, close during capture or transcription, and clipboard history
-  and sync all remain unverified. The exact acceptance gate is in
-  `docs/PROJECT_AUDIT_STATUS.md`.
-- `.hws` has no publisher signature.
+  and sync all remain unverified. The exact verified and remaining scope is in
+  `VERIFICATION.md`.
 - Native installers are not signed.
 - The global hotkey depends on OS Accessibility permissions.
 - Active-app insertion is disabled.
 - There is no sandbox process isolation for the model runtime.
-- The model-release ZIP has resource limits, but `.hws` and backup archives do
-  not yet have the full set of member, count, expanded-size and
-  compression-ratio limits.
 - There is no encrypted-at-rest storage.
 - There is no structured runtime logging or audit event schema.
 
@@ -83,5 +76,4 @@ checksums and test them in a non-critical environment.
 
 The W1 controls above are documented and covered by the local headless suite,
 but their finding state is `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`; they do not
-close the broader release, diagnostics, restore/shutdown, encryption, Hermes or
-packaging gaps.
+close the broader signing, clean-machine, encryption or device-acceptance gaps.

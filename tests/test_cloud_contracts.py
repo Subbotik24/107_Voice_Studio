@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import io
 import zipfile
 from pathlib import Path
+from urllib.error import HTTPError
 
 import pytest
 
-from hermes_voice_studio.cloud_cleanup import propose_cleanup, validate_cleanup_payload
-from hermes_voice_studio.engines.openai_cloud import MAX_CLOUD_AUDIO_BYTES, OpenAICloudEngine
-from hermes_voice_studio.model_release import find_asset, unpack_verified_archive
-from hermes_voice_studio.models import Segment, Settings, Transcript
-from hermes_voice_studio.storage import LocalStore
+from voice_studio.cloud_cleanup import (
+    list_ollama_models,
+    propose_cleanup,
+    validate_cleanup_payload,
+)
+from voice_studio.engines.openai_cloud import MAX_CLOUD_AUDIO_BYTES, OpenAICloudEngine
+from voice_studio.model_release import find_asset, unpack_verified_archive
+from voice_studio.models import Segment, Settings, Transcript
+from voice_studio.ollama_local import OllamaClient
+from voice_studio.storage import LocalStore
 
 
 def _transcript() -> Transcript:
@@ -60,6 +67,79 @@ def test_cleanup_sends_corrected_text_not_raw_text() -> None:
     assert "Поточний текст" in str(captured["input"])
     assert "Незмінний оригінал" not in str(captured["input"])
     assert captured["store"] is False
+
+
+def test_ollama_cleanup_uses_a_local_model_and_structured_non_streaming_chat() -> None:
+    captured: dict[str, object] = {}
+
+    class LocalClient:
+        def chat(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return {
+                "message": {
+                    "content": (
+                        '{"corrected_text":"Виправлений текст","segments":'
+                        '[{"segment_index":0,"corrected_text":"Виправлений"}],'
+                        '"changes":["spelling"]}'
+                    )
+                }
+            }
+
+    proposal = propose_cleanup(
+        _transcript(),
+        provider="ollama",
+        model="gemma4:12b",
+        client=LocalClient(),
+    )
+
+    assert proposal.corrected_text == "Виправлений текст"
+    assert captured["model"] == "gemma4:12b"
+    assert captured["stream"] is False
+    assert captured["format"]["type"] == "object"
+    assert "Поточний текст" in str(captured["messages"])
+    assert "Незмінний оригінал" not in str(captured["messages"])
+
+
+def test_ollama_model_list_is_normalized_without_duplicates() -> None:
+    class LocalClient:
+        def list_models(self) -> object:
+            return {
+                "models": [
+                    {"name": "gemma4:12b"},
+                    {"model": "gemma4-code:latest"},
+                    {"name": "gemma4:12b"},
+                ]
+            }
+
+    assert list_ollama_models(client=LocalClient()) == [
+        "gemma4:12b",
+        "gemma4-code:latest",
+    ]
+
+
+def test_ollama_http_error_includes_bounded_server_detail(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise HTTPError(
+            "http://127.0.0.1:11434/api/chat",
+            500,
+            "Internal Server Error",
+            {},
+            io.BytesIO(b'{"error":"Failed to load local model component"}'),
+        )
+
+    monkeypatch.setattr("voice_studio.ollama_local.urlopen", fail)
+
+    with pytest.raises(RuntimeError, match="Failed to load local model component"):
+        OllamaClient().chat(model="broken-local-model")
+
+
+def test_cleanup_provider_settings_allow_local_ollama() -> None:
+    settings = Settings(cleanup_provider="ollama", ollama_model="gemma4:12b")
+
+    settings.validate()
+
+    assert settings.cleanup_provider == "ollama"
+    assert settings.ollama_model == "gemma4:12b"
 
 
 def test_cleanup_rejects_added_or_removed_segments() -> None:

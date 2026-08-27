@@ -2,15 +2,15 @@ import json
 
 import pytest
 
-from hermes_voice_studio.dictionary import DictionaryRule, TerminologyDictionary
+from voice_studio.dictionary import DictionaryRule, TerminologyDictionary
 
 
 def test_dictionary_is_deterministic_and_respects_words():
     dictionary = TerminologyDictionary(
-        [DictionaryRule(source="гермес", target="Hermes", whole_word=True)]
+        [DictionaryRule(source="войс", target="VOICE", whole_word=True)]
     )
-    assert dictionary.apply("гермес і гермесовий") == "Hermes і гермесовий"
-    assert dictionary.apply("гермес і гермесовий") == "Hermes і гермесовий"
+    assert dictionary.apply("войс і войсовий") == "VOICE і войсовий"
+    assert dictionary.apply("войс і войсовий") == "VOICE і войсовий"
     assert dictionary.version != "none"
 
 

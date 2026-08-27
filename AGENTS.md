@@ -2,10 +2,8 @@
 
 ## Обов’язковий старт
 
-1. Прочитати `README.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`, `ROADMAP.md`.
-   Для нового продуктного або release-рішення також прочитати:
-   `docs/PROGRAM_DESCRIPTION.md`, `docs/DEVELOPMENT_DESCRIPTION.md`,
-   `docs/PROJECT_AUDIT_STATUS.md` і `docs/audit/FINDINGS_REGISTER.md`.
+1. Прочитати `README.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`,
+   `ROADMAP.md`, `SECURITY.md` і `VERIFICATION.md`.
 2. Виконати:
 
 ```bash
@@ -22,25 +20,19 @@ PYTHONPATH=src pytest -q
 - `raw_text` є незмінним результатом STT. Редагування працює через `corrected_text`.
 - UI не повинен знати внутрішню архітектуру STT model.
 - Нові движки реалізують `SpeechEngine` та повертають `EngineResult`.
-- Не заявляти точність Hermes без навчених ваг, закритого test set і виміряних WER/CER.
-- `.hws` SHA‑256 — перевірка цілісності, не підпис видавця.
+- Не заявляти точність розпізнавання без закритого test set і виміряних WER/CER.
+- SHA‑256 для моделей — перевірка цілісності, не підпис видавця.
 - Будь-яка зміна retention/storage повинна мати test на те, що user original не видаляється.
 - Будь-яка зміна bundle format повинна зберігати versioning і regression tests.
 
 ## Пріоритет
 
-Працювати за P0 у `ROADMAP.md`. Desktop release на `faster-whisper` і навчання Hermes — два окремі треки. Не блокувати перший другим.
+Працювати за P0 у `ROADMAP.md`. VOICE Studio є самостійним desktop-продуктом на `faster-whisper` з явним opt-in cloud adapter.
 
 ## Audit і зміни продукту
 
-- Канонічний improvement backlog: `docs/PROJECT_IMPROVEMENT_ROADMAP.md`.
-- Security model: `docs/audit/107_Voice_Studio-threat-model.md`.
-- Engineering formulas: `docs/ENGINEERING_CALCULATION_REGISTER.md`.
-- Повторний deep audit: `docs/DEEP_AUDIT_EXECUTION_PROMPT.md`.
-- Матеріальний product change проходить
-  `AUDIT -> DESIGN -> USER APPROVAL -> IMPLEMENTATION -> VERIFICATION`.
-- Audit finding або documentation update сам по собі не дає дозволу змінювати
-  source, tests, dependencies, config, CI чи packaging.
+- Матеріальний product change проходить аналіз, regression tests і verification.
+- Review finding перевіряється за кодом і тестами перед виправленням.
 
 ## Definition of done для кожного increment
 

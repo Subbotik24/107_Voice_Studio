@@ -5,7 +5,7 @@ import pytest
 
 def _operation_module():
     try:
-        return importlib.import_module("hermes_voice_studio.operation")
+        return importlib.import_module("voice_studio.operation")
     except ModuleNotFoundError as exc:
         pytest.fail(f"operation budget contract is missing: {exc}")
 
@@ -30,7 +30,7 @@ def test_explicit_cancellation_wins_over_an_expired_deadline(monkeypatch):
     budget = operation.OperationBudget(1.0, cancelled=lambda: True)
     now[0] = 200.0
 
-    from hermes_voice_studio.jobs import JobCancelled
+    from voice_studio.jobs import JobCancelled
 
     with pytest.raises(JobCancelled, match="prepare"):
         budget.checkpoint("prepare")

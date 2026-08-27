@@ -2,14 +2,14 @@ import json
 
 import pytest
 
-from hermes_voice_studio.config import (
+from voice_studio.config import (
     cache_dir,
     config_dir,
     data_dir,
     load_settings,
     save_settings,
 )
-from hermes_voice_studio.models import Settings
+from voice_studio.models import Settings
 
 
 def test_settings_round_trip(tmp_path):
@@ -19,9 +19,9 @@ def test_settings_round_trip(tmp_path):
     assert load_settings(path) == settings
 
 
-def test_hermes_rejects_english():
-    with pytest.raises(ValueError, match="supports only"):
-        Settings(engine="hermes-whisper", language="en").validate()
+def test_unknown_engine_is_rejected():
+    with pytest.raises(ValueError, match="unsupported engine"):
+        Settings(engine="retired-engine").validate()
 
 
 def test_settings_reject_non_object(tmp_path):
@@ -104,9 +104,9 @@ def test_application_directories_can_be_isolated_with_environment(monkeypatch, t
     config = tmp_path / "config"
     data = tmp_path / "data"
     cache = tmp_path / "cache"
-    monkeypatch.setenv("HVS_CONFIG_DIR", str(config))
-    monkeypatch.setenv("HVS_DATA_DIR", str(data))
-    monkeypatch.setenv("HVS_CACHE_DIR", str(cache))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(config))
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(cache))
 
     assert config_dir() == config
     assert data_dir() == data
