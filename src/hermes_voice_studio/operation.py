@@ -51,6 +51,19 @@ PartialCleanupError = OwnedPartialCleanupError
 OperationCancelled = JobCancelled
 
 
+def _monotonic() -> float:
+    """Clock seam for the budget.
+
+    Tests substitute a virtual clock here instead of replacing
+    ``time.monotonic`` itself. Replacing the stdlib clock is process-global, and
+    POSIX ``multiprocessing`` timed waits recompute their remaining timeout from
+    it on every loop: against a frozen clock that remainder never shrinks, so
+    the worker poll in ``jobs.run`` spins forever instead of raising ``Empty``.
+    """
+
+    return time.monotonic()
+
+
 class OperationBudget:
     """One monotonic deadline shared by every phase of an operation."""
 
@@ -62,7 +75,7 @@ class OperationBudget:
         self._deadline = (
             float("inf")
             if timeout_seconds is None
-            else time.monotonic() + float(timeout_seconds)
+            else _monotonic() + float(timeout_seconds)
         )
         self._cancelled = cancelled or (lambda: False)
 
@@ -75,7 +88,7 @@ class OperationBudget:
 
         if self._cancelled():
             raise JobCancelled(f"operation cancelled during {phase}")
-        if time.monotonic() >= self._deadline:
+        if _monotonic() >= self._deadline:
             raise OperationTimeout(f"operation timed out during {phase}")
 
     def remaining(self, phase: str, ceiling: float | None = None) -> float:
@@ -83,7 +96,7 @@ class OperationBudget:
 
         if self._cancelled():
             raise JobCancelled(f"operation cancelled during {phase}")
-        now = time.monotonic()
+        now = _monotonic()
         if now >= self._deadline:
             raise OperationTimeout(f"operation timed out during {phase}")
         remaining = self._deadline - now

@@ -402,7 +402,7 @@ def test_import_source_timeout_after_a_chunk_cleans_owned_partial_only(tmp_path,
         calls += 1
         return 20.0 if calls == 5 else float(calls)
 
-    monkeypatch.setattr(operation.time, "monotonic", monotonic)
+    monkeypatch.setattr(operation, "_monotonic", monotonic)
     with pytest.raises(TimeoutError, match="import"):
         store.import_source(source, budget=OperationBudget(10))
 

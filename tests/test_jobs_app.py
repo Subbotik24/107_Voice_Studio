@@ -169,7 +169,7 @@ def test_prepare_consumed_deadline_is_not_reset_for_inference(tmp_path, make_wav
 
     source = make_wav(tmp_path / "original.wav")
     clock = [0.0]
-    monkeypatch.setattr(operation.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(operation, "_monotonic", lambda: clock[0])
     original_remaining = operation.OperationBudget.remaining
 
     def consume_remaining(self, phase, ceiling=None):
