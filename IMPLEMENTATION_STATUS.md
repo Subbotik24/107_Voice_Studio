@@ -18,6 +18,7 @@ release. The canonical continuation instructions are in
 | W2-M1 cancellable managed import | PASS | one monotonic budget, one-pass copy/hash, unique immutable managed targets, bounded collision retry |
 | W2-M1 save/cleanup serialization | PASS | SQLite `BEGIN IMMEDIATE` prevents committed records from referencing concurrently removed managed audio |
 | W2-A1 generic ZIP safety primitives | PASS | bounded EOCD/ZIP64 preflight, portable member identities, hierarchy trie, bounded copy/free-space primitives |
+| W2-M2 disposable media containment | PASS headless | PyAV runs in a disposable spawn child with a deadline, never in the parent; ffmpeg runs in its own process group and its descendants are killed with it; 2 GiB source, 7,200 s duration and 230,404,096-byte output ceilings enforced and wired |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
 | Integrated tests | PASS | `273 passed, 2 skipped, 5 subtests passed` on Linux/CPython 3.12 |
@@ -35,7 +36,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
 ## Not implemented yet
 
-- disposable contained PyAV/FFmpeg media worker and process-tree termination;
 - `.hws` and backup consumers wired to the generic archive limits;
 - `cryptography` dependency and encrypted backup v2;
 - journaled restore/startup recovery;
