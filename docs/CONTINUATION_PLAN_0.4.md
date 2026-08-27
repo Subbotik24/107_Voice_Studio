@@ -80,9 +80,10 @@ Evidence at that checkpoint:
 
 ## Next implementation sequence
 
-Create one `codex/voice-*` branch/worktree per increment. Luna writes tracked
-implementation changes through RED -> GREEN. Sol supplies the ticket, reviews
-the exact range, integrates and reruns the exact merged tree.
+Work trunk-based: every increment is committed directly to `main`. Feature
+branches and linked worktrees are not used. Each increment is still one
+reviewable commit range written through RED -> GREEN, with the exact range
+reviewed and the merged tree rerun before the next increment starts.
 
 ### 1. W2-M2 — disposable media containment
 
