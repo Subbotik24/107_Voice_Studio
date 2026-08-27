@@ -40,6 +40,7 @@ train = [
 ]
 dev = [
   "pytest>=9.0.3,<10",
+  "pytest-timeout>=2.3,<3",
   "ruff>=0.8,<1",
 ]
 cloud = [
@@ -70,6 +71,14 @@ hermes_voice_studio = ["resources/*.json", "resources/*.txt"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# A hung test must fail the run, not stall it. The whole suite completes in
+# seconds, so any test still running after two minutes is wedged. Without this
+# a wedged test blocks until the CI job hits its six-hour ceiling and reports
+# as cancelled rather than failed.
+timeout = 120
+# Always summarise skips, so a test that stops running is visible instead of
+# silently absent.
+addopts = "-rs"
 
 [tool.ruff]
 line-length = 100
