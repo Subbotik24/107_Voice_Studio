@@ -91,6 +91,7 @@ Confirmed three ways:
 | [32361319763](https://github.com/Subbotik24/107_Voice_Studio/actions/runs/32361319763) | `7a72465` (before the fix wave) | success, ~85 s | success |
 | [32738101530](https://github.com/Subbotik24/107_Voice_Studio/actions/runs/32738101530) | `2969f60` | cancelled after ~6 h | success |
 | [32847177856](https://github.com/Subbotik24/107_Voice_Studio/actions/runs/32847177856) | `65d885e` (assessed HEAD) | cancelled after ~6 h | success, 14 s |
+| [33077281582](https://github.com/Subbotik24/107_Voice_Studio/actions/runs/33077281582) | `1d417d4` (after the fix below) | success; `pytest` step 4 s and 6 s | success |
 
 In run `32847177856` the `pytest` step ran from `12:22:14Z` to `18:22:28Z` on
 both macOS jobs; `build`, `pip check`, and `pip_audit` were then skipped. The
@@ -117,7 +118,12 @@ budget's semantics are unchanged. `tests/test_operation_app.py::test_budget_cloc
 pins the invariant and records why it exists.
 
 Before: the suite did not terminate (killed at 600 s locally; 6 h in CI).
-After: `273 passed, 2 skipped, 5 subtests passed in 4.25s`.
+After: `273 passed, 2 skipped, 5 subtests passed in 4.25s` locally, and CI run
+[33077281582](https://github.com/Subbotik24/107_Voice_Studio/actions/runs/33077281582)
+is green on both macOS jobs with the `pytest` step completing in 4 s and 6 s —
+the platform and step that previously hit the six-hour ceiling. `build`,
+`pip check`, and `pip-audit` run again on macOS for the first time since
+2026-08-24.
 
 ## Verdict summary
 
