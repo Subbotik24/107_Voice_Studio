@@ -1,0 +1,12 @@
+# Every change requires review from the repository owner.
+# Enforced only once branch protection requires Code Owner review; on its own
+# this file just requests the review automatically.
+* @Subbotik24
+
+# Surfaces where an unreviewed change is most costly.
+/.github/workflows/   @Subbotik24
+/scripts/             @Subbotik24
+/packaging/           @Subbotik24
+/SECURITY.md          @Subbotik24
+/docs/audit/          @Subbotik24
+/docs/release/        @Subbotik24
