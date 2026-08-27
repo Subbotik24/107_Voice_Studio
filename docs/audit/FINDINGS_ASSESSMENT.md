@@ -612,6 +612,24 @@ These do not change any verdict, but they cost a reader time.
    removed with migration, fix one line of `WINDOWS_BUILD_README.md`, retire
    `build_mac.sh`.
 
+## Changes since this assessment
+
+Recorded here so the verdicts above stay readable as of `65d885e0` while the
+tree moves on.
+
+| Finding | Change | Evidence |
+|---|---|---|
+| QA-003 | **Closed.** Clock seam plus a 120 s per-test timeout; a wedged test now fails in minutes instead of running to the CI ceiling. | `pytest-timeout` in the `dev` extra and `[tool.pytest.ini_options]`; reproduction of the original shape fails at `selectors.py:415` |
+| QA-002 | **Partially closed.** CI now compiles and lints `src tests scripts packaging`, matching `scripts/quality_gate.sh`; `scripts/` and `packaging/` were previously unlinted in CI. GUI-contract tests split into one behavioural test and three declared-only tripwires with the boundary stated. Coverage and type gates remain open. | `.github/workflows/{ci,release}.yml`; `tests/test_gui_contract_app.py` |
+| OPS-001 | **Partially closed.** `SECURITY.md` points at GitHub private vulnerability reporting instead of asking reporters to withhold findings until a contact exists. Structured logging and the audit event schema remain open. | `SECURITY.md` |
+| DOC-001 | **Closed.** The two concatenated documents in `SECURITY.md` merged into one, with the duplicated defaults sections deduplicated. | `SECURITY.md` |
+| CI-001 | **Repository half extended.** `.github/CODEOWNERS` added. Branch protection, release environments and signing remain external and `NOT_RUN`. | `.github/CODEOWNERS` |
+| MNT-001 | **Closed.** `normalized_output_dir`, `Settings.output_dir` and `Settings.insert_to_active_app` removed with a regression test for older settings files; `WINDOWS_BUILD_README.md` corrected; stale `scripts/build_mac.sh` deleted. | `src/hermes_voice_studio/models.py`, `tests/test_config_app.py` |
+| QA-001 | **Archived, not closed.** Archived together with the Hermes track: the engine is gated out of the shipped build, so a Hermes CI lane would prove something the release does not ship. The two `tests/test_model.py` cases stay skipped and are now named in every run via `-rs`. Reopens as one unit with the ENG findings. | `[tool.pytest.ini_options] addopts = "-rs"` |
+
+Development is trunk-based: increments land directly on `main`, and
+`docs/CONTINUATION_PLAN_0.4.md` no longer instructs one branch per increment.
+
 ## Non-claims
 
 No native run was performed on Windows or macOS. No physical microphone,

@@ -18,8 +18,9 @@ release. The canonical continuation instructions are in
 | W2-M1 cancellable managed import | PASS | one monotonic budget, one-pass copy/hash, unique immutable managed targets, bounded collision retry |
 | W2-M1 save/cleanup serialization | PASS | SQLite `BEGIN IMMEDIATE` prevents committed records from referencing concurrently removed managed audio |
 | W2-A1 generic ZIP safety primitives | PASS | bounded EOCD/ZIP64 preflight, portable member identities, hierarchy trie, bounded copy/free-space primitives |
+| W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
-| Integrated tests | PASS | `272 passed, 2 skipped, 5 subtests passed` at code checkpoint `c5462a9` |
+| Integrated tests | PASS | `273 passed, 2 skipped, 5 subtests passed` on Linux/CPython 3.12 |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
 
 ## Implemented but pending native acceptance
