@@ -77,6 +77,29 @@ def test_settings_ignores_unknown_and_classvar_keys():
     assert settings == Settings()
 
 
+def test_settings_from_a_release_that_still_had_the_removed_fields_still_loads():
+    """A settings file written before output_dir/insert_to_active_app were removed.
+
+    Both were serialised into every user's settings.json and type-validated on
+    load, so an existing file still carries them. Dropping the fields must not
+    make that file unloadable, and must not resurrect them on the object.
+    """
+
+    settings = Settings.from_dict(
+        {
+            "language": "cs",
+            "output_dir": "/some/old/export/path",
+            "insert_to_active_app": True,
+        }
+    )
+
+    assert settings.language == "cs"
+    assert not hasattr(settings, "output_dir")
+    assert not hasattr(settings, "insert_to_active_app")
+    assert "output_dir" not in settings.to_dict()
+    assert "insert_to_active_app" not in settings.to_dict()
+
+
 def test_application_directories_can_be_isolated_with_environment(monkeypatch, tmp_path):
     config = tmp_path / "config"
     data = tmp_path / "data"

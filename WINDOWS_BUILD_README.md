@@ -11,7 +11,7 @@
 4. Скрипт створить ізольоване `.venv-windows-build`, виконає lint/tests,
    збере `.exe`, перевірить frozen runtime і короткий запуск GUI.
 5. Готовий результат буде у
-   `dist\0.2.0-test-rc2-windows-x64\`.
+   `dist\0.3.0-test-rc1-windows-x64\`.
 
 `run_windows.bat` запускає програму без попереднього створення `.exe`.
 FFmpeg опційний для базового запуску та потрібен для Hermes‑конвертації

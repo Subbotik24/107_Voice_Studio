@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, ClassVar
 
 SUPPORTED_LANGUAGES = ("auto", "uk", "cs", "en")
@@ -90,7 +89,6 @@ class Settings:
         "compute_type",
         "hotkey",
         "retention",
-        "output_dir",
         "dictionary_path",
         "cloud_provider",
         "openai_transcription_model",
@@ -98,7 +96,6 @@ class Settings:
     )
     BOOLEAN_FIELDS: ClassVar[tuple[str, ...]] = (
         "auto_copy",
-        "insert_to_active_app",
         "offline_only",
     )
 
@@ -110,10 +107,8 @@ class Settings:
     compute_type: str = "default"
     hotkey: str = "<f13>"
     retention: str = "keep"
-    output_dir: str = ""
     dictionary_path: str = ""
     auto_copy: bool = False
-    insert_to_active_app: bool = False
     offline_only: bool = False
     task_timeout_seconds: int = 7_200
     cloud_provider: str = "openai"
@@ -156,9 +151,6 @@ class Settings:
             raise ValueError("OpenAI model identifiers cannot be empty")
         if self.offline_only and self.engine == "openai-cloud":
             raise ValueError("offline_only blocks the OpenAI cloud engine")
-
-    def normalized_output_dir(self, fallback: Path) -> Path:
-        return Path(self.output_dir).expanduser() if self.output_dir else fallback
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
