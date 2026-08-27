@@ -175,7 +175,7 @@ def test_validation_after_import_cleans_only_unreferenced_managed_snapshot(
     unrelated.write_bytes(b"keep")
     validated = []
 
-    def reject_managed(path):
+    def reject_managed(path, **_kwargs):
         validated.append(path)
         if path.parent.resolve() == store.sources.resolve():
             raise ValueError("validation failed")

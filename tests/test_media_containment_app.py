@@ -298,3 +298,85 @@ def test_converter_diagnostics_are_truncated_not_held_whole(tmp_path):
 
     assert len(detail) <= media_module.MAX_CONVERTER_STDERR_BYTES
     assert media_module._converter_detail(tmp_path / "missing") == "unknown converter error"
+
+
+# --- wiring: the ceilings must actually reach the code that enforces them ----
+
+
+def test_prepare_gives_the_probe_no_more_time_than_the_operation_has_left(tmp_path, monkeypatch):
+    """The probe's own ceiling must not outlive the job's deadline."""
+
+    from hermes_voice_studio import service as service_module
+    from hermes_voice_studio.operation import OperationBudget
+    from hermes_voice_studio.storage import LocalStore
+
+    seen: list[float] = []
+    monkeypatch.setattr(
+        service_module,
+        "validate_media_file",
+        lambda _path, *, timeout: seen.append(timeout),
+    )
+    source = _wav(tmp_path / "budgeted.wav")
+    store = LocalStore(tmp_path / "data")
+
+    service_module.TranscriptionService(store, None).prepare(
+        source, "keep", OperationBudget(2.0)
+    )
+
+    assert seen and seen[0] <= 2.0, f"probe timeout {seen} exceeded the remaining budget"
+
+
+def test_prepare_refuses_once_the_budget_is_already_spent(tmp_path, monkeypatch):
+    from hermes_voice_studio import operation as operation_module
+    from hermes_voice_studio import service as service_module
+    from hermes_voice_studio.operation import OperationBudget
+    from hermes_voice_studio.storage import LocalStore
+
+    monkeypatch.setattr(
+        service_module, "validate_media_file", lambda *a, **k: pytest.fail("probe must not run")
+    )
+    clock = [0.0]
+    monkeypatch.setattr(operation_module, "_monotonic", lambda: clock[0])
+    budget = OperationBudget(1.0)
+    source = _wav(tmp_path / "spent.wav")
+    store = LocalStore(tmp_path / "data")
+    clock[0] = 5.0
+
+    with pytest.raises(TimeoutError):
+        service_module.TranscriptionService(store, None).prepare(source, "keep", budget)
+
+
+def test_the_job_controller_supplies_the_source_byte_ceiling(tmp_path, monkeypatch):
+    """REL-002 residue: service.prepare accepted max_bytes but jobs never passed one."""
+
+    from hermes_voice_studio import jobs as jobs_module
+
+    seen: dict[str, object] = {}
+
+    class _Recording:
+        def prepare(self, source, retention, budget=None, *, max_bytes=None):
+            seen["max_bytes"] = max_bytes
+            raise RuntimeError("stop here")
+
+        def cleanup(self, prepared):  # pragma: no cover - not reached
+            return None
+
+    monkeypatch.setattr(jobs_module, "TranscriptionService", lambda *a, **k: _Recording())
+    controller = jobs_module.TranscriptionJobController(object(), tmp_path / "cache")
+
+    with pytest.raises(RuntimeError, match="stop here"):
+        controller.run(_wav(tmp_path / "big.wav"), _settings(), _dictionary())
+
+    assert seen["max_bytes"] == media_module.MAX_SOURCE_BYTES
+
+
+def _settings():
+    from hermes_voice_studio.models import Settings
+
+    return Settings(model="fixture")
+
+
+def _dictionary():
+    from hermes_voice_studio.dictionary import TerminologyDictionary
+
+    return TerminologyDictionary()

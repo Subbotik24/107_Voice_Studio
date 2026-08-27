@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .dictionary import TerminologyDictionary
+from .media import MAX_SOURCE_BYTES
 from .models import Settings, Transcript
 from .operation import JobCancelled, OperationBudget
 from .service import TranscriptionService
@@ -123,7 +124,15 @@ class TranscriptionJobController:
         prepared = None
         try:
             report("importing")
-            prepared = service.prepare(source, settings.retention, budget)
+            # The byte ceiling has to be supplied here: import_source enforces it
+            # while streaming, so an oversized source is refused during the copy
+            # rather than after the disk has already taken it.
+            prepared = service.prepare(
+                source,
+                settings.retention,
+                budget,
+                max_bytes=MAX_SOURCE_BYTES,
+            )
             job_id = uuid.uuid4().hex
             budget.checkpoint("loading")
             self._ensure_worker()

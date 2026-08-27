@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .dictionary import TerminologyDictionary
 from .engines.base import EngineResult, SpeechEngine
-from .media import validate_media_file
+from .media import PROBE_TIMEOUT_SECONDS, validate_media_file
 from .models import Segment, Transcript, utc_now
 from .operation import OperationBudget
 from .storage import LocalStore
@@ -61,9 +61,13 @@ class TranscriptionService:
                 source_hash,
                 self.store.source_ownership_token(retained_source),
             )
+            # The probe carries its own ceiling, but it must not outlive the
+            # operation's deadline either: remaining() raises on cancellation or
+            # expiry, and otherwise hands the probe whatever time is left.
+            probe_timeout = PROBE_TIMEOUT_SECONDS
             if budget is not None:
-                budget.checkpoint("prepare")
-            validate_media_file(prepared.managed)
+                probe_timeout = budget.remaining("prepare", ceiling=PROBE_TIMEOUT_SECONDS)
+            validate_media_file(prepared.managed, timeout=probe_timeout)
             if budget is not None:
                 budget.checkpoint("prepare")
             return prepared
