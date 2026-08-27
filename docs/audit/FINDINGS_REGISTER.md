@@ -1,5 +1,10 @@
 # Findings register — VOICE Studio
 
+> Re-verified on 2026-08-27 against `65d885e0`. Current verdicts, corrected
+> severities, stale-citation notes and one new P1 (`QA-003`) are in
+> [`FINDINGS_ASSESSMENT.md`](FINDINGS_ASSESSMENT.md). This register keeps its
+> original baseline record; the assessment does not overwrite it.
+
 Integrated W1 evidence baseline: `672577ef63d6107b7f7a78910574924dc9f2775f`;
 original audit baseline: `main@fffa50b6bc26fa2e7fa2150f2260ae873a5cf511`.
 `P0` confirmed: **none**. Customer-facing brand is **VOICE Studio**; existing
