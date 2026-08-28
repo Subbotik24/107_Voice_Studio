@@ -4,6 +4,7 @@ __all__ = [
     "EngineManager",
     "EngineResult",
     "FasterWhisperEngine",
+    "OllamaAudioEngine",
     "SpeechEngine",
 ]
 
@@ -19,4 +20,8 @@ def __getattr__(name: str):
         from .faster_whisper import FasterWhisperEngine
 
         return FasterWhisperEngine
+    if name == "OllamaAudioEngine":
+        from .ollama_audio import OllamaAudioEngine
+
+        return OllamaAudioEngine
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

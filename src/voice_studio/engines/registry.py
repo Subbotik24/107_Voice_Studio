@@ -7,6 +7,7 @@ from ..model_catalog import ModelCatalog
 from ..models import Settings
 from .base import SpeechEngine
 from .faster_whisper import FasterWhisperEngine
+from .ollama_audio import OllamaAudioEngine
 from .openai_cloud import OpenAICloudEngine
 
 
@@ -17,6 +18,7 @@ class EngineKey:
     device: str
     compute_type: str
     cloud_model: str
+    ollama_model: str
 
 
 class EngineManager:
@@ -35,11 +37,14 @@ class EngineManager:
             device=settings.device,
             compute_type=settings.compute_type,
             cloud_model=settings.openai_transcription_model,
+            ollama_model=settings.ollama_model,
         )
         engine = self._engines.get(key)
         if engine is not None:
             return engine
-        if settings.engine == "faster-whisper":
+        if settings.engine == "ollama":
+            engine = OllamaAudioEngine(settings.ollama_model)
+        elif settings.engine == "faster-whisper":
             model_path = self.model_catalog.resolve(settings.model)
             engine = FasterWhisperEngine(
                 str(model_path),

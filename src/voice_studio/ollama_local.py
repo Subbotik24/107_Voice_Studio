@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -8,6 +9,7 @@ from urllib.request import Request, urlopen
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 MAX_OLLAMA_RESPONSE_BYTES = 16 * 1024**2
 MAX_OLLAMA_ERROR_BYTES = 4 * 1024
+MAX_OLLAMA_WAV_BYTES = 64 * 1024**2
 
 
 class OllamaClient:
@@ -66,6 +68,56 @@ class OllamaClient:
 
     def list_models(self) -> dict[str, Any]:
         return self._request("/api/tags", timeout=3.0)
+
+    def show_model(self, model: str) -> dict[str, Any]:
+        model_name = model.strip()
+        if not model_name:
+            raise ValueError("Ollama model cannot be empty")
+        return self._request("/api/show", payload={"model": model_name}, timeout=10.0)
+
+    def audio_chat(self, model: str, wav_bytes: bytes, prompt: str) -> str:
+        model_name = model.strip()
+        if not model_name:
+            raise ValueError("Ollama model cannot be empty")
+        if not wav_bytes or len(wav_bytes) > MAX_OLLAMA_WAV_BYTES:
+            raise ValueError(
+                f"Ollama WAV input must be between 1 and {MAX_OLLAMA_WAV_BYTES} bytes"
+            )
+        result = self._request(
+            "/v1/chat/completions",
+            payload={
+                "model": model_name,
+                "temperature": 0,
+                "max_tokens": 8192,
+                "think": False,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": base64.b64encode(wav_bytes).decode("ascii"),
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    }
+                ],
+            },
+            timeout=240.0,
+        )
+        choices = result.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise RuntimeError("Ollama returned an empty transcription")
+        message = choices[0].get("message")
+        if not isinstance(message, dict):
+            raise RuntimeError("Ollama returned an empty transcription")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            raise RuntimeError("Ollama returned an empty transcription")
+        return content.strip()
 
     def chat(self, **payload: object) -> dict[str, Any]:
         return self._request("/api/chat", payload=dict(payload), timeout=240.0)
