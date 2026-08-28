@@ -50,6 +50,181 @@ def idle_worker(requests: Any, _results: Any, _cache: str, _models: str) -> None
     requests.get()
 
 
+def cleanup_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
+    while True:
+        request = requests.get()
+        if request is None:
+            return
+        if request.get("action") == "cleanup":
+            results.put(
+                {
+                    "job_id": request["job_id"],
+                    "ok": True,
+                    "proposal": {
+                        "corrected_text": "Cleaned local result.",
+                        "segments": [
+                            {"segment_index": 0, "corrected_text": "Cleaned local result."}
+                        ],
+                        "changes": ["punctuation"],
+                    },
+                }
+            )
+            continue
+        results.put(
+            {
+                "job_id": request["job_id"],
+                "ok": True,
+                "result": EngineResult(
+                    engine="ollama",
+                    model="gemma4:12b",
+                    language=request["language"],
+                    segments=[Segment(0, 1, "raw local result")],
+                    audio_seconds=1,
+                    elapsed_seconds=0.1,
+                ),
+            }
+        )
+
+
+def failing_cleanup_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
+    while True:
+        request = requests.get()
+        if request is None:
+            return
+        if request.get("action") == "cleanup":
+            results.put(
+                {
+                    "job_id": request["job_id"],
+                    "ok": False,
+                    "error": "RuntimeError: Ollama cleanup failed locally",
+                }
+            )
+            continue
+        results.put(
+            {
+                "job_id": request["job_id"],
+                "ok": True,
+                "result": EngineResult(
+                    engine="ollama",
+                    model="gemma4:12b",
+                    language=request["language"],
+                    segments=[Segment(0, 1, "raw local result")],
+                    audio_seconds=1,
+                    elapsed_seconds=0.1,
+                ),
+            }
+        )
+
+
+def hanging_cleanup_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
+    request = requests.get()
+    results.put(
+        {
+            "job_id": request["job_id"],
+            "ok": True,
+            "result": EngineResult(
+                engine="ollama",
+                model="gemma4:12b",
+                language=request["language"],
+                segments=[Segment(0, 1, "raw local result")],
+                audio_seconds=1,
+                elapsed_seconds=0.1,
+            ),
+        }
+    )
+    requests.get()
+    time.sleep(30)
+
+
+def test_local_ollama_profile_applies_cleanup_without_mutating_raw_text(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=cleanup_worker,
+    )
+    phases: list[str] = []
+    try:
+        transcript = controller.run(
+            source,
+            Settings(ollama_model="gemma4:12b"),
+            TerminologyDictionary(),
+            progress=lambda phase, _elapsed: phases.append(phase),
+        )
+    finally:
+        controller.close()
+
+    assert transcript.raw_text == "raw local result"
+    assert transcript.segments[0].text == "raw local result"
+    assert transcript.corrected_text == "Cleaned local result."
+    assert transcript.segments[0].corrected_text == "Cleaned local result."
+    assert transcript.metadata["automatic_cleanup"] == "applied"
+    assert phases == [
+        "importing",
+        "loading",
+        "transcribing",
+        "saving",
+        "cleaning",
+        "completed",
+    ]
+
+
+def test_local_cleanup_failure_keeps_the_saved_transcript(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=failing_cleanup_worker,
+    )
+    try:
+        transcript = controller.run(
+            source,
+            Settings(ollama_model="gemma4:12b"),
+            TerminologyDictionary(),
+        )
+    finally:
+        controller.close()
+
+    assert transcript.raw_text == "raw local result"
+    assert transcript.corrected_text == "raw local result"
+    assert transcript.metadata["automatic_cleanup"] == "failed"
+    assert transcript.metadata["cleanup_warning"] == (
+        "RuntimeError: Ollama cleanup failed locally"
+    )
+    assert store.get(transcript.id).raw_text == "raw local result"
+
+
+def test_cancelling_local_cleanup_terminates_worker_but_returns_raw_transcript(
+    tmp_path,
+    make_wav,
+):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=hanging_cleanup_worker,
+    )
+    phase = [""]
+    try:
+        transcript = controller.run(
+            source,
+            Settings(ollama_model="gemma4:12b"),
+            TerminologyDictionary(),
+            progress=lambda current, _elapsed: phase.__setitem__(0, current),
+            cancelled=lambda: phase[0] == "cleaning",
+        )
+        assert controller._process is None
+    finally:
+        controller.close()
+
+    assert transcript.raw_text == "raw local result"
+    assert transcript.metadata["automatic_cleanup"] == "cancelled"
+    assert store.get(transcript.id).raw_text == "raw local result"
+
+
 def test_spawn_worker_is_reused_for_completed_jobs(tmp_path, make_wav):
     source = make_wav(tmp_path / "original.wav")
     store = LocalStore(tmp_path / "data")

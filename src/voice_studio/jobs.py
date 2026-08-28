@@ -34,6 +34,29 @@ def _engine_worker(
         job_id = request["job_id"]
         try:
             settings = Settings.from_dict(request["settings"])
+            if request.get("action") == "cleanup":
+                from .cloud_cleanup import propose_cleanup
+
+                transcript = Transcript.from_dict(request["transcript"])
+                provider = settings.cleanup_provider
+                model = (
+                    settings.ollama_model
+                    if provider == "ollama"
+                    else settings.openai_cleanup_model
+                )
+                proposal = propose_cleanup(
+                    transcript,
+                    provider=provider,
+                    model=model,
+                )
+                results.put(
+                    {
+                        "job_id": job_id,
+                        "ok": True,
+                        "proposal": proposal.to_dict(),
+                    }
+                )
+                continue
             engine = manager.get(settings)
             result = engine.transcribe(Path(request["source"]), request["language"])
             results.put({"job_id": job_id, "ok": True, "result": result})
@@ -102,6 +125,40 @@ class TranscriptionJobController:
             self._process.join(timeout=3)
         self._terminate_worker()
 
+    def _wait_for_result(
+        self,
+        job_id: str,
+        budget: OperationBudget,
+        phase: str,
+    ) -> dict[str, Any]:
+        while True:
+            wait_seconds = budget.remaining(phase, ceiling=0.1)
+            if self._process is None or not self._process.is_alive():
+                exit_code = self._process.exitcode if self._process is not None else "unknown"
+                self._terminate_worker()
+                raise RuntimeError(f"transcription worker stopped unexpectedly: {exit_code}")
+            try:
+                response = self._results.get(timeout=wait_seconds)
+            except queue.Empty:
+                continue
+            if response.get("job_id") == job_id:
+                return response
+
+    def _record_cleanup_outcome(
+        self,
+        transcript: Transcript,
+        outcome: str,
+        warning: str = "",
+    ) -> Transcript:
+        metadata = {**transcript.metadata, "automatic_cleanup": outcome}
+        if warning:
+            metadata["cleanup_warning"] = warning[:500]
+        else:
+            metadata.pop("cleanup_warning", None)
+        transcript.metadata = metadata
+        self.store.save(transcript)
+        return transcript
+
     def run(
         self,
         source: Path,
@@ -147,30 +204,64 @@ class TranscriptionJobController:
                 }
             )
             report("transcribing")
-            while True:
-                wait_seconds = budget.remaining("inference", ceiling=0.1)
-                if self._process is None or not self._process.is_alive():
-                    exit_code = self._process.exitcode if self._process is not None else "unknown"
-                    self._terminate_worker()
-                    raise RuntimeError(f"transcription worker stopped unexpectedly: {exit_code}")
-                try:
-                    response = self._results.get(timeout=wait_seconds)
-                except queue.Empty:
-                    continue
-                if response.get("job_id") != job_id:
-                    continue
-                if not response["ok"]:
-                    raise RuntimeError(response["error"])
-                report("saving")
-                transcript = service.finalize(
-                    prepared,
-                    response["result"],
-                    settings.language,
-                    settings.retention,
-                    budget=budget,
+            response = self._wait_for_result(job_id, budget, "inference")
+            if not response["ok"]:
+                raise RuntimeError(response["error"])
+            report("saving")
+            transcript = service.finalize(
+                prepared,
+                response["result"],
+                settings.language,
+                settings.retention,
+                budget=budget,
+            )
+            if settings.automatic_cleanup and transcript.engine == "ollama":
+                report("cleaning")
+                cleanup_job_id = uuid.uuid4().hex
+                self._requests.put(
+                    {
+                        "action": "cleanup",
+                        "job_id": cleanup_job_id,
+                        "settings": settings.to_dict(),
+                        "transcript": transcript.to_dict(),
+                    }
                 )
-                report("completed")
-                return transcript
+                try:
+                    cleanup_response = self._wait_for_result(
+                        cleanup_job_id,
+                        budget,
+                        "cleaning",
+                    )
+                except (JobCancelled, TimeoutError) as exc:
+                    self._terminate_worker()
+                    transcript = self._record_cleanup_outcome(
+                        transcript,
+                        "cancelled",
+                        str(exc),
+                    )
+                except Exception as exc:
+                    transcript = self._record_cleanup_outcome(
+                        transcript,
+                        "failed",
+                        str(exc),
+                    )
+                else:
+                    if cleanup_response["ok"]:
+                        transcript = self.store.apply_ai_cleanup(
+                            transcript.id,
+                            cleanup_response["proposal"],
+                            provider=settings.cleanup_provider,
+                            model=settings.ollama_model,
+                        )
+                        transcript = self._record_cleanup_outcome(transcript, "applied")
+                    else:
+                        transcript = self._record_cleanup_outcome(
+                            transcript,
+                            "failed",
+                            str(cleanup_response["error"]),
+                        )
+            report("completed")
+            return transcript
         except BaseException as exc:
             if isinstance(exc, (JobCancelled, TimeoutError)):
                 self._terminate_worker()
