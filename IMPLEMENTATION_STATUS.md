@@ -37,7 +37,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
 ## Not implemented yet
 
-- backup consumers wired to the generic archive limits;
 - `cryptography` dependency and encrypted backup v2;
 - journaled restore/startup recovery;
 - coordinated shutdown and multiprocessing queue disposal;

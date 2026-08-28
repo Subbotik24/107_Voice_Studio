@@ -18,6 +18,7 @@ runs/
 *.sqlite
 *.sqlite3
 *.db
+*.voice-backup
 *.wav
 *.mp3
 *.m4a
