@@ -1,69 +1,24 @@
 # ЗАВДАННЯ ДЛЯ ANTIGRAVITY
 
-> ## СТАТУС: ВИКОНАНО (2026-08-28)
->
-> Завдання `W2-R1-journaled-restore-recovery` реалізовано в `main`. Специфікація
-> нижче лишається як запис вимог. Наступне завдання ще **не** специфіковано:
-> взяти перший пункт з `IMPLEMENTATION_STATUS.md` → «Not implemented yet»
-> (зараз це `cryptography` dependency і encrypted backup v2) і описати його тут
-> у тому самому форматі, перш ніж писати код.
->
-> ```
-> CHANGED
-> - src/voice_studio/backup.py: restore journal (атомарний запис до підміни,
->   `swap_completed` після неї, видалення лише після повного успіху),
->   settings-sidecar усередині staging, `recover_interrupted_restore()`.
-> - src/voice_studio/app.py: виклик до першого `LocalStore(data_dir())`,
->   результат у рядку стану, `FAIL` → `messagebox.showwarning`; виняток не
->   ламає запуск.
-> - src/voice_studio/cli.py: виклик перед обома `LocalStore(data_dir())` і перед
->   `restore_backup`; результат у stderr, а для `backup restore` — додатковим
->   ключем у JSON.
-> - src/voice_studio/i18n.py: `restore_recovered`, `restore_rolled_back`,
->   `restore_staging_discarded`, `restore_recovery_failed` у uk/cs/en.
-> - docs/help, ARCHITECTURE.md, IMPLEMENTATION_STATUS.md, VERIFICATION.md.
->
-> VERIFIED
-> - RED: 9 нових тестів падали на незмінному модулі; GREEN: `347 passed`.
-> - compileall, ruff, check_help.py, pytest, build --wheel, pip check, pip_audit.
-> - Реальний GUI під Xvfb: чистий профіль (старт без змін) і старт поверх
->   вбитого відновлення (`action = "completed"`, історія відновлена, settings
->   дописані, `*.recovery-*` на місці). Деталі — у `VERIFICATION.md`.
->
-> KNOWN ISSUES
-> - Acceptance criterion 2 вимагав, щоб каталог `*.recovery-*` існував після
->   rollback. Rollback повертає його на місце `data_root` через `replace`, тому
->   каталог споживається, а не видаляється; дані до відновлення цілі. Дублювати
->   сховище копіюванням було б порушенням префлайту вільного місця. Тест
->   перевіряє саме цю інваріанту.
-> - Staging не можна перевірити `audit()` на місці: `restore_backup` переписує
->   шляхи керованого аудіо на пост-swap розташування ще до підміни. Тому staging
->   спочатку переноситься в `data_root`, аудиториться там і повертається назад,
->   якщо аудит не пройшов.
-> - `backup restore` у CLI отримав додаткові ключі JSON
->   (`journal_cleared`, `recovered_interrupted_restore`). Зміна адитивна.
-> - Відновлення після справжньої втрати живлення на фізичній машині не
->   перевірялося; переривання симулюється в процесі.
-> ```
-
-**TASK_ID:** W2-R1-journaled-restore-recovery
+**TASK_ID:** W2-C2-model-catalog-self-healing
 **ГІЛКА РОБОТИ:** `main`. Нових гілок **не створювати** — уся розробка й пуші
 йдуть безпосередньо в `main`.
-**BASELINE:** останній коміт `main`. Перед стартом виконати
+**BASELINE:** `e22a65f` (`main`). Перед стартом виконати
 `git fetch origin main && git checkout main && git pull origin main`.
-**Останній перевірений зелений стан:** `d61f1d9` (`ruff` чистий, `320 passed`,
-wheel і `pip check` — PASS).
+**Останній перевірений зелений стан:** `e22a65f` (`ruff` чистий, `347 passed`,
+wheel і `pip check` — PASS; CI зелений на macOS-14 і windows-2022 × CPython 3.11/3.12).
 **Джерело завдання:** `IMPLEMENTATION_STATUS.md` → розділ «Not implemented yet» → пункт
-«journaled restore/startup recovery». Нової функціональності не вигадувати.
+«SQLite/filesystem/model-catalog reconciliation», половина про **каталог моделей**.
+Нової функціональності не вигадувати.
+**Контекст:** `docs/superpowers/plans/2026-08-28-completion-roadmap.md`, розділ W2-C2.
 
 ---
 
 ## 1. МЕТА
 
-Зробити перервану операцію відновлення з резервної копії (`restore_backup`)
-відновлюваною: записувати на диск журнал відновлення (restore journal) і при
-наступному запуску застосунку автоматично **або доводити відновлення до кінця,
-або відкочувати його назад**, ніколи не залишаючи користувача без даних.
+Зробити так, щоб **жоден стан каталогу моделей не був таким, який публічний API
+відмовляється полагодити**. Смерть процесу під час встановлення або запису маніфесту
+має лікуватися детерміновано при наступному запуску, без втрати завантажених моделей.
 
 Одна мета. Нічого більше в цьому етапі не реалізовувати.
 
@@ -71,202 +26,190 @@ wheel і `pip check` — PASS).
 
 ## 2. ПОТОЧНИЙ СТАН (що вже є в коді)
 
-Файл: `src/voice_studio/backup.py`, функція
-`restore_backup(path, data_root, *, settings_target=None)`.
+Файл: `src/voice_studio/model_catalog.py`.
 
-Поточна послідовність:
+* `__init__` (`:63-69`) — `self.root`, `self.downloads = self.root / ".downloads"`,
+  `self.catalog_path = self.root / "catalog.json"`.
+* `CATALOG_VERSION = 1` (`:24`), `MODEL_ID_PATTERN = ^[A-Za-z0-9][A-Za-z0-9._-]*$` (`:25`).
+* `_load` (`:78-87`) — читає **лише** маніфест, кидає `ValueError` на пошкодженні
+  або несумісній версії.
+* `_save` (`:89-95`) — пише `catalog.json.tmp`, потім `replace`. **Без `finally: unlink`**
+  і зі **спільним** іменем tmp-файла.
+* `list()` (`:97-98`) — повертає записи маніфесту, **файлової системи не торкається**.
+* `resolve()` (`:104-116`) — єдина звірка з ФС, лінива й для однієї моделі.
+* `_inventory` (`:137-147`) — SHA-256 кожного файла + розмір; вимагає `model.bin`
+  і `config.json`.
+* `_promote` (`:149-176`) — `_remove_transient_files` → `_inventory` →
+  `if target.exists(): raise FileExistsError` → **`temporary.replace(target)` (`:162`)**
+  → побудова запису → `_load`/append/**`_save` (`:175`)**.
+* `install()` (`:214-291`) — `_validate_model_id`, `if offline_only: raise` (`:226-227`),
+  **`if self.get(value): raise FileExistsError` (`:228-229`)**, далі release-registry
+  або HF-завантаження в spawn-дитині; `finally` прибирає staging (`:286-291`).
+* `remove()` (`:338-355`) — вимагає `confirmed`,
+  **`entry = self.get(value); if entry is None: raise FileNotFoundError` (`:342-344`)**,
+  перевірка вкладеності (`:346-349`), `rmtree`, видалення запису, `_save`.
 
-1. `verify_backup(path)` — перевірка ZIP-бюджету, метаданих і SHA-256 кожного члена.
-2. `require_free_space(...)` — префлайт вільного місця.
-3. Створюється **staging-каталог**: `<parent>/.<data_root.name>.restore-<uuid4hex>`.
-   У ньому будується повний `LocalStore` з усіма транскриптами та `sources/`.
-4. Перевірка кількості записів проти маніфесту + `store.audit()` — обидві до підміни.
-5. **Підміна (swap), два окремі виклики:**
-   ```python
-   if data_root.exists():
-       recovery = data_root.parent / f"{data_root.name}.recovery-{timestamp}-{uuid4hex8}"
-       data_root.replace(recovery)          # крок A
-   try:
-       temporary.replace(data_root)         # крок B
-   except BaseException:
-       if recovery and recovery.exists() and not data_root.exists():
-           recovery.replace(data_root)      # відкат у межах процесу
-       raise
-   ```
-6. **Після** підміни записуються `settings.json` (зі збереженням копії
-   `<name>.pre-restore-<timestamp>`) і, за наявності, `dictionary.restored.json`.
-7. `finally:` видаляє staging-каталог, якщо він ще існує.
+### Підтверджені прогалини
 
-### Підтверджена прогалина
+**Прогалина 1 — осиротілий каталог.** Крах між `:162` і `:175` лишає каталог моделі
+на диску **без запису в маніфесті**. Далі:
 
-Обробник `except BaseException` рятує лише від помилки **всередині процесу**.
-Якщо процес гине між кроком A і кроком B (втрата живлення, `kill`, збій ОС),
-на диску лишається:
+* `install(id)` проходить гард `:228-229` (запису немає) → качає повторно →
+  падає на `:160-161` з `FileExistsError: model is already installed`;
+* `remove(id)` відмовляє на `:342-344` з `FileNotFoundError: model is not installed`.
 
-* **немає** `data_root`;
-* осиротілий staging `.<data_root.name>.restore-<hex>` (містить нові дані);
-* осиротілий `<data_root.name>.recovery-<timestamp>-<hex>` (містить старі дані);
-* **жодного файлу, який пояснює, який із двох каталогів є справжніми даними.**
+Стан **недосяжний для жодного публічного API**.
 
-Наступний запуск створить порожній `LocalStore(data_dir())` — користувач побачить
-порожню історію, а обидві копії лежатимуть поруч без пояснення.
+**Прогалина 2 — пошкоджений маніфест.** `_load` кидає `ValueError`, а через нього
+проходять **усі** публічні методи. Обірваний `_save` одночасно ламає
+`list`/`get`/`resolve`/`install`/`verify`/`remove`. Той самий клас дефекту.
 
-### Вікна відмови, які треба закрити
-
-| Вікно | Момент | Стан на диску | Правильна дія при старті |
-|---|---|---|---|
-| **W1** | після кроку A, до кроку B | немає `data_root`; є staging + recovery | **Довести до кінця**: перенести staging у `data_root` |
-| **W2** | після кроку B, до запису `settings.json` | `data_root` новий, `settings.json` старий | **Дописати** збережені в журналі settings/dictionary |
-| **W3** | до кроку A | `data_root` цілий; є лише staging | **Прибрати** staging, нічого не чіпати |
+**Прогалина 3 — сміття.** `catalog.json.tmp` лишається після невдалого `_save`
+(немає `finally`), а спільне ім'я — це ще й гонка між двома процесами.
+`.downloads/{id}-{hex}` накопичується, бо `finally` не виконується при SIGKILL.
 
 ### Що вже працює і має лишитися без змін
 
-* `VoiceStudioApp._queue_restore` → `job_controller.close()` → non-daemon потік →
-  подія `backup_done`/`backup_error` → `_reload_after_restore()`.
-* `_close()` не дає закрити застосунок, поки живий `_maintenance_thread`.
-* Префлайт вільного місця, `BACKUP_ZIP_BUDGET`, звірка кількості записів, `store.audit()`.
+* `offline_only` перевіряється **першим** в `install` (`:226-227`) — пінить
+  `tests/test_model_catalog_app.py:58-61`.
+* `_inventory` як валідатор повноти моделі.
+* Перевірка вкладеності в `remove` (`:346-349`).
+* `verify()` (`:328-336`) як єдиний власник перевірки цілісності.
 
 ---
 
 ## 3. SCOPE — що саме реалізувати
 
-### 3.1. Журнал відновлення
-
-Записувати **до кроку A**, атомарно (тимчасовий файл + `os.replace`), у
-`data_root.parent / f".{data_root.name}.restore-journal.json"`.
-
-Обов'язкові поля:
-
-```json
-{
-  "journal_version": 1,
-  "backup_version": 1,
-  "created_at": "<ISO-8601 UTC>",
-  "data_root": "<абсолютний шлях>",
-  "staging_path": "<абсолютний шлях staging>",
-  "recovery_path": "<абсолютний шлях recovery або null>",
-  "expected_records": <int з маніфесту>,
-  "settings_target": "<шлях або null>",
-  "settings_payload_written": false,
-  "stage": "swap_started"
-}
-```
-
-Вимоги:
-
-* Поле `stage` оновлюється на `"swap_completed"` одразу після успішного кроку B
-  (перезапис журналу атомарний).
-* Журнал видаляється **тільки** після повного успіху: підміна + запис
-  settings/dictionary.
-* Журнал не містить тексту транскриптів, ключів API, вмісту `settings.json` —
-  лише шляхи, лічильники і мітки етапів. Значення `settings_payload` **не**
-  зберігати в журналі; для вікна W2 зберігати settings у staging-каталозі
-  до підміни (файл `.restore-settings.json` усередині staging), щоб після
-  підміни він опинився всередині `data_root` і був доступний при відновленні.
-* Створення журналу не повинно змінювати повернене значення при успішному
-  відновленні, окрім **додаткових** ключів.
-
-### 3.2. Функція відновлення при старті
-
-Нова публічна функція в `src/voice_studio/backup.py`:
+### 3.1. Публічний метод примирення
 
 ```python
-def recover_interrupted_restore(
-    data_root: Path,
-    *,
-    settings_target: Path | None = None,
-) -> dict[str, Any]:
+def reconcile(self) -> dict[str, Any]:
 ```
 
-Повертає словник із щонайменше `{"status": ..., "action": ..., "records": ...,
-"recovery": ...}`, де `action` ∈
-`{"none", "completed", "settings_completed", "rolled_back", "staging_discarded"}`.
+Повертає щонайменше `{"status", "action", "adopted", "dropped", "blocked",
+"staging_removed", "staging_kept", "residue_removed", "catalog_quarantined"}`,
+де `action ∈ {"none", "repaired", "attention"}`, а `status ∈ {"PASS", "FAIL"}`
+(при `FAIL` — додатково `"error"`).
 
-Алгоритм (детермінований, без інтерактиву):
+Алгоритм — детермінований, без інтерактиву, ідемпотентний, **офлайн**:
 
-1. Журналу немає → `{"status": "PASS", "action": "none"}`. Жодних побічних ефектів.
-2. Журнал є, але пошкоджений / несумісний `journal_version` → **нічого не
-   видаляти**, повернути `{"status": "FAIL", ...}` з поясненням.
-3. `stage == "swap_started"`:
-   * `data_root` **не існує**, staging існує і його `LocalStore.audit()` дає `PASS`,
-     а кількість записів дорівнює `expected_records` → перенести staging у
-     `data_root` (`replace`), дописати settings, видалити журнал →
-     `action = "completed"`.
-   * `data_root` **не існує**, staging відсутній або не проходить перевірку,
-     recovery існує → перенести recovery назад у `data_root`, видалити журнал →
-     `action = "rolled_back"`.
-   * `data_root` **існує** (крок A не відбувся) → лише видалити staging, видалити
-     журнал → `action = "staging_discarded"`.
-4. `stage == "swap_completed"`: дописати settings/dictionary з
-   `data_root/.restore-settings.json`, якщо він є, видалити журнал →
-   `action = "settings_completed"`.
-5. **Ніколи** не видаляти каталог `*.recovery-*`. **Ніколи** не видаляти
-   одночасно і staging, і recovery, якщо `data_root` ще не відновлено.
-6. Функція має бути ідемпотентною: повторний виклик після успіху повертає
-   `action = "none"`.
+1. **Тимчасові файли маніфесту.** Прибрати `catalog.json.tmp` і `catalog.json.*.tmp`
+   **старші за 300 с**. Свіжий може належати `_save` іншого процесу — не можна
+   вирвати файл з-під його `replace`.
+2. **Завантаження або карантин.** Якщо `_load()` кидає `ValueError`:
+   перейменувати `catalog.json` у `catalog.json.corrupt-<ISO8601>-<hex8>` через `replace`
+   і **відбудувати** маніфест із каталогів на диску (крок 4).
+   Пошкоджений файл **ніколи не видаляється** — те саме правило, що для `*.recovery-*`.
+   Якщо не вдалося навіть перейменувати → `status="FAIL"`, нічого не чіпати.
+3. **Фантомні записи.** Для кожного запису визначити стан шляху **трибічно**, а не
+   голим `is_dir()`:
+   * `present` — каталог існує і не симлінк;
+   * `absent` — `FileNotFoundError` або `NotADirectoryError`;
+   * `unknown` — будь-який інший `OSError`, або шлях зайнятий файлом.
+
+   Прибирати запис **лише** при `absent`. При `unknown` запис лишається, шлях іде
+   в `blocked`. Це захист від масового хибного видалення записів при відмонтованому томі.
+4. **Осиротілі каталоги.** Обхід `self.root` **на глибину 1** через `scandir`,
+   **тільки каталоги**. Пропускати: `self.downloads`, симлінки, імена вже в маніфесті,
+   імена, що не задовольняють `MODEL_ID_PATTERN`.
+   * проходить `_inventory` → **всиновити**: запис із `source="reconciled"`,
+     `revision=None`, `installed_at` з `st_mtime` каталогу, свіжими `files`/`size`,
+     плюс явними `reconciled=True` і `reconciled_at`;
+   * не проходить (`ValueError` або `OSError`) → у `blocked`, **не чіпати**.
+
+   `_remove_transient_files` тут **не викликати**: він видаляє файли, а шлях репарації
+   не має мутувати каталог, який йому ще не належить.
+5. **Staging.** `.downloads/{id}-{32hex}` видаляти лише коли виконано **все**:
+   ім'я відповідає шаблону `^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$`;
+   це справжній каталог, не симлінк; найновіший `mtime` у піддереві старший
+   за 172 800 с (подвоєна стеля `task_timeout_seconds`, `models.py:152`).
+   Усе інше — у `staging_kept`, **без** ескалації `action`: активне завантаження
+   в іншому процесі — це норма, а не дефект.
+6. **Один запис.** `_save` викликати **тільки** якщо щось справді змінилося.
+
+**Вимога дешевизни.** На здоровому профілі — один `scandir` кореня і один `lstat`
+на запис. SHA-256 рахувати **лише** для каталогів, яких немає в маніфесті. Інакше
+кожен старт хешував би гігабайти.
+
+### 3.2. Супутні виправлення (без них мета не досягається)
+
+* **`_save` (`:89-95`)** → унікальне ім'я тимчасового файла
+  (`catalog.json.<uuid4hex>.tmp`) + `finally: unlink(missing_ok=True)`,
+  як `backup._write_json_atomic` (`backup.py:216-226`).
+* **`remove()`** → додатково приймати каталог **без** запису в маніфесті.
+  Сигнатура не змінюється, `confirmed=True` лишається обов'язковим, перевірка
+  вкладеності та сама; у відповідь додається ключ `"unmanaged": True`.
+  Без цього те, що `reconcile` відмовився всиновити (неповний каталог), лишається
+  невидаляним — і мета «немає стану, який API відмовляється полагодити» не досягається.
 
 ### 3.3. Точки виклику
 
-Викликати `recover_interrupted_restore(data_dir(), settings_target=settings_path())`
-**до першого відкриття сховища**:
-
-* `src/voice_studio/app.py` → `VoiceStudioApp.__init__`, перед
-  `self.store = LocalStore(data_dir())` (наразі рядок ~133). Результат показати
-  користувачу: непорожній `action` → повідомлення у рядку статусу; `status == "FAIL"`
-  → `messagebox.showwarning`. Виняток з функції не повинен ламати запуск застосунку.
-* `src/voice_studio/cli.py` → перед обома викликами `LocalStore(data_dir())`
-  (наразі рядки ~265 і ~276) і перед `restore_backup(...)`. У CLI результат
-  друкувати як частину JSON або в `stderr`, залежно від команди; мовчазне
-  ігнорування недопустиме.
+* `src/voice_studio/app.py` — у `VoiceStudioApp.__init__` **одразу після**
+  `self._report_restore_recovery()`, тобто після `_build_ui` (рядок стану й
+  `messagebox` уже існують) і **до** `self.after(400, self._first_run_model_prompt)`.
+  Оскільки `after`-колбек не може виконатися, доки `__init__` не повернувся,
+  `ModelCatalog(...).list()` на `app.py:224` гарантовано правдивий, коли спрацює
+  запит першого запуску. Метод назвати `_settle_model_catalog` (**не** так, щоб він
+  затінював `_settle_interrupted_restore` при пошуку підрядка). Виняток **не має**
+  ламати запуск.
+* `src/voice_studio/cli.py` — **тільки** всередині гілки
+  `if args.command == "models":`, одразу після `catalog = ModelCatalog(store.models)`.
+  **Не** після загального `LocalStore(data_dir())`: інакше сканування каталогу
+  і потенційно багатогігабайтне хешування лягло б на `history`, `show`, `export`,
+  `transcribe`.
+* Нова підкоманда `models reconcile` — вивід JSON у **stdout**.
+  Автоматичний виклик — повідомлення у **stderr**, лише коли він нетривіальний
+  (`status != "PASS"` або `action != "none"`), за зразком `restore-journal:`.
+* `src/voice_studio/diagnostics.py` **не чіпати**: діагностика лишається read-only.
 
 ### 3.4. Локалізація
 
-Нові ключі UI додати **в усі три каталоги** `uk`, `cs`, `en` у
-`src/voice_studio/i18n.py`. Модуль на імпорті кидає `RuntimeError`, якщо набори
-ключів різні — набори мають лишитися ідентичними.
+Нові ключі додати **в усі три** каталоги `uk`, `cs`, `en` у `src/voice_studio/i18n.py`.
+Модуль на імпорті кидає `RuntimeError`, якщо набори ключів різні.
 
-Мінімальний набір: `restore_recovered`, `restore_rolled_back`,
-`restore_recovery_failed`.
+Мінімальний набір: `model_catalog_repaired` (`{adopted}`, `{dropped}`),
+`model_catalog_attention` (`{details}`), `model_catalog_rebuilt` (`{path}`),
+`model_catalog_repair_failed` (`{error}`).
 
 ---
 
 ## 4. RELEVANT AREAS
 
-* `src/voice_studio/backup.py` — журнал, `recover_interrupted_restore`.
-* `src/voice_studio/app.py` — виклик при старті, статус, i18n.
-* `src/voice_studio/cli.py` — виклик при старті.
+* `src/voice_studio/model_catalog.py` — `reconcile`, `_save`, `remove`.
+* `src/voice_studio/app.py` — виклик при старті, рядок стану, i18n.
+* `src/voice_studio/cli.py` — виклик у гілці `models`, підкоманда `reconcile`.
 * `src/voice_studio/i18n.py` — нові ключі в трьох каталогах.
-* `src/voice_studio/storage.py` — **тільки читання**, повторне використання `audit()`.
-* `tests/test_backup_app.py` — основні тести.
-* `tests/test_editor_state_app.py` — там уже є тести GUI-restore, за потреби доповнити.
+* `src/voice_studio/backup.py` — **тільки читання**, як зразок
+  (`recover_interrupted_restore`, `_write_json_atomic`).
+* `tests/test_model_catalog_app.py` — основні тести.
+* `tests/test_gui_contract_app.py`, `tests/test_cli_app.py` — тести точок виклику.
+* `tests/test_i18n_app.py` — контракт каталогів.
 
 ---
 
 ## 5. CONSTRAINTS (що зберегти обов'язково)
 
-* Ніколи не видаляти оригінал користувача. Каталог `*.recovery-*` не видаляється
-  автоматично ніколи.
-* `raw_text` лишається незмінним; відновлення не переписує текст транскриптів.
-* `BACKUP_VERSION = 1` не змінювати. Формат архіву і контракт `verify_backup`
-  не змінювати.
-* Префлайт вільного місця, ZIP-бюджет, звірка кількості записів і `store.audit()`
-  лишаються перед будь-якою підміною.
+* Каталог моделі користувача **не видаляти** без `confirmed=True`.
+* Пошкоджений `catalog.json` **не видаляти ніколи** — лише в карантин.
 * Жодної нової runtime-залежності. Жодної мережі на цьому шляху.
-* Журнал не містить секретів: ні ключів API, ні тексту транскриптів.
-* Публічні сигнатури `verify_backup` / `restore_backup` не змінювати; лише
-  **додаткові** ключі у поверненому словнику.
+* `offline_only` не порушувати; його перевірка лишається першою в `install`.
+* `CATALOG_VERSION = 1` не змінювати.
+* Ваги моделей не потрапляють у Git.
+* Публічні сигнатури `list` / `get` / `resolve` / `install` / `import_local` /
+  `verify` / `remove` не змінювати; лише **додаткові** ключі у поверненому словнику.
+* `reconcile()` **не викликати** зсередини `install` / `remove` / `get` / `resolve`.
 * Набори ключів усіх трьох каталогів i18n лишаються ідентичними.
 
 ---
 
 ## 6. DO NOT TOUCH (не чіпати без прямої необхідності)
 
-* Гейтинг AI-редагування (Ollama/OpenAI) у `cli.py` та `app.py` — він щойно
-  покритий регресійними тестами в `tests/test_cli_app.py`.
-* `docs/help/`, `help_content.py`, вікно довідки.
-* Тему, `studio_layout_for_width`, адаптивний розкладку, іконку.
-* `src/voice_studio/media.py` (ізоляція розбору медіа).
-* `packaging/voice_studio.spec`, `scripts/build_windows.ps1`,
+* `src/voice_studio/backup.py` і журнал відновлення — щойно покриті регресійними тестами.
+* `src/voice_studio/diagnostics.py` — має лишитися read-only.
+* Гейтинг AI-редагування (Ollama/OpenAI) у `cli.py` та `app.py`.
+* Тему, `studio_layout_for_width`, адаптивну розкладку, іконку.
+* `src/voice_studio/media.py`.
+* `packaging/voice_studio.spec`, `scripts/build_windows.ps1`, `scripts/build_test_rc.sh`,
   `requirements-windows.lock`.
 * `.gitignore`, `scripts/quality_gate.sh`, `scripts/quality_gate.ps1`,
   `.github/workflows/*`.
@@ -275,34 +218,62 @@ def recover_interrupted_restore(
 
 ## 7. ACCEPTANCE CRITERIA (перевірювані умови)
 
-Кожен пункт має бути покритий тестом, який **падає без виправлення**:
+Кожен пункт має бути покритий тестом, який **падає без виправлення**.
 
-1. **W1 — доведення до кінця.** Тест імітує загибель процесу між кроком A і
-   кроком B (наприклад, патч `Path.replace`, який кидає `KeyboardInterrupt` рівно
-   на другому виклику, при вже записаному журналі). Після цього
-   `recover_interrupted_restore` повертає `action = "completed"`, `data_root`
-   існує, `LocalStore(data_root).list()` містить рівно `expected_records`
-   записів, `audit()["status"] == "PASS"`.
-2. **W1 — відкат.** Той самий сценарій, але staging видалено/пошкоджено:
-   `action = "rolled_back"`, у `data_root` — дані, що були **до** відновлення,
-   каталог `*.recovery-*` існує на диску після відновлення.
-3. **W2 — дозапис settings.** Процес «гине» після успішного кроку B, до запису
-   `settings.json`: `action = "settings_completed"`, `settings.json` містить
-   налаштування з архіву, копія `<name>.pre-restore-<timestamp>` не втрачена.
-4. **W3 — прибирання staging.** Журнал є, `data_root` цілий:
-   `action = "staging_discarded"`, staging видалено, `data_root` не змінено.
-5. **Успішний шлях.** Після звичайного `restore_backup` журнал на диску
-   відсутній, а `recover_interrupted_restore` повертає `action = "none"`.
-6. **Ідемпотентність.** Другий поспіль виклик `recover_interrupted_restore`
-   повертає `action = "none"` і нічого не змінює на диску.
-7. **Пошкоджений журнал.** Журнал із невідомим `journal_version` або невалідним
-   JSON → `status = "FAIL"`, жоден каталог не видалено.
-8. **Без секретів.** Тест читає файл журналу і стверджує, що в ньому немає
-   тексту транскриптів і немає рядка ключа API.
-9. **Каталоги i18n.** `set(_CATALOGS["uk"]) == set(_CATALOGS["cs"]) == set(_CATALOGS["en"])`
-   (перевіряється вже наявним контрактом на імпорті + тестом).
-10. Публічні сигнатури `verify_backup` / `restore_backup` не змінені, наявні
-    тести `tests/test_backup_app.py` проходять без правок їхніх очікувань.
+1. **Всиновлення.** Каталог на диску, запису в маніфесті немає (симулювати крах
+   монкіпатчем `_save`, що кидає) → `adopted == [id]`, `get(id)` не `None`,
+   `verify(id)["status"] == "PASS"`, `resolve(id)` повертає керований каталог.
+2. **Стан перестав бути недосяжним.** Той самий стан:
+   `remove(id, confirmed=True)` **до** примирення кидає `FileNotFoundError`,
+   **після** — повертає `{"removed": True}` і каталог зникає з диска.
+3. **Походження не вигадується.** Всиновлений запис несе `source="reconciled"`,
+   `revision is None`, `reconciled is True`; каталог-джерело імпорту не змінено.
+4. **Фантомний запис.** Запис у маніфесті, каталог видалено → `dropped` містить id,
+   `list() == []`.
+5. **Неповний каталог.** Каталог без `model.bin` → `action == "attention"`,
+   один `blocked` зі згадкою `model.bin`, каталог **не всиновлено, не переміщено,
+   не видалено** і він лишається на диску.
+6. **Симлінк.** Каталог-симлінк → `blocked` із причиною `symlink`, не всиновлено,
+   симлінк цілий.
+7. **Staging.** Старий `.downloads/{id}-{32hex}` (mtime 3 дні тому) прибрано;
+   свіжий і той, чиє ім'я не відповідає шаблону, лишаються і потрапляють
+   у `staging_kept`.
+8. **Тимчасові файли.** Старий `catalog.json.tmp` прибрано; свіжий
+   `catalog.json.<hex>.tmp` лишається; `catalog.json` побайтово не змінений.
+9. **Пошкоджений маніфест.** Невалідний JSON → `action == "repaired"`,
+   `catalog_quarantined` існує на диску з пошкодженими байтами, `list()` повертає
+   всиновлений запис, `verify()` PASS.
+10. **Несумісна версія.** `{"version": 999, "models": []}` → те саме, що (9).
+11. **Чистий профіль — без запису.** `action == "none"`, усі списки порожні,
+    `_save` **не викликається** (перевіряється монкіпатчем `_save`, що кидає).
+12. **Ідемпотентність.** Другий `reconcile()` → `action == "none"`, `list()` ідентичний,
+    `st_mtime_ns` файла `catalog.json` не змінився.
+13. **Дешевизна.** `reconcile()` не хешує файли моделей, які вже в маніфесті
+    (лічильник викликів `sha256_file`).
+14. **`remove` для некерованого каталогу.** Повний каталог без запису:
+    `remove("stray")` → `ValueError("--yes")`; з `confirmed=True` →
+    `{"removed": True, "unmanaged": True}` і каталог зникає.
+15. **`_save` не лишає сміття.** Монкіпатч `Path.replace`, що падає лише для `*.tmp`
+    → `list(root.glob("catalog.json*.tmp")) == []`.
+16. **Хук обмежений гілкою `models`.** CLI `history` над тим самим станом
+    **не** друкує `model-catalog:` у stderr; `models list` — друкує.
+17. **Каталоги i18n.** `set(_CATALOGS["uk"]) == set(_CATALOGS["cs"]) == set(_CATALOGS["en"])`.
+18. **Сигнатури не змінені.** Наявні 5 тестів `tests/test_model_catalog_app.py`
+    проходять **без правок їхніх очікувань**.
+
+### Пастки з наявними тестами (перевірено читанням)
+
+* `tests/test_takeover_regressions.py:50-56` кладе `model.bin` і `config.json`
+  **прямо в `catalog.root`**. Обхід через `rglob` або врахування вільних файлів
+  перетворив би це на фантомну «модель» і зламав би тест. Тому: `scandir` на глибину 1,
+  тільки `entry.is_dir()`, без симлінків.
+* `tests/test_cli_app.py:178-186` («чистий старт без шуму») зламається, якщо хук
+  поставити після `LocalStore(data_dir())` у `cli.py`.
+* `tests/test_gui_contract_app.py:292-305` використовує `source.index(...)`, який
+  знаходить **перше** входження — новий виклик має називатися відмінно, щоб не
+  затінити `_settle_interrupted_restore`.
+* `tests/test_model_catalog_app.py:58-61` вимагає, щоб перевірка `offline_only`
+  лишалася першою в `install`.
 
 ---
 
@@ -322,12 +293,12 @@ python -m pip check
 * `scripts/quality_gate.ps1` (Windows) або `scripts/quality_gate.sh` (macOS/Linux) —
   на тій машині, де ведеться робота;
 * запуск GUI із джерел із чистим профілем (`VOICE_STUDIO_CONFIG_DIR`,
-  `VOICE_STUDIO_DATA_DIR`, `VOICE_STUDIO_CACHE_DIR`) і підтвердження, що за
-  відсутності журналу старт не змінився;
+  `VOICE_STUDIO_DATA_DIR`, `VOICE_STUDIO_CACHE_DIR`) і підтвердження, що за відсутності
+  розходжень старт не змінився;
 * RED/GREEN-докази: спочатку показати падіння нових тестів без реалізації, потім
   їх проходження.
 
-Базовий стан для порівняння на `d61f1d9` (`main`): **320 passed**, `ruff` чистий,
+Базовий стан для порівняння на `e22a65f` (`main`): **347 passed**, `ruff` чистий,
 wheel і `pip check` — PASS.
 
 ---
