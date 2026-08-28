@@ -23,7 +23,7 @@ in `VERIFICATION.md`; the reproducible build command is documented in
 | W2-R1 journaled restore recovery | PASS headless | restore writes an atomic journal before the swap; `recover_interrupted_restore()` runs before the first `LocalStore` in GUI and CLI and completes, rolls back, or discards staging deterministically; a `*.recovery-*` directory is never deleted; the journal carries no transcript text and no key material |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
-| Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips |
+| Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
 | Integrated packaging/dependency gate | PASS | `python -m build --wheel`, `python -m pip check`, `python -m pip_audit` (no known vulnerabilities) |
 

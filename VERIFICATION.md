@@ -29,9 +29,14 @@ history, the archived `auto_copy: true` settings with a
 `settings.json.pre-restore-<timestamp>` snapshot kept, the journal and staging
 gone, and the `*.recovery-*` directory still on disk.
 
-Not run for this change: Windows and macOS execution, and recovery after a real
-power loss or forced termination on a physical machine. The interruption is
-simulated in-process.
+Cross-platform CI on commit `72c42ae` (run 33170283362) is green on all four
+jobs — macOS-14 and windows-2022 x CPython 3.11 and 3.12 — for every step:
+workflow-pin policy, `compileall`, Ruff, `check_help.py`, `pytest -q`,
+`build --wheel`, `pip check` and `pip_audit`.
+
+Not run for this change: recovery after a real power loss or forced termination
+on a physical machine. The interruption is simulated in-process, and CI runners
+are hosted VMs, not the physical-device acceptance scope.
 
 ## Final Windows verification — 2026-08-28
 
