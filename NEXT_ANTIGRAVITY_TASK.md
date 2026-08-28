@@ -1,7 +1,12 @@
 # ЗАВДАННЯ ДЛЯ ANTIGRAVITY
 
 **TASK_ID:** W2-R1-journaled-restore-recovery
-**BASELINE_COMMIT:** `179ccbe` (гілка `claude/antigravity-post-stage-review-eedzf8`, тегів немає)
+**ГІЛКА РОБОТИ:** `main`. Нових гілок **не створювати** — уся розробка й пуші
+йдуть безпосередньо в `main`.
+**BASELINE:** останній коміт `main`. Перед стартом виконати
+`git fetch origin main && git checkout main && git pull origin main`.
+**Останній перевірений зелений стан:** `d61f1d9` (`ruff` чистий, `320 passed`,
+wheel і `pip check` — PASS).
 **Джерело завдання:** `IMPLEMENTATION_STATUS.md` → розділ «Not implemented yet» → пункт
 «journaled restore/startup recovery». Нової функціональності не вигадувати.
 
@@ -276,7 +281,7 @@ python -m pip check
 * RED/GREEN-докази: спочатку показати падіння нових тестів без реалізації, потім
   їх проходження.
 
-Базовий стан для порівняння на `179ccbe`: **320 passed**, `ruff` чистий,
+Базовий стан для порівняння на `d61f1d9` (`main`): **320 passed**, `ruff` чистий,
 wheel і `pip check` — PASS.
 
 ---
