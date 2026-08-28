@@ -71,3 +71,4 @@ for all supported media formats. See `README.md` for commands.
 Prefer a small change with a regression test over a rewrite. Keep public docs in
 English and Ukrainian aligned. Never push, tag, create a GitHub Release, or make
 a destructive migration without explicit user authorization.
+When user-visible behavior changes, keep in-app Help and docs/help synchronized; use /sync-help when appropriate.

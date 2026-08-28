@@ -12,6 +12,8 @@ data-safety controls below still require native Windows/macOS acceptance.
 
 Українська версія: [README.uk.md](README.uk.md).
 
+User help: [Ukrainian user guide](docs/help/README.md).
+
 ## Quick start from source
 
 Requires Python 3.11 or 3.12. The one-click launchers create a local virtual

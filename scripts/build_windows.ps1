@@ -118,6 +118,8 @@ try {
         -Destination $WheelSourceDirectory
     Copy-Item -LiteralPath (Join-Path $ProjectRoot "src") `
         -Destination (Join-Path $WheelSourceDirectory "src") -Recurse
+    Copy-Item -LiteralPath (Join-Path $ProjectRoot "docs/help") `
+        -Destination (Join-Path $WheelSourceDirectory "docs/help") -Recurse
     Invoke-Checked $Python -m build --wheel --no-isolation --outdir $StageDirectory `
         $WheelSourceDirectory
     $WheelPath = Get-ChildItem -LiteralPath $StageDirectory -Filter "*.whl" |

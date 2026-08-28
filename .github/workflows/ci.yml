@@ -30,6 +30,7 @@ jobs:
       - run: python scripts/check_workflow_pins.py .github/workflows
       - run: python -m compileall -q src tests scripts packaging
       - run: python -m ruff check src tests scripts packaging
+      - run: python scripts/check_help.py
       - run: python -m pytest -q
       - run: python -m build --wheel
       - run: python -m pip check

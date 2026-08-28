@@ -6,6 +6,8 @@
 
 Це **unsigned Test RC**, а не production release.
 
+Повний посібник користувача: [docs/help/README.md](docs/help/README.md).
+
 ## Запуск
 
 Потрібен Python 3.11 або 3.12.

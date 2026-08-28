@@ -18,6 +18,38 @@ def test_desktop_profile_collects_runtime_and_excludes_dev_modules() -> None:
         assert f'"{module}"' in spec
     assert "runtime_hooks=[]" in spec
 
+
+def test_canonical_help_is_included_in_wheel_and_frozen_distributions() -> None:
+    spec = (PROJECT_ROOT / "packaging" / "voice_studio.spec").read_text(
+        encoding="utf-8"
+    )
+    pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    windows_build = (PROJECT_ROOT / "scripts" / "build_windows.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'project_root / "docs" / "help"' in spec
+    assert '"docs/help"' in spec
+    assert '[tool.setuptools.data-files]' in pyproject
+    assert '"share/voice-studio/help"' in pyproject
+    assert '"docs/help/*.md"' in pyproject
+    assert '"docs/help/*.json"' in pyproject
+    assert 'Join-Path $ProjectRoot "docs/help"' in windows_build
+    assert 'Join-Path $WheelSourceDirectory "docs/help"' in windows_build
+
+
+def test_quality_gate_validates_canonical_help() -> None:
+    quality_gate = (PROJECT_ROOT / "scripts" / "quality_gate.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/check_help.py" in quality_gate
+    for workflow_name in ("ci.yml", "release.yml"):
+        workflow = (
+            PROJECT_ROOT / ".github" / "workflows" / workflow_name
+        ).read_text(encoding="utf-8")
+        assert "python scripts/check_help.py" in workflow
+
 def test_frozen_launcher_enables_multiprocessing_support() -> None:
     launcher = (PROJECT_ROOT / "packaging" / "launcher.py").read_text(encoding="utf-8")
 

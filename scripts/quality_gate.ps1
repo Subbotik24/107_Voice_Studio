@@ -19,5 +19,6 @@ Invoke-Checked $Python -c "import pytest, ruff"
 Invoke-Checked $Python -m compileall -q src tests scripts packaging
 Invoke-Checked $Python -m ruff check src tests scripts packaging
 $env:PYTHONPATH = "src"
+Invoke-Checked $Python scripts/check_help.py
 Invoke-Checked $Python -m pytest -q
 Invoke-Checked $Python -m voice_studio.cli --version

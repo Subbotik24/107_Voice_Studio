@@ -59,6 +59,10 @@ where = ["src"]
 [tool.setuptools.package-data]
 voice_studio = ["resources/*.json"]
 
+[tool.setuptools.data-files]
+"share/voice-studio/help" = ["docs/help/*.md", "docs/help/*.json"]
+"share/voice-studio/help/assets" = ["docs/help/assets/*.png"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

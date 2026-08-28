@@ -13,8 +13,9 @@ Environment: Windows 11 x64, Python 3.12 virtual environment.
 | `python -m compileall -q src tests` | PASS |
 | `ruff check src tests scripts` | PASS |
 | clean Python 3.12 environment from `requirements-windows.lock` | PASS |
-| `python -m pytest -q` | PASS, 304 tests |
+| `python -m pytest -q` | PASS, 316 tests |
 | `python -m pip check` | PASS |
+| `scripts/check_help.py` | PASS, manifest and 5 canonical Markdown topics |
 | clean wheel build from the release staging tree | PASS, 42 files and no retired package namespaces |
 | PyInstaller runtime probe | PASS, 8 required runtime imports and frozen spawned-worker roundtrip |
 | pre-theme packaged worker with downloaded `faster-whisper tiny`, CPU `int8`, silent WAV | PASS before the UI-only rebuild; actual model load/inference and transcript persistence |
@@ -23,23 +24,29 @@ Environment: Windows 11 x64, Python 3.12 virtual environment.
 | packaged GUI clean exit and second launch | PASS |
 | source main-window visual inspection | PASS at 1320 x 820, 1080 x 820, and compact 1000 x 800 |
 | final packaged main-window, Settings, and Local AI visual inspection | PASS; reference palette/logo/font treatment applied, no responsive clipping found |
+| packaged in-app Help from `C:\Windows\Temp` | PASS; sidebar and `F1`, search/no-results, section links, screenshot assets, close/reopen |
+| packaged language persistence | PASS; Czech applied immediately and remained selected after clean exit and second launch |
+| packaged Help payload | PASS; canonical topics/assets present in the frozen app and wheel |
 | local Ollama discovery | PASS, 2 installed models found |
 | local Ollama structured cleanup with `gemma4-code:latest` | PASS |
 
 The packaged Settings dialog displayed Ollama as the default AI cleanup
 provider, selected `gemma4-code:latest`, and reported two installed local
-models. Ukrainian was displayed as the active interface language. The same
-language selector was also exercised with Czech and English in the source UI;
-saving a new language refreshed the main interface immediately.
+models. Ukrainian was displayed as the initial interface language. The same
+language selector was exercised with Czech and English in the source UI;
+saving a new language refreshed the main interface immediately. The final
+packaged executable was then switched to Czech, closed, and launched again
+from `C:\Windows\Temp` with an isolated profile; Czech remained active and the
+localized Help chrome opened over the canonical Ukrainian manual.
 
 ## Windows artifact
 
 - Executable: `dist/0.3.0-test-rc1-windows-x64/VOICE Studio/VOICE Studio.exe`
-- Executable size: 12,407,501 bytes
-- Executable SHA-256: `C2883E709CAD8855B60496DF70F7BF5416520B6E3515F8A51E815FE7F06956BC`
+- Executable size: 12,422,579 bytes
+- Executable SHA-256: `2389A60C50904B40A898F062C90AF716F1D0EEB79142DAF09D2BAA92725D29BB`
 - Portable archive: `dist/0.3.0-test-rc1-windows-x64/VOICE-Studio-0.3.0-test-rc1-windows-x64-unsigned.zip`
-- Archive size: 105,856,232 bytes
-- Archive SHA-256: `ABAE70C3557023108A4FD3506EE2DE8D223CA824A2373AEDC48020E19E8FB3B7`
+- Archive size: 106,429,813 bytes
+- Archive SHA-256: `C38A406539ACFE4D43B8EBDC4042CF9DD77F14069193EAB0A679864CB42080FD`
 
 ## Known verification limits
 

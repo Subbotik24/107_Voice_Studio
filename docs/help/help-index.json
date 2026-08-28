@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "language": "uk",
+  "topics": [
+    {
+      "slug": "quick-start",
+      "title": "Швидкий старт",
+      "file": "quick-start.md"
+    },
+    {
+      "slug": "workflows",
+      "title": "Основні сценарії",
+      "file": "workflows.md"
+    },
+    {
+      "slug": "reference",
+      "title": "Довідка екранів і параметрів",
+      "file": "reference.md"
+    },
+    {
+      "slug": "troubleshooting",
+      "title": "Вирішення проблем",
+      "file": "troubleshooting.md"
+    }
+  ]
+}

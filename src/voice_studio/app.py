@@ -22,6 +22,16 @@ from .config import cache_dir, data_dir, load_settings, save_settings, settings_
 from .dictionary import TerminologyDictionary
 from .editor_state import snapshot_editor
 from .exporters import export_transcript
+from .help_content import (
+    HelpTopic,
+    help_anchor,
+    load_help_topics,
+    parse_markdown,
+    resolve_help_asset,
+    resolve_help_root,
+    search_help_topics,
+    split_help_target,
+)
 from .hotkey import GlobalHotkey, hotkey_from_tk_event
 from .i18n import UI_LANGUAGE_CHOICES, translate
 from .jobs import JobCancelled, TranscriptionJobController
@@ -139,6 +149,8 @@ class VoiceStudioApp(tk.Tk):
         self._recording_residue_diagnostics: list[str] = []
         self._cancel_event = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
+        self._help_window: tk.Toplevel | None = None
+        self._help_images: list[tk.PhotoImage] = []
         self._build_ui()
         self._refresh_history()
         self.after(100, self._poll_events)
@@ -276,12 +288,20 @@ class VoiceStudioApp(tk.Tk):
             style="Sidebar.TButton",
         )
         self.settings_button.pack(fill="x", pady=6)
+        self.help_button = ttk.Button(
+            navigation,
+            text=self._t("help"),
+            command=self._help_dialog,
+            style="Sidebar.TButton",
+        )
+        self.help_button.pack(fill="x", pady=6)
         self._sidebar_buttons = (
             (self.studio_button, "studio_nav", "●"),
             (self.history_nav_button, "history", "▤"),
             (self.models_button, "models", "◆"),
             (self.backup_button, "backup", "↻"),
             (self.settings_button, "settings", "⚙"),
+            (self.help_button, "help", "?"),
         )
 
         self.sidebar_footer = ttk.Frame(
@@ -623,6 +643,7 @@ class VoiceStudioApp(tk.Tk):
 
         self._studio_layout: StudioLayout | None = None
         self.bind("<Configure>", self._on_window_configure, add="+")
+        self.bind_all("<F1>", lambda _event: self._help_dialog(), add="+")
         self.after_idle(lambda: self._apply_studio_layout(self.winfo_width(), force=True))
         self._update_engine_label()
 
@@ -993,6 +1014,14 @@ class VoiceStudioApp(tk.Tk):
         self.readiness_language_caption.configure(text=self._t("interface_language"))
         self.readiness_ai_caption.configure(text=self._t("ai_cleanup_short"))
         self.privacy_note_label.configure(text=self._t("privacy_note"))
+        help_window = getattr(self, "_help_window", None)
+        if help_window is not None and help_window.winfo_exists():
+            help_window.title(self._t("help_title"))
+            self._help_title_label.configure(text=self._t("help_title"))
+            self._help_intro_label.configure(text=self._t("help_intro"))
+            self._help_search_label.configure(text=self._t("help_search"))
+            self._help_search_button.configure(text=self._t("help_search_action"))
+            self._help_close_button.configure(text=self._t("help_close"))
         self._apply_studio_layout(self.winfo_width(), force=True)
         self._update_engine_label()
 
@@ -1895,6 +1924,256 @@ class VoiceStudioApp(tk.Tk):
         if destination:
             export_transcript(self.current, fmt, Path(destination))
             self.status.set(self._t("exported", name=Path(destination).name))
+
+    def _raise_existing_help(self) -> bool:
+        window = getattr(self, "_help_window", None)
+        if window is None or not window.winfo_exists():
+            self._help_window = None
+            return False
+        window.deiconify()
+        window.lift()
+        window.focus_force()
+        return True
+
+    def _help_dialog(self) -> None:
+        if self._raise_existing_help():
+            return
+        try:
+            help_root = resolve_help_root()
+            topics = load_help_topics(help_root)
+        except (OSError, ValueError) as exc:
+            messagebox.showerror(
+                self._t("help"), self._t("help_unavailable", error=exc), parent=self
+            )
+            return
+
+        theme = VOICE_STUDIO_THEME
+        dialog = tk.Toplevel(self)
+        self._help_window = dialog
+        self._help_images = []
+        dialog.title(self._t("help_title"))
+        dialog.geometry("1040x720")
+        dialog.minsize(820, 560)
+        dialog.transient(self)
+        dialog.configure(background=theme.canvas)
+        dialog.grid_rowconfigure(1, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
+
+        def close_help(_event: Any = None) -> str:
+            self._help_window = None
+            self._help_images = []
+            dialog.destroy()
+            return "break"
+
+        dialog.protocol("WM_DELETE_WINDOW", close_help)
+        dialog.bind("<Escape>", close_help)
+
+        header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="Topbar.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        self._help_title_label = ttk.Label(header, text=self._t("help_title"), style="Title.TLabel")
+        self._help_title_label.pack(anchor="w")
+        self._help_intro_label = ttk.Label(
+            header, text=self._t("help_intro"), style="TopbarMuted.TLabel"
+        )
+        self._help_intro_label.pack(anchor="w", pady=(4, 0))
+
+        body = ttk.Frame(dialog, padding=(24, 20), style="Canvas.TFrame")
+        body.grid(row=1, column=0, sticky="nsew")
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+
+        navigation = ttk.Frame(body, width=250, padding=14, style="CardBorder.TFrame")
+        navigation.grid(row=0, column=0, sticky="nsew", padx=(0, 16))
+        navigation.grid_propagate(False)
+        navigation.grid_rowconfigure(3, weight=1)
+        navigation.grid_columnconfigure(0, weight=1)
+        self._help_search_label = ttk.Label(
+            navigation, text=self._t("help_search"), style="CardMuted.TLabel"
+        )
+        self._help_search_label.grid(row=0, column=0, sticky="w")
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(navigation, textvariable=search_var)
+        search_entry.grid(row=1, column=0, sticky="ew", pady=(6, 8))
+        self._help_search_button = ttk.Button(navigation, text=self._t("help_search_action"))
+        self._help_search_button.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        topic_list = tk.Listbox(
+            navigation,
+            activestyle="dotbox",
+            background=theme.surface,
+            foreground=theme.ink,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            highlightbackground=theme.border,
+            highlightcolor=theme.accent,
+            relief="flat",
+            borderwidth=1,
+            font=(theme.ui_font, 10),
+            exportselection=False,
+        )
+        topic_list.grid(row=3, column=0, sticky="nsew")
+
+        article_frame = ttk.Frame(body, padding=1, style="CardBorder.TFrame")
+        article_frame.grid(row=0, column=1, sticky="nsew")
+        article_frame.grid_rowconfigure(0, weight=1)
+        article_frame.grid_columnconfigure(0, weight=1)
+        article = tk.Text(
+            article_frame,
+            wrap="word",
+            state="disabled",
+            background=theme.surface,
+            foreground=theme.ink,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            relief="flat",
+            borderwidth=0,
+            padx=24,
+            pady=20,
+            font=(theme.ui_font, 11),
+        )
+        article.grid(row=0, column=0, sticky="nsew")
+        article_scroll = ttk.Scrollbar(article_frame, orient="vertical", command=article.yview)
+        article_scroll.grid(row=0, column=1, sticky="ns")
+        article.configure(yscrollcommand=article_scroll.set)
+        article.tag_configure(
+            "h1", font=(theme.ui_font, 22, "bold"), foreground=theme.primary, spacing3=12
+        )
+        article.tag_configure(
+            "h2",
+            font=(theme.ui_font, 16, "bold"),
+            foreground=theme.ink,
+            spacing1=16,
+            spacing3=8,
+        )
+        article.tag_configure(
+            "h3",
+            font=(theme.ui_font, 12, "bold"),
+            foreground=theme.ink,
+            spacing1=12,
+            spacing3=5,
+        )
+        article.tag_configure("body", spacing3=10)
+        article.tag_configure("list", spacing3=5, lmargin1=18, lmargin2=32)
+        article.tag_configure(
+            "code",
+            font=(theme.mono_font, 9),
+            background=theme.surface_muted,
+            foreground=theme.ink,
+            lmargin1=12,
+            lmargin2=12,
+            rmargin=12,
+            spacing1=6,
+            spacing3=8,
+        )
+        article.tag_configure("table", font=(theme.mono_font, 9), spacing3=10)
+        article.tag_configure("link", foreground=theme.accent_hover, underline=True, spacing3=8)
+        article.tag_configure(
+            "image_alt", foreground=theme.muted_ink, justify="center", spacing3=12
+        )
+
+        visible_topics: tuple[HelpTopic, ...] = topics
+
+        def select_topic(target_topic: HelpTopic, target_anchor: str = "") -> None:
+            self._help_images = []
+            article.configure(state="normal")
+            article.delete("1.0", "end")
+            link_index = 0
+            heading_positions: dict[str, str] = {}
+            for block in parse_markdown(target_topic.markdown):
+                if block.kind == "heading":
+                    heading_positions.setdefault(help_anchor(block.text), article.index("end-1c"))
+                    article.insert("end", block.text + "\n", f"h{min(block.level, 3)}")
+                elif block.kind == "paragraph":
+                    article.insert("end", block.text + "\n", "body")
+                elif block.kind == "bullet":
+                    article.insert("end", "• " + block.text + "\n", "list")
+                elif block.kind == "numbered":
+                    article.insert("end", block.text + "\n", "list")
+                elif block.kind == "code":
+                    article.insert("end", block.text + "\n", "code")
+                elif block.kind == "table":
+                    article.insert("end", block.text + "\n", "table")
+                elif block.kind == "image" and block.target:
+                    try:
+                        image_path = resolve_help_asset(
+                            help_root, target_topic.source_path, block.target
+                        )
+                        if not image_path.is_file():
+                            raise FileNotFoundError(image_path)
+                        help_image = tk.PhotoImage(master=article, file=str(image_path))
+                        factor = max(1, (help_image.width() + 679) // 680)
+                        if factor > 1:
+                            help_image = help_image.subsample(factor, factor)
+                        self._help_images.append(help_image)
+                        article.image_create("end", image=help_image, pady=8)
+                        article.insert("end", "\n" + block.text + "\n", "image_alt")
+                    except (OSError, tk.TclError, ValueError):
+                        article.insert(
+                            "end",
+                            self._t("help_image_unavailable", name=block.text) + "\n",
+                            "image_alt",
+                        )
+                elif block.kind == "link" and block.target:
+                    tag = f"help-link-{link_index}"
+                    link_index += 1
+                    article.insert("end", block.text + "\n", ("link", tag))
+
+                    def follow_link(_event: Any, target: str = block.target) -> str:
+                        filename, fragment = split_help_target(target)
+                        destination = next(
+                            (topic for topic in topics if topic.source_path.name == filename),
+                            None,
+                        )
+                        if destination is not None:
+                            search_var.set("")
+                            populate_topics()
+                            index = topics.index(destination)
+                            topic_list.selection_clear(0, "end")
+                            topic_list.selection_set(index)
+                            topic_list.activate(index)
+                            select_topic(destination, fragment)
+                        return "break"
+
+                    article.tag_bind(tag, "<Button-1>", follow_link)
+                else:
+                    article.insert("end", block.text + "\n", "body")
+            article.configure(state="disabled")
+            anchor_position = heading_positions.get(target_anchor)
+            if anchor_position is not None:
+                article.yview(anchor_position)
+            else:
+                article.yview_moveto(0.0)
+
+        def on_topic_select(_event: Any = None) -> None:
+            selection = topic_list.curselection()
+            if selection and selection[0] < len(visible_topics):
+                select_topic(visible_topics[selection[0]])
+
+        def populate_topics(_event: Any = None) -> None:
+            nonlocal visible_topics
+            visible_topics = search_help_topics(topics, search_var.get())
+            topic_list.delete(0, "end")
+            for topic in visible_topics:
+                topic_list.insert("end", topic.title)
+            if visible_topics:
+                topic_list.selection_set(0)
+                topic_list.activate(0)
+                select_topic(visible_topics[0])
+            else:
+                article.configure(state="normal")
+                article.delete("1.0", "end")
+                article.insert("end", self._t("help_no_results"), "h2")
+                article.configure(state="disabled")
+
+        topic_list.bind("<<ListboxSelect>>", on_topic_select)
+        search_entry.bind("<Return>", populate_topics)
+        self._help_search_button.configure(command=populate_topics)
+
+        footer = ttk.Frame(dialog, padding=(24, 0, 24, 18), style="Canvas.TFrame")
+        footer.grid(row=2, column=0, sticky="ew")
+        self._help_close_button = ttk.Button(footer, text=self._t("help_close"), command=close_help)
+        self._help_close_button.pack(side="right")
+        populate_topics()
+        search_entry.focus_set()
 
     def _close_settings_dialog(self, dialog: tk.Toplevel) -> None:
         """Finish Tk teardown before starting the native keyboard listener."""

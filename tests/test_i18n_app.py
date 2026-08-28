@@ -36,6 +36,14 @@ def test_all_supported_interface_languages_have_the_same_catalog() -> None:
     assert translate("en", "settings") == "Settings"
 
 
+def test_help_navigation_is_localized_for_every_interface_language() -> None:
+    assert translate("uk", "help") == "Довідка"
+    assert translate("cs", "help") == "Nápověda"
+    assert translate("en", "help") == "Help"
+    assert translate("uk", "help_search") == "Пошук у довідці"
+    assert translate("uk", "help_no_results") == "Нічого не знайдено."
+
+
 def test_unknown_translation_key_fails_fast() -> None:
     with pytest.raises(KeyError):
         translate("uk", "missing-key")

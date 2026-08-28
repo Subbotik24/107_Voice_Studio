@@ -16,7 +16,11 @@ hiddenimports = collect_submodules("faster_whisper") + collect_submodules("opena
     "keyring.backends.macOS",
     "keyring.backends.Windows",
 ]
-datas = collect_data_files("voice_studio") + collect_data_files("faster_whisper")
+datas = (
+    collect_data_files("voice_studio")
+    + collect_data_files("faster_whisper")
+    + [(str(project_root / "docs" / "help"), "docs/help")]
+)
 development_only_modules = [
     "PIL",
     "_pytest",
