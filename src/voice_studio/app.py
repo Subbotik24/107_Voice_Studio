@@ -4,7 +4,7 @@ import json
 import queue
 import threading
 import tkinter as tk
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -36,12 +36,82 @@ MEDIA_FILETYPES = [
 ]
 
 
+@dataclass(frozen=True)
+class StudioTheme:
+    canvas: str
+    surface: str
+    surface_muted: str
+    accent: str
+    accent_hover: str
+    accent_soft: str
+    ink: str
+    muted_ink: str
+    primary: str
+    primary_hover: str
+    border: str
+    disabled: str
+    selection: str
+    ui_font: str
+    ui_font_fallback: str
+    mono_font: str
+    mono_font_fallback: str
+
+
+VOICE_STUDIO_THEME = StudioTheme(
+    canvas="#f6eddc",
+    surface="#fffaf1",
+    surface_muted="#efe3cd",
+    accent="#e99016",
+    accent_hover="#d9800c",
+    accent_soft="#f7e6cd",
+    ink="#2a2119",
+    muted_ink="#7c6b5d",
+    primary="#5b4332",
+    primary_hover="#483225",
+    border="#dfcaa9",
+    disabled="#eadfc8",
+    selection="#f2c77e",
+    ui_font="Bahnschrift",
+    ui_font_fallback="Segoe UI",
+    mono_font="Cascadia Mono",
+    mono_font_fallback="Consolas",
+)
+
+
+def studio_icon_pixel(x: int, y: int, *, size: int = 32, radius: int = 8) -> bool:
+    """Return whether a pixel belongs to the rounded VOICE Studio app mark."""
+
+    if not (0 <= x < size and 0 <= y < size):
+        return False
+    nearest_x = min(max(x, radius), size - radius - 1)
+    nearest_y = min(max(y, radius), size - radius - 1)
+    return (x - nearest_x) ** 2 + (y - nearest_y) ** 2 <= radius**2
+
+
+@dataclass(frozen=True)
+class StudioLayout:
+    sidebar_width: int
+    compact_sidebar: bool
+    show_readiness: bool
+
+
+def studio_layout_for_width(width: int) -> StudioLayout:
+    """Apply the approved full and compact sidebar proportions."""
+
+    if width >= 1200:
+        return StudioLayout(250, False, True)
+    if width >= 1040:
+        return StudioLayout(250, False, False)
+    return StudioLayout(88, True, False)
+
+
 class VoiceStudioApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("VOICE Studio")
-        self.geometry("1080x720")
-        self.minsize(860, 580)
+        self._install_window_icon()
+        self.geometry("1320x820")
+        self.minsize(900, 640)
         try:
             self.settings = load_settings()
             settings_error = ""
@@ -84,6 +154,15 @@ class VoiceStudioApp(tk.Tk):
                 ),
             )
 
+    def _install_window_icon(self) -> None:
+        icon = tk.PhotoImage(master=self, width=32, height=32)
+        for y in range(32):
+            for x in range(32):
+                if studio_icon_pixel(x, y):
+                    icon.put(VOICE_STUDIO_THEME.accent, to=(x, y))
+        self._window_icon = icon
+        self.iconphoto(True, icon)
+
     def _first_run_model_prompt(self) -> None:
         """Offer, but never start, a local model download on an empty profile."""
 
@@ -97,26 +176,191 @@ class VoiceStudioApp(tk.Tk):
             self._models_dialog()
 
     def _build_ui(self) -> None:
-        header = ttk.Frame(self, padding=(18, 14), style="Header.TFrame")
-        header.pack(fill="x")
-        ttk.Label(header, text="VOICE Studio", style="Brand.TLabel").pack(side="left")
-        self.engine_label = tk.StringVar()
-        ttk.Label(header, textvariable=self.engine_label, style="HeaderMuted.TLabel").pack(
-            side="left", padx=18
-        )
-        self.settings_button = ttk.Button(
-            header, text=self._t("settings"), command=self._settings_dialog
-        )
-        self.settings_button.pack(side="right")
-        self.models_button = ttk.Button(header, text=self._t("models"), command=self._models_dialog)
-        self.models_button.pack(side="right", padx=(0, 6))
-        self.backup_button = ttk.Button(
-            header, text=self._t("backup"), command=self._backup_dialog
-        )
-        self.backup_button.pack(side="right", padx=(0, 6))
+        theme = VOICE_STUDIO_THEME
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(self, padding=(18, 12, 18, 12), style="Toolbar.TFrame")
-        toolbar.pack(fill="x")
+        self.sidebar = ttk.Frame(self, width=250, style="Sidebar.TFrame")
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        self.sidebar.grid_propagate(False)
+        self.sidebar.grid_rowconfigure(1, weight=1)
+
+        brand = ttk.Frame(self.sidebar, padding=(18, 24, 18, 18), style="Sidebar.TFrame")
+        brand.grid(row=0, column=0, sticky="ew")
+        self.brand_mark = tk.Canvas(
+            brand,
+            width=34,
+            height=34,
+            background=theme.surface,
+            borderwidth=0,
+            highlightthickness=0,
+        )
+        self.brand_mark.create_polygon(
+            9,
+            1,
+            25,
+            1,
+            33,
+            9,
+            33,
+            25,
+            25,
+            33,
+            9,
+            33,
+            1,
+            25,
+            1,
+            9,
+            smooth=True,
+            splinesteps=12,
+            fill=theme.accent,
+            outline=theme.accent,
+        )
+        self.brand_mark.create_text(
+            17,
+            17,
+            text="VO",
+            fill=theme.ink,
+            font=(theme.ui_font, 10, "bold"),
+        )
+        self.brand_mark.grid(row=0, column=0, sticky="w")
+        self.brand_details = ttk.Frame(brand, style="Sidebar.TFrame")
+        self.brand_details.grid(row=0, column=1, sticky="w", padx=(10, 0))
+        ttk.Label(
+            self.brand_details, text="VOICE Studio", style="Brand.TLabel"
+        ).pack(anchor="w")
+        self.brand_subtitle_label = ttk.Label(
+            self.brand_details,
+            text=self._t("studio_subtitle"),
+            style="SidebarMuted.TLabel",
+        )
+        self.brand_subtitle_label.pack(anchor="w", pady=(2, 0))
+
+        navigation = ttk.Frame(
+            self.sidebar, padding=(18, 12, 18, 12), style="Sidebar.TFrame"
+        )
+        navigation.grid(row=1, column=0, sticky="nsew")
+        self.studio_button = ttk.Button(
+            navigation,
+            text=self._t("studio_nav"),
+            command=lambda: self.editor.focus_set(),
+            style="SidebarActive.TButton",
+        )
+        self.studio_button.pack(fill="x", pady=(0, 6))
+        self.history_nav_button = ttk.Button(
+            navigation,
+            text=self._t("history"),
+            command=lambda: self.history.focus_set(),
+            style="Sidebar.TButton",
+        )
+        self.history_nav_button.pack(fill="x", pady=6)
+        self.models_button = ttk.Button(
+            navigation,
+            text=self._t("models"),
+            command=self._models_dialog,
+            style="Sidebar.TButton",
+        )
+        self.models_button.pack(fill="x", pady=6)
+        self.backup_button = ttk.Button(
+            navigation,
+            text=self._t("backup"),
+            command=self._backup_dialog,
+            style="Sidebar.TButton",
+        )
+        self.backup_button.pack(fill="x", pady=6)
+        self.settings_button = ttk.Button(
+            navigation,
+            text=self._t("settings"),
+            command=self._settings_dialog,
+            style="Sidebar.TButton",
+        )
+        self.settings_button.pack(fill="x", pady=6)
+        self._sidebar_buttons = (
+            (self.studio_button, "studio_nav", "●"),
+            (self.history_nav_button, "history", "▤"),
+            (self.models_button, "models", "◆"),
+            (self.backup_button, "backup", "↻"),
+            (self.settings_button, "settings", "⚙"),
+        )
+
+        self.sidebar_footer = ttk.Frame(
+            self.sidebar, padding=(18, 14, 18, 22), style="Sidebar.TFrame"
+        )
+        self.sidebar_footer.grid(row=2, column=0, sticky="ew")
+        self.local_boundary_label = ttk.Label(
+            self.sidebar_footer,
+            text=self._t("local_boundary"),
+            style="SidebarFooterTitle.TLabel",
+        )
+        self.local_boundary_label.pack(anchor="w")
+        self.local_boundary_detail_label = ttk.Label(
+            self.sidebar_footer,
+            text=self._t("local_boundary_detail"),
+            style="SidebarMuted.TLabel",
+            wraplength=200,
+        )
+        self.local_boundary_detail_label.pack(anchor="w", pady=(4, 0))
+
+        self.workspace = ttk.Frame(self, style="Canvas.TFrame")
+        self.workspace.grid(row=0, column=1, sticky="nsew")
+        self.workspace.grid_rowconfigure(1, weight=1)
+        self.workspace.grid_columnconfigure(0, weight=1)
+
+        topbar = ttk.Frame(self.workspace, padding=(28, 16), style="Topbar.TFrame")
+        topbar.grid(row=0, column=0, sticky="ew")
+        self.engine_label = tk.StringVar()
+        ttk.Label(
+            topbar, textvariable=self.engine_label, style="TopbarMuted.TLabel"
+        ).pack(side="right")
+        self.topbar_context_label = ttk.Label(
+            topbar, text=self._t("workspace_context"), style="TopbarTitle.TLabel"
+        )
+        self.topbar_context_label.pack(side="left")
+
+        self.workspace_body = ttk.Frame(
+            self.workspace, padding=(28, 22, 28, 24), style="Canvas.TFrame"
+        )
+        self.workspace_body.grid(row=1, column=0, sticky="nsew")
+        self.workspace_body.grid_rowconfigure(0, weight=1)
+        self.workspace_body.grid_columnconfigure(0, weight=1)
+        self.workspace_body.grid_columnconfigure(1, minsize=250)
+
+        self.main_area = ttk.Frame(self.workspace_body, style="Canvas.TFrame")
+        main_area = self.main_area
+        main_area.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        main_area.grid_rowconfigure(3, weight=1)
+        main_area.grid_columnconfigure(0, weight=1)
+
+        heading = ttk.Frame(main_area, style="Canvas.TFrame")
+        heading.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        self.file_button = ttk.Button(
+            heading,
+            text=self._t("transcribe_file"),
+            command=self._choose_file,
+            style="PrimaryLarge.TButton",
+        )
+        self.file_button.pack(side="right", padx=(18, 0))
+        heading_copy = ttk.Frame(heading, style="Canvas.TFrame")
+        heading_copy.pack(side="left", fill="x", expand=True)
+        self.workspace_kicker_label = ttk.Label(
+            heading_copy, text=self._t("workspace_kicker"), style="Kicker.TLabel"
+        )
+        self.workspace_kicker_label.pack(anchor="w")
+        self.workspace_title_label = ttk.Label(
+            heading_copy, text=self._t("workspace_title"), style="Title.TLabel"
+        )
+        self.workspace_title_label.pack(anchor="w", pady=(3, 2))
+        self.workspace_subtitle_label = ttk.Label(
+            heading_copy,
+            text=self._t("workspace_subtitle"),
+            style="Subtitle.TLabel",
+            wraplength=560,
+        )
+        self.workspace_subtitle_label.pack(anchor="w")
+
+        toolbar = ttk.Frame(main_area, padding=(10, 10), style="ActionBar.TFrame")
+        toolbar.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.record_button = ttk.Button(
             toolbar,
             text=self._t("hold_record"),
@@ -130,39 +374,126 @@ class VoiceStudioApp(tk.Tk):
             text=self._t("continuous_record"),
             command=self._toggle_continuous_recording,
         )
-        self.continuous_record_button.pack(side="left", padx=(0, 8))
-        self.file_button = ttk.Button(
-            toolbar,
-            text=self._t("transcribe_file"),
-            command=self._choose_file,
-            style="Primary.TButton",
-        )
-        self.file_button.pack(side="left", padx=8)
+        self.continuous_record_button.pack(side="left", padx=(8, 0))
         self.cancel_button = ttk.Button(
             toolbar,
             text=self._t("cancel"),
             command=self._cancel_current,
             state="disabled",
         )
-        self.cancel_button.pack(side="left")
+        self.cancel_button.pack(side="right", padx=(8, 0))
         self.copy_button = ttk.Button(
             toolbar, text=self._t("copy_text"), command=self._copy_current
         )
-        self.copy_button.pack(side="left", padx=(8, 0))
-        self.status = tk.StringVar(value=self._t("ready_local"))
-        ttk.Label(toolbar, textvariable=self.status, style="Muted.TLabel").pack(side="right")
+        self.copy_button.pack(side="right")
 
-        paned = ttk.Panedwindow(self, orient="horizontal")
-        paned.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+        self.status = tk.StringVar(value=self._t("ready_local"))
+        status_bar = ttk.Frame(main_area, padding=(12, 8), style="Status.TFrame")
+        status_bar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(status_bar, text="●", style="StatusDot.TLabel").pack(side="left")
+        ttk.Label(status_bar, textvariable=self.status, style="Status.TLabel").pack(
+            side="left", padx=(7, 0)
+        )
+
+        self.editor_frame = ttk.Labelframe(
+            main_area, text=self._t("transcript"), padding=14, style="Card.TLabelframe"
+        )
+        self.editor_frame.grid(row=3, column=0, sticky="nsew")
+
+        self.notebook = ttk.Notebook(self.editor_frame)
+        self.notebook.pack(fill="both", expand=True)
+        corrected_frame = ttk.Frame(self.notebook, style="Card.TFrame")
+        raw_frame = ttk.Frame(self.notebook, style="Card.TFrame")
+        details_frame = ttk.Frame(self.notebook, style="Card.TFrame")
+        self.notebook.add(corrected_frame, text=self._t("corrected_text"))
+        self.notebook.add(raw_frame, text=self._t("raw"))
+        self.notebook.add(details_frame, text=self._t("data"))
+
+        format_bar = ttk.Frame(corrected_frame, padding=(0, 7, 0, 7), style="Card.TFrame")
+        format_bar.pack(fill="x")
+        self.format_label = ttk.Label(
+            format_bar, text=self._t("formatting"), style="CardMuted.TLabel"
+        )
+        self.format_label.pack(side="left")
+        ttk.Button(
+            format_bar, text="B", width=3, command=lambda: self._toggle_editor_tag("bold")
+        ).pack(side="right", padx=(5, 0))
+        ttk.Button(
+            format_bar, text="I", width=3, command=lambda: self._toggle_editor_tag("italic")
+        ).pack(side="right")
+        self.editor = tk.Text(
+            corrected_frame,
+            wrap="word",
+            undo=True,
+            font=(theme.ui_font, 11),
+            background=theme.surface,
+            foreground=theme.ink,
+            insertbackground=theme.primary,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            relief="flat",
+            padx=14,
+            pady=12,
+            height=9,
+        )
+        self.editor.pack(fill="both", expand=True)
+        self.editor.tag_configure("bold", font=(theme.ui_font, 11, "bold"))
+        self.editor.tag_configure("italic", font=(theme.ui_font, 11, "italic"))
+        self.editor.bind("<Return>", self._insert_editor_newline)
+        self.editor.bind("<Control-Return>", self._insert_editor_newline)
+        self.raw_editor = tk.Text(
+            raw_frame,
+            wrap="word",
+            font=(theme.ui_font, 11),
+            state="disabled",
+            background=theme.surface,
+            foreground=theme.ink,
+            relief="flat",
+            padx=14,
+            pady=12,
+        )
+        self.raw_editor.pack(fill="both", expand=True)
+        self.details = tk.Text(
+            details_frame,
+            wrap="word",
+            font=(theme.mono_font, 9),
+            state="disabled",
+            background=theme.surface,
+            foreground=theme.ink,
+            relief="flat",
+            padx=14,
+            pady=12,
+        )
+        self.details.pack(fill="both", expand=True)
+
+        export_bar = ttk.Frame(self.editor_frame, style="Card.TFrame")
+        export_bar.pack(fill="x", pady=(10, 0))
+        self.save_edits_button = ttk.Button(
+            export_bar, text=self._t("save_edits"), command=self._save_edits
+        )
+        self.save_edits_button.pack(side="left")
+        self.cleanup_button = ttk.Button(
+            export_bar, text=self._t("cleanup"), command=self._ai_cleanup
+        )
+        self.cleanup_button.pack(side="left", padx=6)
+        self.undo_cleanup_button = ttk.Button(
+            export_bar, text=self._t("undo_cleanup"), command=self._undo_ai_cleanup
+        )
+        self.undo_cleanup_button.pack(side="left")
+        for fmt in ("TXT", "MD", "JSON", "SRT", "VTT"):
+            ttk.Button(
+                export_bar,
+                text=fmt,
+                command=partial(self._export, fmt.lower()),
+            ).pack(side="right", padx=2)
 
         self.history_frame = ttk.Labelframe(
-            paned, text=self._t("history"), padding=12, style="Card.TLabelframe"
+            main_area,
+            text=self._t("history"),
+            padding=12,
+            style="Card.TLabelframe",
         )
-        self.editor_frame = ttk.Labelframe(
-            paned, text=self._t("transcript"), padding=12, style="Card.TLabelframe"
-        )
-        paned.add(self.history_frame, weight=1)
-        paned.add(self.editor_frame, weight=3)
+        self.history_frame.grid(row=4, column=0, sticky="ew", pady=(12, 0))
 
         search_row = ttk.Frame(self.history_frame, style="Card.TFrame")
         search_row.pack(fill="x", pady=(0, 6))
@@ -183,15 +514,16 @@ class VoiceStudioApp(tk.Tk):
             list_frame,
             width=34,
             activestyle="dotbox",
-            background="#fffdf8",
-            foreground="#1d293b",
-            selectbackground="#315eae",
-            selectforeground="#ffffff",
-            highlightbackground="#ded7ca",
-            highlightcolor="#315eae",
+            background=theme.surface,
+            foreground=theme.ink,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            highlightbackground=theme.border,
+            highlightcolor=theme.accent,
             relief="flat",
             borderwidth=1,
-            font=("Segoe UI", 10),
+            font=(theme.ui_font, 10),
+            height=4,
         )
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.history.yview)
         self.history.configure(yscrollcommand=scrollbar.set)
@@ -209,173 +541,431 @@ class VoiceStudioApp(tk.Tk):
         )
         self.delete_history_button.pack(side="right")
 
-        self.notebook = ttk.Notebook(self.editor_frame)
-        self.notebook.pack(fill="both", expand=True)
-        corrected_frame = ttk.Frame(self.notebook)
-        raw_frame = ttk.Frame(self.notebook)
-        details_frame = ttk.Frame(self.notebook)
-        self.notebook.add(corrected_frame, text=self._t("corrected_text"))
-        self.notebook.add(raw_frame, text=self._t("raw"))
-        self.notebook.add(details_frame, text=self._t("data"))
+        self.readiness_frame = ttk.Frame(
+            self.workspace_body, width=250, padding=18, style="CardBorder.TFrame"
+        )
+        self.readiness_frame.grid(row=0, column=1, sticky="nsew")
+        self.readiness_frame.grid_propagate(False)
+        self.readiness_title_label = ttk.Label(
+            self.readiness_frame, text=self._t("readiness"), style="CardTitle.TLabel"
+        )
+        self.readiness_title_label.pack(anchor="w")
+        ready_box = ttk.Frame(
+            self.readiness_frame, padding=(12, 10), style="ReadyBox.TFrame"
+        )
+        ready_box.pack(fill="x", pady=(14, 18))
+        self.ready_status_label = ttk.Label(
+            ready_box, text=self._t("ready_to_work"), style="Ready.TLabel"
+        )
+        self.ready_status_label.pack(anchor="w")
+        self.local_processing_label = ttk.Label(
+            ready_box, text=self._t("local_processing"), style="ReadyMuted.TLabel"
+        )
+        self.local_processing_label.pack(anchor="w", pady=(2, 0))
 
-        format_bar = ttk.Frame(corrected_frame, padding=(0, 0, 0, 6))
-        format_bar.pack(fill="x")
-        self.format_label = ttk.Label(format_bar, text=self._t("formatting"))
-        self.format_label.pack(side="left")
-        ttk.Button(
-            format_bar, text="B", width=3, command=lambda: self._toggle_editor_tag("bold")
-        ).pack(side="right", padx=(3, 0))
-        ttk.Button(
-            format_bar, text="I", width=3, command=lambda: self._toggle_editor_tag("italic")
-        ).pack(side="right")
-        self.editor = tk.Text(
-            corrected_frame,
-            wrap="word",
-            undo=True,
-            font=("Segoe UI", 11),
-            background="#fffdf8",
-            foreground="#1d293b",
-            insertbackground="#172641",
-            selectbackground="#c9d8f0",
-            relief="flat",
-            padx=12,
-            pady=10,
+        self.readiness_engine_caption = ttk.Label(
+            self.readiness_frame, text=self._t("engine"), style="CardMuted.TLabel"
         )
-        self.editor.pack(fill="both", expand=True)
-        self.editor.tag_configure("bold", font=("Segoe UI", 11, "bold"))
-        self.editor.tag_configure("italic", font=("Segoe UI", 11, "italic"))
-        self.editor.bind("<Return>", self._insert_editor_newline)
-        self.editor.bind("<Control-Return>", self._insert_editor_newline)
-        self.raw_editor = tk.Text(
-            raw_frame,
-            wrap="word",
-            font=("Segoe UI", 11),
-            state="disabled",
-            background="#f1ece3",
-            foreground="#1d293b",
-            relief="flat",
-            padx=12,
-            pady=10,
+        self.readiness_engine_caption.pack(anchor="w")
+        self.readiness_engine_value = tk.StringVar()
+        ttk.Label(
+            self.readiness_frame,
+            textvariable=self.readiness_engine_value,
+            style="CardValue.TLabel",
+            wraplength=210,
+        ).pack(anchor="w", pady=(2, 12))
+        self.readiness_model_caption = ttk.Label(
+            self.readiness_frame, text=self._t("active_model"), style="CardMuted.TLabel"
         )
-        self.raw_editor.pack(fill="both", expand=True)
-        self.details = tk.Text(
-            details_frame,
-            wrap="word",
-            font=("Cascadia Mono", 9),
-            state="disabled",
-            background="#f1ece3",
-            foreground="#1d293b",
-            relief="flat",
-            padx=12,
-            pady=10,
+        self.readiness_model_caption.pack(anchor="w")
+        self.readiness_model_value = tk.StringVar()
+        ttk.Label(
+            self.readiness_frame,
+            textvariable=self.readiness_model_value,
+            style="CardValue.TLabel",
+            wraplength=210,
+        ).pack(anchor="w", pady=(2, 12))
+        self.readiness_language_caption = ttk.Label(
+            self.readiness_frame,
+            text=self._t("interface_language"),
+            style="CardMuted.TLabel",
         )
-        self.details.pack(fill="both", expand=True)
+        self.readiness_language_caption.pack(anchor="w")
+        self.readiness_language_value = tk.StringVar()
+        ttk.Label(
+            self.readiness_frame,
+            textvariable=self.readiness_language_value,
+            style="CardValue.TLabel",
+        ).pack(anchor="w", pady=(2, 12))
+        self.readiness_ai_caption = ttk.Label(
+            self.readiness_frame,
+            text=self._t("ai_cleanup_short"),
+            style="CardMuted.TLabel",
+        )
+        self.readiness_ai_caption.pack(anchor="w")
+        self.readiness_ai_value = tk.StringVar()
+        ttk.Label(
+            self.readiness_frame,
+            textvariable=self.readiness_ai_value,
+            style="CardValue.TLabel",
+            wraplength=210,
+        ).pack(anchor="w", pady=(2, 12))
 
-        export_bar = ttk.Frame(self.editor_frame, style="Card.TFrame")
-        export_bar.pack(fill="x", pady=(8, 0))
-        self.save_edits_button = ttk.Button(
-            export_bar, text=self._t("save_edits"), command=self._save_edits
+        ttk.Separator(self.readiness_frame).pack(fill="x", pady=(4, 14))
+        self.privacy_note_label = ttk.Label(
+            self.readiness_frame,
+            text=self._t("privacy_note"),
+            style="CardMuted.TLabel",
+            wraplength=210,
+            justify="left",
         )
-        self.save_edits_button.pack(side="left")
-        self.cleanup_button = ttk.Button(
-            export_bar, text=self._t("cleanup"), command=self._ai_cleanup
-        )
-        self.cleanup_button.pack(side="left", padx=6)
-        self.undo_cleanup_button = ttk.Button(
-            export_bar, text=self._t("undo_cleanup"), command=self._undo_ai_cleanup
-        )
-        self.undo_cleanup_button.pack(side="left")
-        for fmt in ("TXT", "MD", "JSON", "SRT", "VTT"):
-            ttk.Button(
-                export_bar,
-                text=fmt,
-                command=partial(self._export, fmt.lower()),
-            ).pack(side="right", padx=2)
+        self.privacy_note_label.pack(anchor="w")
+
+        self._studio_layout: StudioLayout | None = None
+        self.bind("<Configure>", self._on_window_configure, add="+")
+        self.after_idle(lambda: self._apply_studio_layout(self.winfo_width(), force=True))
         self._update_engine_label()
+
+    def _on_window_configure(self, event: tk.Event[Any]) -> None:
+        if event.widget is self:
+            self._apply_studio_layout(int(event.width))
+
+    def _apply_studio_layout(self, width: int, *, force: bool = False) -> None:
+        layout = studio_layout_for_width(width)
+        if not force and layout == self._studio_layout:
+            return
+        self._studio_layout = layout
+        self.sidebar.configure(width=layout.sidebar_width)
+        if layout.compact_sidebar:
+            self.brand_details.grid_remove()
+            self.sidebar_footer.grid_remove()
+            self.workspace_body.configure(padding=(20, 18, 20, 20))
+        else:
+            self.brand_details.grid()
+            self.sidebar_footer.grid()
+            self.workspace_body.configure(padding=(28, 22, 28, 24))
+        if layout.show_readiness:
+            self.readiness_frame.grid()
+            self.workspace_body.grid_columnconfigure(1, minsize=250)
+            self.main_area.grid_configure(padx=(0, 18))
+        else:
+            self.readiness_frame.grid_remove()
+            self.workspace_body.grid_columnconfigure(1, minsize=0)
+            self.main_area.grid_configure(padx=0)
+        for button, key, symbol in self._sidebar_buttons:
+            label = symbol if layout.compact_sidebar else f"●  {self._t(key)}"
+            button.configure(text=label)
 
     def _t(self, key: str, **values: Any) -> str:
         language = getattr(self.settings, "ui_language", "uk")
         return translate(language, key, **values)
 
     def _configure_theme(self) -> None:
-        self.configure(background="#f6f2e9")
+        theme = VOICE_STUDIO_THEME
+        self.configure(background=theme.canvas)
         style = ttk.Style(self)
         if "clam" in style.theme_names():
             style.theme_use("clam")
-        style.configure(".", font=("Segoe UI", 10), background="#f6f2e9")
-        style.configure("TFrame", background="#f6f2e9")
-        style.configure("Header.TFrame", background="#172641")
-        style.configure("Toolbar.TFrame", background="#f1ece3")
-        style.configure("Card.TFrame", background="#fffdf8")
-        style.configure("TLabel", background="#f6f2e9", foreground="#1d293b")
+        style.configure(".", font=(theme.ui_font, 10), background=theme.canvas)
+        style.configure("TFrame", background=theme.canvas)
+        style.configure("Canvas.TFrame", background=theme.canvas)
+        style.configure("Topbar.TFrame", background=theme.surface)
+        style.configure("Sidebar.TFrame", background=theme.surface)
+        style.configure("Header.TFrame", background=theme.primary)
+        style.configure("Toolbar.TFrame", background=theme.surface_muted)
+        style.configure(
+            "ActionBar.TFrame",
+            background=theme.canvas,
+            borderwidth=0,
+        )
+        style.configure(
+            "Status.TFrame",
+            background=theme.surface_muted,
+            bordercolor=theme.border,
+            relief="solid",
+            borderwidth=1,
+        )
+        style.configure("Card.TFrame", background=theme.surface)
+        style.configure(
+            "CardBorder.TFrame",
+            background=theme.surface,
+            bordercolor=theme.border,
+            relief="solid",
+            borderwidth=1,
+        )
+        style.configure("ReadyBox.TFrame", background=theme.surface_muted)
+        style.configure("SettingsHeader.TFrame", background=theme.surface)
+        style.configure("TLabel", background=theme.canvas, foreground=theme.ink)
         style.configure(
             "Brand.TLabel",
-            background="#172641",
-            foreground="#ffffff",
-            font=("Segoe UI Semibold", 17),
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 14, "bold"),
         )
         style.configure(
             "HeaderMuted.TLabel",
-            background="#172641",
-            foreground="#d8e1ef",
+            background=theme.primary,
+            foreground=theme.surface,
         )
-        style.configure("Muted.TLabel", background="#f1ece3", foreground="#667080")
+        style.configure(
+            "SidebarMuted.TLabel",
+            background=theme.surface,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 9),
+        )
+        style.configure(
+            "SidebarFooterTitle.TLabel",
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 10, "bold"),
+        )
+        style.configure(
+            "TopbarTitle.TLabel",
+            background=theme.surface,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 10),
+        )
+        style.configure(
+            "TopbarMuted.TLabel",
+            background=theme.surface,
+            foreground=theme.muted_ink,
+            font=(theme.mono_font, 9),
+        )
+        style.configure(
+            "Kicker.TLabel",
+            background=theme.canvas,
+            foreground=theme.accent,
+            font=(theme.ui_font, 9, "bold"),
+        )
+        style.configure(
+            "Title.TLabel",
+            background=theme.canvas,
+            foreground=theme.ink,
+            font=(theme.ui_font, 25, "bold"),
+        )
+        style.configure(
+            "Subtitle.TLabel",
+            background=theme.canvas,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 10),
+        )
+        style.configure(
+            "Muted.TLabel",
+            background=theme.surface_muted,
+            foreground=theme.muted_ink,
+        )
+        style.configure(
+            "Status.TLabel",
+            background=theme.surface_muted,
+            foreground=theme.ink,
+            font=(theme.ui_font, 9),
+        )
+        style.configure(
+            "StatusDot.TLabel",
+            background=theme.surface_muted,
+            foreground=theme.accent,
+            font=(theme.ui_font, 9),
+        )
+        style.configure(
+            "CardTitle.TLabel",
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 14, "bold"),
+        )
+        style.configure(
+            "CardMuted.TLabel",
+            background=theme.surface,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 9),
+        )
+        style.configure(
+            "CardValue.TLabel",
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 10),
+        )
+        style.configure(
+            "Ready.TLabel",
+            background=theme.surface_muted,
+            foreground=theme.ink,
+            font=(theme.ui_font, 10, "bold"),
+        )
+        style.configure(
+            "ReadyMuted.TLabel",
+            background=theme.surface_muted,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 9),
+        )
         style.configure(
             "TButton",
-            background="#fffdf8",
-            foreground="#1d293b",
-            bordercolor="#ded7ca",
-            lightcolor="#fffdf8",
-            darkcolor="#fffdf8",
+            background=theme.surface,
+            foreground=theme.ink,
+            bordercolor=theme.border,
+            lightcolor=theme.surface,
+            darkcolor=theme.surface,
             padding=(10, 7),
             relief="flat",
+            font=(theme.ui_font, 10),
         )
         style.map(
             "TButton",
-            background=[("active", "#f1ece3"), ("disabled", "#e7e1d7")],
-            foreground=[("disabled", "#8b929d")],
-            bordercolor=[("focus", "#315eae")],
+            background=[("active", theme.accent_soft), ("disabled", theme.disabled)],
+            foreground=[("disabled", theme.muted_ink)],
+            bordercolor=[("focus", theme.accent)],
         )
         style.configure(
             "Primary.TButton",
-            background="#315eae",
-            foreground="#ffffff",
-            bordercolor="#315eae",
-            font=("Segoe UI Semibold", 10),
+            background=theme.primary,
+            foreground=theme.surface,
+            bordercolor=theme.primary,
+            font=(theme.ui_font, 10, "bold"),
         )
-        style.map("Primary.TButton", background=[("active", "#274f96")])
+        style.map(
+            "Primary.TButton",
+            background=[("active", theme.primary_hover), ("disabled", theme.disabled)],
+            foreground=[("disabled", theme.muted_ink)],
+        )
+        style.configure(
+            "PrimaryLarge.TButton",
+            background=theme.primary,
+            foreground=theme.surface,
+            bordercolor=theme.primary,
+            font=(theme.ui_font, 10, "bold"),
+            padding=(16, 11),
+        )
+        style.map(
+            "PrimaryLarge.TButton",
+            background=[("active", theme.primary_hover), ("disabled", theme.disabled)],
+            foreground=[("disabled", theme.muted_ink)],
+        )
+        style.configure(
+            "Sidebar.TButton",
+            background=theme.surface,
+            foreground=theme.ink,
+            bordercolor=theme.surface,
+            lightcolor=theme.surface,
+            darkcolor=theme.surface,
+            padding=(13, 11),
+            anchor="w",
+            font=(theme.ui_font, 10),
+        )
+        style.map(
+            "Sidebar.TButton",
+            background=[("active", theme.accent_soft), ("disabled", theme.surface)],
+            foreground=[("active", theme.ink), ("disabled", theme.muted_ink)],
+            bordercolor=[("focus", theme.accent)],
+        )
+        style.configure(
+            "SidebarActive.TButton",
+            background=theme.accent_soft,
+            foreground=theme.ink,
+            bordercolor=theme.accent_soft,
+            lightcolor=theme.accent_soft,
+            darkcolor=theme.accent_soft,
+            padding=(13, 11),
+            anchor="w",
+            font=(theme.ui_font, 10, "bold"),
+        )
+        style.map(
+            "SidebarActive.TButton",
+            background=[("active", theme.accent_soft)],
+            bordercolor=[("focus", theme.accent)],
+        )
         style.configure(
             "Record.TButton",
-            background="#e7b45e",
-            foreground="#172641",
-            bordercolor="#d7a34d",
-            font=("Segoe UI Semibold", 10),
+            background=theme.accent,
+            foreground=theme.ink,
+            bordercolor=theme.accent,
+            font=(theme.ui_font, 10, "bold"),
             padding=(12, 8),
         )
-        style.map("Record.TButton", background=[("active", "#dca84f")])
+        style.map(
+            "Record.TButton",
+            background=[("active", theme.accent_hover), ("disabled", theme.disabled)],
+            foreground=[("disabled", theme.muted_ink)],
+        )
         style.configure(
             "Card.TLabelframe",
-            background="#fffdf8",
-            bordercolor="#ded7ca",
+            background=theme.surface,
+            bordercolor=theme.border,
             relief="solid",
             borderwidth=1,
         )
         style.configure(
             "Card.TLabelframe.Label",
-            background="#f6f2e9",
-            foreground="#172641",
-            font=("Segoe UI Semibold", 10),
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 11),
         )
-        style.configure("TEntry", fieldbackground="#fffdf8", foreground="#1d293b", padding=6)
-        style.configure("TCombobox", fieldbackground="#fffdf8", foreground="#1d293b", padding=5)
-        style.configure("TNotebook", background="#fffdf8", borderwidth=0)
-        style.configure("TNotebook.Tab", padding=(12, 7), background="#f1ece3")
-        style.map("TNotebook.Tab", background=[("selected", "#fffdf8")])
+        style.configure(
+            "TEntry",
+            fieldbackground=theme.surface,
+            foreground=theme.ink,
+            bordercolor=theme.border,
+            lightcolor=theme.surface,
+            darkcolor=theme.surface,
+            padding=6,
+        )
+        style.map(
+            "TEntry",
+            bordercolor=[("focus", theme.accent)],
+            lightcolor=[("focus", theme.accent)],
+            darkcolor=[("focus", theme.accent)],
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=theme.surface,
+            background=theme.surface,
+            foreground=theme.ink,
+            arrowcolor=theme.primary,
+            bordercolor=theme.border,
+            padding=5,
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", theme.surface)],
+            bordercolor=[("focus", theme.accent)],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=theme.surface,
+            foreground=theme.ink,
+            font=(theme.ui_font, 10),
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", theme.surface)],
+            indicatorcolor=[("selected", theme.accent)],
+        )
+        style.configure("TNotebook", background=theme.surface, borderwidth=0)
+        style.configure(
+            "TNotebook.Tab",
+            padding=(15, 9),
+            background=theme.canvas,
+            foreground=theme.muted_ink,
+            font=(theme.ui_font, 10),
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[("selected", theme.surface), ("active", theme.accent_soft)],
+            foreground=[("selected", theme.ink), ("active", theme.ink)],
+        )
+        style.configure(
+            "TScrollbar",
+            background=theme.surface_muted,
+            troughcolor=theme.canvas,
+            bordercolor=theme.canvas,
+            arrowcolor=theme.primary,
+        )
 
     def _refresh_ui_text(self) -> None:
-        self.settings_button.configure(text=self._t("settings"))
-        self.models_button.configure(text=self._t("models"))
-        self.backup_button.configure(text=self._t("backup"))
+        self.brand_subtitle_label.configure(text=self._t("studio_subtitle"))
+        self.topbar_context_label.configure(text=self._t("workspace_context"))
+        self.workspace_kicker_label.configure(text=self._t("workspace_kicker"))
+        self.workspace_title_label.configure(text=self._t("workspace_title"))
+        self.workspace_subtitle_label.configure(text=self._t("workspace_subtitle"))
+        self.local_boundary_label.configure(text=self._t("local_boundary"))
+        self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
         self.continuous_record_button.configure(
             text=self._t("stop_record" if self._continuous_recording else "continuous_record")
@@ -395,6 +985,15 @@ class VoiceStudioApp(tk.Tk):
         self.save_edits_button.configure(text=self._t("save_edits"))
         self.cleanup_button.configure(text=self._t("cleanup"))
         self.undo_cleanup_button.configure(text=self._t("undo_cleanup"))
+        self.readiness_title_label.configure(text=self._t("readiness"))
+        self.ready_status_label.configure(text=self._t("ready_to_work"))
+        self.local_processing_label.configure(text=self._t("local_processing"))
+        self.readiness_engine_caption.configure(text=self._t("engine"))
+        self.readiness_model_caption.configure(text=self._t("active_model"))
+        self.readiness_language_caption.configure(text=self._t("interface_language"))
+        self.readiness_ai_caption.configure(text=self._t("ai_cleanup_short"))
+        self.privacy_note_label.configure(text=self._t("privacy_note"))
+        self._apply_studio_layout(self.winfo_width(), force=True)
         self._update_engine_label()
 
     def _update_engine_label(self) -> None:
@@ -405,6 +1004,19 @@ class VoiceStudioApp(tk.Tk):
         self.engine_label.set(
             self._t("engine_status", engine=self.settings.engine, model=model)
         )
+        self.readiness_engine_value.set(self.settings.engine)
+        self.readiness_model_value.set(model)
+        language_labels = dict(UI_LANGUAGE_CHOICES)
+        self.readiness_language_value.set(
+            language_labels.get(self.settings.ui_language, self.settings.ui_language)
+        )
+        if self.settings.cleanup_provider == "ollama":
+            cleanup_model = self.settings.ollama_model or self._t("not_selected")
+            self.readiness_ai_value.set(f"Ollama / {cleanup_model}")
+        else:
+            self.readiness_ai_value.set(
+                f"OpenAI / {self.settings.openai_cleanup_model or self._t('not_selected')}"
+            )
 
     def _set_busy(self, value: bool) -> None:
         self._busy = value
@@ -1301,7 +1913,12 @@ class VoiceStudioApp(tk.Tk):
         dialog.title(self._t("settings_title"))
         dialog.transient(self)
         dialog.grab_set()
-        dialog.resizable(False, False)
+        dialog.geometry("980x700")
+        dialog.minsize(900, 620)
+        dialog.resizable(True, True)
+        dialog.configure(background=VOICE_STUDIO_THEME.canvas)
+        dialog.grid_rowconfigure(1, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
 
         language_labels = dict(UI_LANGUAGE_CHOICES)
         language_codes = {label: code for code, label in UI_LANGUAGE_CHOICES}
@@ -1340,61 +1957,74 @@ class VoiceStudioApp(tk.Tk):
         }
         info = tk.StringVar(value=ollama_status)
 
-        def row_label(row: int, text: str) -> None:
-            ttk.Label(dialog, text=text).grid(row=row, column=0, sticky="w", padx=10, pady=2)
-
-        row_label(0, self._t("engine"))
-        ttk.Combobox(
-            dialog,
-            textvariable=variables["engine"],
-            values=("faster-whisper", "openai-cloud"),
-            state="readonly",
-            width=42,
-        ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
-
-        row_label(1, self._t("transcription_language"))
-        ttk.Combobox(
-            dialog,
-            textvariable=variables["language"],
-            values=("auto", "uk", "cs", "en"),
-            state="readonly",
-            width=42,
-        ).grid(row=1, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
-
-        row_label(2, self._t("model"))
-        ttk.Entry(dialog, textvariable=variables["model"], width=45).grid(
-            row=2, column=1, columnspan=2, sticky="ew", padx=10, pady=2
+        header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="SettingsHeader.TFrame")
+        header.grid(row=0, column=0, sticky="ew")
+        ttk.Label(header, text=self._t("settings_title"), style="CardTitle.TLabel").pack(
+            anchor="w"
         )
+        ttk.Label(
+            header,
+            text=self._t("settings_intro"),
+            style="CardMuted.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
 
-        row_label(3, self._t("interface_language"))
+        notebook = ttk.Notebook(dialog)
+        notebook.grid(row=1, column=0, sticky="nsew", padx=24, pady=(18, 12))
+        general_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
+        recognition_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
+        local_ai_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
+        notebook.add(general_page, text=self._t("general_settings"))
+        notebook.add(recognition_page, text=self._t("recognition_settings"))
+        notebook.add(local_ai_page, text=self._t("local_ai_settings"))
+        for page in (general_page, recognition_page, local_ai_page):
+            page.grid_columnconfigure(0, weight=1, uniform="settings")
+            page.grid_columnconfigure(1, weight=1, uniform="settings")
+
+        def field(
+            parent: ttk.Frame,
+            row: int,
+            column: int,
+            label: str,
+            *,
+            columnspan: int = 1,
+        ) -> ttk.Frame:
+            container = ttk.Frame(parent, style="Card.TFrame")
+            container.grid(
+                row=row,
+                column=column,
+                columnspan=columnspan,
+                sticky="ew",
+                padx=(0, 14) if column == 0 and columnspan == 1 else 0,
+                pady=(0, 18),
+            )
+            ttk.Label(container, text=label, style="CardMuted.TLabel").pack(
+                anchor="w", pady=(0, 6)
+            )
+            return container
+
+        interface_field = field(general_page, 0, 0, self._t("interface_language"))
         ttk.Combobox(
-            dialog,
+            interface_field,
             textvariable=variables["ui_language"],
             values=tuple(label for _code, label in UI_LANGUAGE_CHOICES),
             state="readonly",
-            width=42,
-        ).grid(row=3, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        ).pack(fill="x")
 
-        row_label(4, self._t("device"))
-        ttk.Entry(dialog, textvariable=variables["device"], width=45).grid(
-            row=4, column=1, columnspan=2, sticky="ew", padx=10, pady=2
-        )
-        row_label(5, self._t("compute_type"))
-        ttk.Entry(dialog, textvariable=variables["compute_type"], width=45).grid(
-            row=5, column=1, columnspan=2, sticky="ew", padx=10, pady=2
-        )
-        row_label(6, self._t("audio_retention"))
+        retention_field = field(general_page, 0, 1, self._t("audio_retention"))
         ttk.Combobox(
-            dialog,
+            retention_field,
             textvariable=variables["retention"],
             values=("keep", "delete_after_transcription"),
             state="readonly",
-            width=42,
-        ).grid(row=6, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        ).pack(fill="x")
 
-        row_label(7, self._t("dictionary_json"))
-        ttk.Entry(dialog, textvariable=variables["dictionary_path"], width=45).grid(
-            row=7, column=1, sticky="ew", padx=(10, 4), pady=2
+        hotkey_field = field(
+            general_page, 1, 0, self._t("hotkey"), columnspan=2
+        )
+        hotkey_row = ttk.Frame(hotkey_field, style="Card.TFrame")
+        hotkey_row.pack(fill="x")
+        ttk.Entry(hotkey_row, textvariable=variables["hotkey"]).pack(
+            side="left", fill="x", expand=True
         )
 
         def choose_dictionary() -> None:
@@ -1402,13 +2032,6 @@ class VoiceStudioApp(tk.Tk):
             if path:
                 variables["dictionary_path"].set(path)
 
-        ttk.Button(dialog, text=self._t("browse"), command=choose_dictionary).grid(
-            row=7, column=2, sticky="ew", padx=(4, 10), pady=2
-        )
-        row_label(8, self._t("hotkey"))
-        ttk.Entry(dialog, textvariable=variables["hotkey"], width=34).grid(
-            row=8, column=1, sticky="ew", padx=(10, 4), pady=2
-        )
         capture_active = False
 
         def capture_hotkey(event: Any) -> str | None:
@@ -1434,42 +2057,85 @@ class VoiceStudioApp(tk.Tk):
             dialog.focus_set()
 
         dialog.bind("<KeyPress>", capture_hotkey)
-        ttk.Button(dialog, text=self._t("capture_hotkey"), command=begin_hotkey_capture).grid(
-            row=8, column=2, sticky="ew", padx=(4, 10), pady=2
-        )
+        ttk.Button(
+            hotkey_row,
+            text=self._t("capture_hotkey"),
+            command=begin_hotkey_capture,
+        ).pack(side="left", padx=(8, 0))
+
         ttk.Checkbutton(
-            dialog,
+            general_page,
             text=self._t("auto_copy"),
             variable=variables["auto_copy"],
-        ).grid(row=9, column=1, columnspan=2, sticky="w", padx=10, pady=2)
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 10))
         ttk.Checkbutton(
-            dialog,
+            general_page,
             text=self._t("offline_only"),
             variable=variables["offline_only"],
-        ).grid(row=10, column=1, columnspan=2, sticky="w", padx=10, pady=2)
+        ).grid(row=3, column=0, columnspan=2, sticky="w")
 
-        row_label(11, self._t("openai_stt_model"))
-        ttk.Entry(dialog, textvariable=variables["openai_transcription_model"], width=45).grid(
-            row=11, column=1, columnspan=2, sticky="ew", padx=10, pady=2
-        )
-        row_label(12, self._t("cleanup_provider"))
+        engine_field = field(recognition_page, 0, 0, self._t("engine"))
         ttk.Combobox(
-            dialog,
+            engine_field,
+            textvariable=variables["engine"],
+            values=("faster-whisper", "openai-cloud"),
+            state="readonly",
+        ).pack(fill="x")
+
+        language_field = field(
+            recognition_page, 0, 1, self._t("transcription_language")
+        )
+        ttk.Combobox(
+            language_field,
+            textvariable=variables["language"],
+            values=("auto", "uk", "cs", "en"),
+            state="readonly",
+        ).pack(fill="x")
+
+        model_field = field(recognition_page, 1, 0, self._t("model"))
+        ttk.Entry(model_field, textvariable=variables["model"]).pack(fill="x")
+
+        device_field = field(recognition_page, 1, 1, self._t("device"))
+        ttk.Entry(device_field, textvariable=variables["device"]).pack(fill="x")
+
+        compute_field = field(recognition_page, 2, 0, self._t("compute_type"))
+        ttk.Entry(compute_field, textvariable=variables["compute_type"]).pack(fill="x")
+
+        openai_stt_field = field(recognition_page, 2, 1, self._t("openai_stt_model"))
+        ttk.Entry(
+            openai_stt_field, textvariable=variables["openai_transcription_model"]
+        ).pack(fill="x")
+
+        dictionary_field = field(
+            recognition_page, 3, 0, self._t("dictionary_json"), columnspan=2
+        )
+        dictionary_row = ttk.Frame(dictionary_field, style="Card.TFrame")
+        dictionary_row.pack(fill="x")
+        ttk.Entry(dictionary_row, textvariable=variables["dictionary_path"]).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(dictionary_row, text=self._t("browse"), command=choose_dictionary).pack(
+            side="left", padx=(8, 0)
+        )
+
+        provider_field = field(local_ai_page, 0, 0, self._t("cleanup_provider"))
+        ttk.Combobox(
+            provider_field,
             textvariable=variables["cleanup_provider"],
             values=("ollama", "openai"),
             state="readonly",
-            width=42,
-        ).grid(row=12, column=1, columnspan=2, sticky="ew", padx=10, pady=2)
+        ).pack(fill="x")
 
-        row_label(13, self._t("ollama_model"))
+        ollama_field = field(local_ai_page, 0, 1, self._t("ollama_model"))
+        ollama_row = ttk.Frame(ollama_field, style="Card.TFrame")
+        ollama_row.pack(fill="x")
         ollama_combo = ttk.Combobox(
-            dialog,
+            ollama_row,
             textvariable=variables["ollama_model"],
             values=tuple(installed_ollama_models),
             state="readonly",
-            width=34,
         )
-        ollama_combo.grid(row=13, column=1, sticky="ew", padx=(10, 4), pady=2)
+        ollama_combo.pack(side="left", fill="x", expand=True)
 
         def refresh_ollama_models() -> None:
             try:
@@ -1486,15 +2152,17 @@ class VoiceStudioApp(tk.Tk):
                 info.set(str(exc))
 
         ttk.Button(
-            dialog,
+            ollama_row,
             text=self._t("refresh_models"),
             command=refresh_ollama_models,
-        ).grid(row=13, column=2, sticky="ew", padx=(4, 10), pady=2)
+        ).pack(side="left", padx=(8, 0))
 
-        row_label(14, self._t("openai_cleanup_model"))
-        ttk.Entry(dialog, textvariable=variables["openai_cleanup_model"], width=45).grid(
-            row=14, column=1, columnspan=2, sticky="ew", padx=10, pady=2
+        openai_cleanup_field = field(
+            local_ai_page, 1, 0, self._t("openai_cleanup_model"), columnspan=2
         )
+        ttk.Entry(
+            openai_cleanup_field, textvariable=variables["openai_cleanup_model"]
+        ).pack(fill="x")
 
         def set_cloud_key() -> None:
             value = simpledialog.askstring(
@@ -1531,8 +2199,9 @@ class VoiceStudioApp(tk.Tk):
             status = openai_key_status()
             info.set(self._t("key_status", source=status.get("source", "unknown")))
 
-        key_row = ttk.Frame(dialog)
-        key_row.grid(row=15, column=1, columnspan=2, sticky="w", padx=10, pady=2)
+        key_field = field(local_ai_page, 2, 0, "OpenAI", columnspan=2)
+        key_row = ttk.Frame(key_field, style="Card.TFrame")
+        key_row.pack(fill="x")
         ttk.Button(key_row, text=self._t("set_key"), command=set_cloud_key).pack(
             side="left"
         )
@@ -1545,10 +2214,23 @@ class VoiceStudioApp(tk.Tk):
         ttk.Button(key_row, text=self._t("test_connection"), command=test_cloud_key).pack(
             side="left", padx=5
         )
+        ttk.Label(
+            local_ai_page,
+            text=self._t("cloud_consent"),
+            style="CardMuted.TLabel",
+            wraplength=760,
+        ).grid(row=3, column=0, columnspan=2, sticky="w")
 
-        ttk.Label(dialog, textvariable=info, wraplength=470).grid(
-            row=16, column=0, columnspan=3, sticky="w", padx=10, pady=(4, 2)
-        )
+        footer = ttk.Frame(dialog, padding=(24, 12, 24, 18), style="SettingsHeader.TFrame")
+        footer.grid(row=2, column=0, sticky="ew")
+        ttk.Label(
+            footer,
+            textvariable=info,
+            wraplength=640,
+            style="CardMuted.TLabel",
+        ).pack(side="left", fill="x", expand=True)
+        footer_actions = ttk.Frame(footer, style="SettingsHeader.TFrame")
+        footer_actions.pack(side="right", padx=(18, 0))
 
         def close_without_saving() -> None:
             self._close_settings_dialog(dialog)
@@ -1588,12 +2270,12 @@ class VoiceStudioApp(tk.Tk):
             self.status.set(self._t("settings_saved"))
             self._close_settings_dialog(dialog)
 
-        ttk.Button(dialog, text=self._t("cancel"), command=close_without_saving).grid(
-            row=17, column=1, sticky="e", padx=5, pady=6
-        )
-        ttk.Button(dialog, text=self._t("save"), command=save, style="Primary.TButton").grid(
-            row=17, column=2, sticky="e", padx=10, pady=6
-        )
+        ttk.Button(
+            footer_actions, text=self._t("cancel"), command=close_without_saving
+        ).pack(side="left", padx=(0, 8))
+        ttk.Button(
+            footer_actions, text=self._t("save"), command=save, style="Primary.TButton"
+        ).pack(side="left")
         dialog.protocol("WM_DELETE_WINDOW", close_without_saving)
 
     def _models_dialog(self) -> None:

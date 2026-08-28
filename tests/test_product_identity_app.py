@@ -57,6 +57,7 @@ def test_tracked_text_files_do_not_contain_the_retired_product_name() -> None:
     ).stdout.splitlines()
     retired_identifiers = (
         "her" + "mes",
+        "".join(chr(codepoint) for codepoint in (0x433, 0x435, 0x440, 0x43C, 0x435, 0x441)),
         ".h" + "ws",
         ".h" + "vs-backup",
         "h" + "vs_",

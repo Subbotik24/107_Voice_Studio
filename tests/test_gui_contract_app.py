@@ -27,9 +27,68 @@ from types import SimpleNamespace
 
 import pytest
 
-from voice_studio.app import VoiceStudioApp
+from voice_studio.app import (
+    VOICE_STUDIO_THEME,
+    StudioLayout,
+    VoiceStudioApp,
+    studio_icon_pixel,
+    studio_layout_for_width,
+)
 
 # --- behavioural ------------------------------------------------------------
+
+
+def test_studio_layout_matches_the_approved_sidebar_breakpoint() -> None:
+    assert studio_layout_for_width(1320) == StudioLayout(250, False, True)
+    assert studio_layout_for_width(1200) == StudioLayout(250, False, True)
+    assert studio_layout_for_width(1199) == StudioLayout(250, False, False)
+    assert studio_layout_for_width(1040) == StudioLayout(250, False, False)
+    assert studio_layout_for_width(1039) == StudioLayout(88, True, False)
+
+
+def test_voice_studio_theme_matches_approved_cream_reference() -> None:
+    assert VOICE_STUDIO_THEME.canvas == "#f6eddc"
+    assert VOICE_STUDIO_THEME.surface == "#fffaf1"
+    assert VOICE_STUDIO_THEME.accent == "#e99016"
+    assert VOICE_STUDIO_THEME.ink == "#2a2119"
+    assert VOICE_STUDIO_THEME.primary == "#5b4332"
+    assert VOICE_STUDIO_THEME.ui_font == "Bahnschrift"
+    assert VOICE_STUDIO_THEME.mono_font == "Cascadia Mono"
+
+
+def test_configured_theme_consumes_the_approved_theme_contract() -> None:
+    source = inspect.getsource(VoiceStudioApp._configure_theme)
+
+    assert "VOICE_STUDIO_THEME" in source
+    assert 'background="#172641"' not in source
+    assert 'background="#315eae"' not in source
+
+
+def test_brand_mark_uses_the_approved_rounded_vo_canvas() -> None:
+    source = inspect.getsource(VoiceStudioApp._build_ui)
+
+    assert "self.brand_mark = tk.Canvas" in source
+    assert "self.brand_mark.create_polygon" in source
+    assert 'text="VO"' in source
+
+
+def test_workspace_subtitle_wraps_beside_the_file_action() -> None:
+    source = inspect.getsource(VoiceStudioApp._build_ui)
+
+    assert "wraplength=560" in source
+
+
+def test_full_sidebar_uses_reference_bullets_and_keeps_compact_glyphs() -> None:
+    source = inspect.getsource(VoiceStudioApp._apply_studio_layout)
+
+    assert 'symbol if layout.compact_sidebar else f"●  {self._t(key)}"' in source
+
+
+def test_studio_icon_mask_forms_a_rounded_accent_square() -> None:
+    assert studio_icon_pixel(0, 0) is False
+    assert studio_icon_pixel(8, 0) is True
+    assert studio_icon_pixel(16, 16) is True
+    assert studio_icon_pixel(31, 31) is False
 
 
 def test_settings_dialog_destroys_tk_window_before_restarting_global_hotkey() -> None:
