@@ -116,6 +116,12 @@ def test_settings_dialog_destroys_tk_window_before_restarting_global_hotkey() ->
     assert scheduled == [app._start_hotkey], "the real hotkey starter must be the deferred call"
 
 
+def test_startup_does_not_schedule_a_first_run_model_prompt() -> None:
+    source = inspect.getsource(VoiceStudioApp.__init__)
+
+    assert "_first_run_model_prompt" not in source
+
+
 def test_close_is_blocked_while_backup_or_restore_is_running(monkeypatch) -> None:
     app = object.__new__(VoiceStudioApp)
     app._confirm_editor_transition = lambda: True
@@ -160,6 +166,14 @@ def test_history_actions_continuous_recording_and_hotkey_capture_are_declared() 
     assert 'self._t("delete")' in build_ui
     assert 'self._t("capture_hotkey")' in settings_dialog
     assert "hotkey_from_tk_event" in settings_dialog
+
+
+def test_settings_dialog_declares_all_three_reusable_engine_profiles() -> None:
+    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+
+    assert '"ollama-local"' in settings_dialog
+    assert '"whisper-local"' in settings_dialog
+    assert '"openai-cloud"' in settings_dialog
 
 
 def test_editor_newline_bindings_and_basic_formatting_are_declared() -> None:

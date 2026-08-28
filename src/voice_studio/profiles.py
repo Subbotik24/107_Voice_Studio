@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import Any
 
 from .models import SUPPORTED_PROFILES, Settings
 
@@ -33,5 +34,38 @@ def apply_profile(settings: Settings, profile: str) -> Settings:
             "offline_only": False,
         }
     updated = replace(settings, profile=profile, **fields)
+    updated.validate()
+    return updated
+
+
+def discover_ollama_audio_models(*, client: Any | None = None) -> list[str]:
+    """Return installed Ollama models that explicitly advertise audio input."""
+
+    from .cloud_cleanup import list_ollama_models
+    from .ollama_local import OllamaClient
+
+    runtime = client or OllamaClient()
+    audio_models: list[str] = []
+    for model in list_ollama_models(client=runtime):
+        try:
+            details = runtime.show_model(model)
+        except Exception:
+            continue
+        capabilities = details.get("capabilities") if isinstance(details, dict) else None
+        if isinstance(capabilities, list) and "audio" in capabilities:
+            audio_models.append(model)
+    return audio_models
+
+
+def with_preferred_ollama_model(settings: Settings, models: list[str]) -> Settings:
+    """Fill an empty Ollama selection without replacing a user's stored choice."""
+
+    if settings.ollama_model or not models:
+        return settings
+    preferred = next(
+        (model for model in models if "code" not in model.split(":", 1)[0].casefold()),
+        models[0],
+    )
+    updated = replace(settings, ollama_model=preferred)
     updated.validate()
     return updated

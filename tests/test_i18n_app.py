@@ -44,6 +44,23 @@ def test_help_navigation_is_localized_for_every_interface_language() -> None:
     assert translate("uk", "help_no_results") == "Нічого не знайдено."
 
 
+@pytest.mark.parametrize("language", ["uk", "cs", "en"])
+def test_profile_cards_are_localized_for_every_interface_language(language: str) -> None:
+    for key in (
+        "profiles_settings",
+        "profile_ollama_title",
+        "profile_ollama_description",
+        "profile_whisper_title",
+        "profile_whisper_description",
+        "profile_openai_title",
+        "profile_openai_description",
+        "use_profile",
+        "active_profile",
+        "ollama_checking",
+    ):
+        assert translate(language, key).strip()
+
+
 def test_unknown_translation_key_fails_fast() -> None:
     with pytest.raises(KeyError):
         translate("uk", "missing-key")

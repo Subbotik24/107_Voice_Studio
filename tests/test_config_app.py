@@ -10,7 +10,11 @@ from voice_studio.config import (
     save_settings,
 )
 from voice_studio.models import Settings
-from voice_studio.profiles import apply_profile
+from voice_studio.profiles import (
+    apply_profile,
+    discover_ollama_audio_models,
+    with_preferred_ollama_model,
+)
 
 
 def test_missing_settings_file_is_created_with_local_ollama_profile(tmp_path):
@@ -65,6 +69,45 @@ def test_applying_profile_sets_the_related_engine_and_privacy_fields(
     assert updated.automatic_cleanup is automatic_cleanup
     assert updated.offline_only is offline_only
     assert updated.ollama_model == "gemma4:12b"
+
+
+def test_new_profile_prefers_a_general_audio_model_over_a_code_variant():
+    settings = with_preferred_ollama_model(
+        Settings(),
+        ["gemma4-code:latest", "gemma4:12b"],
+    )
+
+    assert settings.ollama_model == "gemma4:12b"
+
+
+def test_discovery_never_replaces_a_stored_ollama_model():
+    stored = Settings(ollama_model="my-audio-model:latest")
+
+    assert with_preferred_ollama_model(stored, ["gemma4:12b"]) is stored
+
+
+def test_ollama_discovery_returns_only_models_that_report_audio_capability():
+    class Client:
+        def list_models(self):
+            return {
+                "models": [
+                    {"name": "text-only:latest"},
+                    {"name": "gemma4-code:latest"},
+                    {"name": "gemma4:12b"},
+                ]
+            }
+
+        def show_model(self, model):
+            return {
+                "capabilities": (
+                    ["completion"] if model == "text-only:latest" else ["completion", "audio"]
+                )
+            }
+
+    assert discover_ollama_audio_models(client=Client()) == [
+        "gemma4-code:latest",
+        "gemma4:12b",
+    ]
 
 
 def test_settings_round_trip(tmp_path):
