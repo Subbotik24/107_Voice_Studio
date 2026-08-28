@@ -1,8 +1,7 @@
 # NEXT ANTIGRAVITY TASK
 
 TASK_ID: W2-R1-journaled-restore-recovery
-BASELINE_COMMIT / BASELINE_TAG: (set to the commit pushed by this review cycle on
-`claude/antigravity-post-stage-review-eedzf8`)
+BASELINE_COMMIT: 2170d41 (branch `claude/antigravity-post-stage-review-eedzf8`; no tag)
 
 ## GOAL
 
