@@ -1,7 +1,10 @@
 import json
 
+from voice_studio import backup as backup_module
 from voice_studio import cli
 from voice_studio.cloud_cleanup import CleanupProposal
+from voice_studio.models import Transcript
+from voice_studio.storage import LocalStore
 
 main = cli.main
 
@@ -122,3 +125,61 @@ def test_local_ollama_cleanup_needs_no_cloud_consent_and_survives_offline_only(
     assert main(["cleanup", "any-transcript"]) == 0
     assert reached == {"provider": "ollama", "model": "gemma4-code:latest"}
     assert "corrected_text" in capsys.readouterr().out
+
+
+def test_cli_settles_an_interrupted_restore_before_opening_the_store(
+    tmp_path, capsys, monkeypatch
+):
+    """A killed restore must be settled and reported, never silently ignored."""
+
+    data = tmp_path / "data"
+    staging = tmp_path / f".{data.name}.restore-abcdef"
+    LocalStore(staging).save(
+        Transcript(
+            id="restored",
+            created_at="2026-08-28T00:00:00+00:00",
+            source_name="a.wav",
+            source_sha256="a" * 64,
+            language="uk",
+            engine="fixture",
+            model="fixture",
+            raw_text="raw",
+            corrected_text="corrected",
+        )
+    )
+    backup_module._write_json_atomic(
+        backup_module.restore_journal_path(data),
+        {
+            "journal_version": backup_module.RESTORE_JOURNAL_VERSION,
+            "backup_version": backup_module.BACKUP_VERSION,
+            "created_at": "2026-08-28T00:00:00+00:00",
+            "data_root": str(data.resolve()),
+            "staging_path": str(staging.resolve()),
+            "recovery_path": None,
+            "expected_records": 1,
+            "settings_target": None,
+            "settings_payload_written": True,
+            "stage": "swap_started",
+        },
+    )
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+
+    assert main(["history"]) == 0
+
+    captured = capsys.readouterr()
+    assert "restore-journal:" in captured.err
+    assert '"action": "completed"' in captured.err
+    assert "restored" in captured.out
+    assert not backup_module.restore_journal_path(data).exists()
+
+
+def test_cli_reports_a_clean_start_without_noise(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+
+    assert main(["history"]) == 0
+
+    assert "restore-journal:" not in capsys.readouterr().err

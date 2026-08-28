@@ -27,6 +27,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from voice_studio import app as app_module
+from voice_studio import backup as backup_module
 from voice_studio.app import (
     VOICE_STUDIO_THEME,
     StudioLayout,
@@ -34,6 +36,8 @@ from voice_studio.app import (
     studio_icon_pixel,
     studio_layout_for_width,
 )
+from voice_studio.models import Transcript
+from voice_studio.storage import LocalStore
 
 # --- behavioural ------------------------------------------------------------
 
@@ -169,3 +173,132 @@ def test_editor_newline_bindings_and_basic_formatting_are_declared() -> None:
     assert 'self.editor.bind("<Control-Return>"' in build_ui
     assert 'text="B"' in build_ui
     assert 'text="I"' in build_ui
+
+
+# --- interrupted-restore recovery at startup --------------------------------
+
+
+def test_startup_recovery_settles_a_journal_before_the_store_is_opened(
+    tmp_path, monkeypatch
+):
+    """`_settle_interrupted_restore` is a plain method; call it against a stub."""
+
+    data = tmp_path / "data"
+    staging = tmp_path / f".{data.name}.restore-abcdef"
+    store = LocalStore(staging)
+    store.save(
+        Transcript(
+            id="restored",
+            created_at="2026-08-28T00:00:00+00:00",
+            source_name="a.wav",
+            source_sha256="a" * 64,
+            language="uk",
+            engine="fixture",
+            model="fixture",
+            raw_text="raw",
+            corrected_text="corrected",
+        )
+    )
+    backup_module._write_json_atomic(
+        backup_module.restore_journal_path(data),
+        {
+            "journal_version": backup_module.RESTORE_JOURNAL_VERSION,
+            "backup_version": backup_module.BACKUP_VERSION,
+            "created_at": "2026-08-28T00:00:00+00:00",
+            "data_root": str(data.resolve()),
+            "staging_path": str(staging.resolve()),
+            "recovery_path": None,
+            "expected_records": 1,
+            "settings_target": None,
+            "settings_payload_written": True,
+            "stage": "swap_started",
+        },
+    )
+
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    result = VoiceStudioApp._settle_interrupted_restore.__get__(SimpleNamespace())()
+
+    assert result["status"] == "PASS"
+    assert result["action"] == "completed"
+    assert LocalStore(data).get("restored") is not None
+    assert not backup_module.restore_journal_path(data).exists()
+
+
+def test_startup_recovery_never_breaks_application_start(monkeypatch):
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("journal device failure")
+
+    monkeypatch.setattr(app_module, "recover_interrupted_restore", explode)
+    stub = SimpleNamespace()
+    result = VoiceStudioApp._settle_interrupted_restore.__get__(stub)()
+
+    assert result == {
+        "status": "FAIL",
+        "action": "none",
+        "error": "journal device failure",
+    }
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_key"),
+    [
+        ("completed", "restore_recovered"),
+        ("settings_completed", "restore_recovered"),
+        ("rolled_back", "restore_rolled_back"),
+        ("staging_discarded", "restore_staging_discarded"),
+    ],
+)
+def test_startup_recovery_outcome_reaches_the_status_line(action, expected_key):
+    recorded: list[str] = []
+    stub = SimpleNamespace(
+        _restore_recovery={"status": "PASS", "action": action, "records": 3},
+        status=SimpleNamespace(set=recorded.append),
+        _t=lambda key, **values: f"{key}:{values.get('records', '')}",
+        after=lambda *_args, **_kwargs: None,
+    )
+    VoiceStudioApp._report_restore_recovery.__get__(stub)()
+
+    assert recorded == [f"{expected_key}:{3 if expected_key == 'restore_recovered' else ''}"]
+
+
+def test_startup_recovery_stays_silent_when_there_was_no_journal():
+    recorded: list[str] = []
+    stub = SimpleNamespace(
+        _restore_recovery={"status": "PASS", "action": "none", "records": None},
+        status=SimpleNamespace(set=recorded.append),
+        _t=lambda key, **values: key,
+        after=lambda *_args, **_kwargs: None,
+    )
+    VoiceStudioApp._report_restore_recovery.__get__(stub)()
+
+    assert recorded == []
+
+
+def test_startup_recovery_failure_warns_the_user():
+    recorded: list[str] = []
+    scheduled: list[object] = []
+    stub = SimpleNamespace(
+        _restore_recovery={"status": "FAIL", "action": "none", "error": "bad journal"},
+        status=SimpleNamespace(set=recorded.append),
+        _t=lambda key, **values: f"{key}:{values.get('error', '')}",
+        after=lambda _delay, callback: scheduled.append(callback),
+    )
+    VoiceStudioApp._report_restore_recovery.__get__(stub)()
+
+    assert recorded == ["restore_recovery_failed:bad journal"]
+    assert scheduled, "a failed journal must also raise a warning dialog"
+
+
+def test_startup_settles_the_restore_journal_before_opening_the_store():
+    """Ordering tripwire: `__init__` builds Tk widgets, so it cannot run headless.
+
+    The guarantee under test is an ordering one — recovery must precede
+    `LocalStore(data_dir())` — and there is no observable effect to assert
+    without a display, so the source order is asserted instead.
+    """
+
+    source = inspect.getsource(VoiceStudioApp.__init__)
+    recovery = source.index("self._settle_interrupted_restore()")
+    opened = source.index("self.store = LocalStore(data_dir())")
+    assert recovery < opened

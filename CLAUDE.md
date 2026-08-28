@@ -56,20 +56,24 @@ This is a privacy-first desktop transcription application. Treat this file and
 
 ## Current verified state
 
-The source quality gate passed locally on 2026-08-08: compilation, Ruff,
-`95 passed, 5 subtests passed`, wheel build, `pip check` and `pip-audit`.
-No live OpenAI key, real cloud request, Windows physical-device run, or unsigned
-Test RC artifact build was performed in this checkout. Do not represent those as
+The source quality gate passed on Linux/CPython 3.12 on 2026-08-28: compilation,
+Ruff, `check_help.py`, `347 passed`, wheel build, `pip check` and `pip-audit`.
+Full evidence, including what was not run, is in `VERIFICATION.md`.
+No live OpenAI key, real cloud request, macOS run, physical-device run, or
+signed artifact build was performed in this checkout. Do not represent those as
 verified.
 
 ## Highest-priority next work
 
-1. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
+1. Take the next unimplemented item from `IMPLEMENTATION_STATUS.md` →
+   "Not implemented yet" and specify it in `NEXT_ANTIGRAVITY_TASK.md` before
+   implementing it.
+2. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
    `RELEASE_ACCEPTANCE.md`; capture evidence without private data.
-2. Create Tiny/Small `models-v1` release assets with
+3. Create Tiny/Small `models-v1` release assets with
    `scripts/build_model_release.py`, including upstream revision, inventory,
    license/model card and SHA256SUMS. Never add those archives to Git.
-3. Build unsigned Test RC artifacts only after acceptance is green. Do not tag
+4. Build unsigned Test RC artifacts only after acceptance is green. Do not tag
    or publish a release until checksums and release manifest exist.
 
 ## Windows source launch

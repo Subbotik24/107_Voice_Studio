@@ -1,5 +1,51 @@
 # ЗАВДАННЯ ДЛЯ ANTIGRAVITY
 
+> ## СТАТУС: ВИКОНАНО (2026-08-28)
+>
+> Завдання `W2-R1-journaled-restore-recovery` реалізовано в `main`. Специфікація
+> нижче лишається як запис вимог. Наступне завдання ще **не** специфіковано:
+> взяти перший пункт з `IMPLEMENTATION_STATUS.md` → «Not implemented yet»
+> (зараз це `cryptography` dependency і encrypted backup v2) і описати його тут
+> у тому самому форматі, перш ніж писати код.
+>
+> ```
+> CHANGED
+> - src/voice_studio/backup.py: restore journal (атомарний запис до підміни,
+>   `swap_completed` після неї, видалення лише після повного успіху),
+>   settings-sidecar усередині staging, `recover_interrupted_restore()`.
+> - src/voice_studio/app.py: виклик до першого `LocalStore(data_dir())`,
+>   результат у рядку стану, `FAIL` → `messagebox.showwarning`; виняток не
+>   ламає запуск.
+> - src/voice_studio/cli.py: виклик перед обома `LocalStore(data_dir())` і перед
+>   `restore_backup`; результат у stderr, а для `backup restore` — додатковим
+>   ключем у JSON.
+> - src/voice_studio/i18n.py: `restore_recovered`, `restore_rolled_back`,
+>   `restore_staging_discarded`, `restore_recovery_failed` у uk/cs/en.
+> - docs/help, ARCHITECTURE.md, IMPLEMENTATION_STATUS.md, VERIFICATION.md.
+>
+> VERIFIED
+> - RED: 9 нових тестів падали на незмінному модулі; GREEN: `347 passed`.
+> - compileall, ruff, check_help.py, pytest, build --wheel, pip check, pip_audit.
+> - Реальний GUI під Xvfb: чистий профіль (старт без змін) і старт поверх
+>   вбитого відновлення (`action = "completed"`, історія відновлена, settings
+>   дописані, `*.recovery-*` на місці). Деталі — у `VERIFICATION.md`.
+>
+> KNOWN ISSUES
+> - Acceptance criterion 2 вимагав, щоб каталог `*.recovery-*` існував після
+>   rollback. Rollback повертає його на місце `data_root` через `replace`, тому
+>   каталог споживається, а не видаляється; дані до відновлення цілі. Дублювати
+>   сховище копіюванням було б порушенням префлайту вільного місця. Тест
+>   перевіряє саме цю інваріанту.
+> - Staging не можна перевірити `audit()` на місці: `restore_backup` переписує
+>   шляхи керованого аудіо на пост-swap розташування ще до підміни. Тому staging
+>   спочатку переноситься в `data_root`, аудиториться там і повертається назад,
+>   якщо аудит не пройшов.
+> - `backup restore` у CLI отримав додаткові ключі JSON
+>   (`journal_cleared`, `recovered_interrupted_restore`). Зміна адитивна.
+> - Відновлення після справжньої втрати живлення на фізичній машині не
+>   перевірялося; переривання симулюється в процесі.
+> ```
+
 **TASK_ID:** W2-R1-journaled-restore-recovery
 **ГІЛКА РОБОТИ:** `main`. Нових гілок **не створювати** — уся розробка й пуші
 йдуть безпосередньо в `main`.

@@ -1,6 +1,6 @@
 # Implementation status — VOICE Studio 0.3.0 Test RC
 
-Last reviewed: 2026-08-27.
+Last reviewed: 2026-08-28.
 
 The repository contains a verified Windows Test RC, not a signed production
 release. Current executable, test and native-verification evidence is recorded
@@ -20,10 +20,12 @@ in `VERIFICATION.md`; the reproducible build command is documented in
 | W2-M1 save/cleanup serialization | PASS | SQLite `BEGIN IMMEDIATE` prevents committed records from referencing concurrently removed managed audio |
 | W2-A1 generic ZIP safety primitives | PASS | bounded EOCD/ZIP64 preflight, portable member identities, hierarchy trie, bounded copy/free-space primitives |
 | W2-M2 disposable media containment | PASS headless | PyAV runs in a disposable spawn child with a deadline, never in the parent; ffmpeg runs in its own process group and its descendants are killed with it; 2 GiB source, 7,200 s duration and 230,404,096-byte output ceilings enforced and wired |
+| W2-R1 journaled restore recovery | PASS headless | restore writes an atomic journal before the swap; `recover_interrupted_restore()` runs before the first `LocalStore` in GUI and CLI and completes, rolls back, or discards staging deterministically; a `*.recovery-*` directory is never deleted; the journal carries no transcript text and no key material |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
-| Integrated tests | PASS | `273 passed, 2 skipped, 5 subtests passed` on Linux/CPython 3.12 |
+| Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
+| Integrated packaging/dependency gate | PASS | `python -m build --wheel`, `python -m pip check`, `python -m pip_audit` (no known vulnerabilities) |
 
 ## Implemented but pending native acceptance
 
@@ -31,14 +33,15 @@ in `VERIFICATION.md`; the reproducible build command is documented in
   Silicon;
 - W2-M1 cross-process/file-lock behavior under antivirus, removable media and
   forced termination;
-- W2-A1 real large-archive/disk-full behavior on both supported filesystems.
+- W2-A1 real large-archive/disk-full behavior on both supported filesystems;
+- W2-R1 recovery after a real power loss or forced termination on both
+  supported filesystems; the headless suite simulates the interruption.
 
 These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
 ## Not implemented yet
 
 - `cryptography` dependency and encrypted backup v2;
-- journaled restore/startup recovery;
 - coordinated shutdown and multiprocessing queue disposal;
 - SQLite/filesystem/model-catalog reconciliation;
 - all W3 VAD/timestamp/hardware/editor work;

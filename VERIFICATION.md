@@ -3,6 +3,36 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-R1 journaled restore recovery — 2026-08-28
+
+Environment: Linux x86_64, CPython 3.12.3 virtual environment. This is a source
+gate on a Linux container, not a Windows or macOS acceptance run.
+
+| Check | Result |
+|---|---|
+| `PYTHON_BIN=.venv/bin/python scripts/quality_gate.sh` | PASS |
+| `python -m compileall -q src tests scripts packaging` | PASS |
+| `python -m ruff check src tests scripts packaging` | PASS |
+| `python scripts/check_help.py` | PASS, manifest and 5 canonical Markdown topics |
+| `python -m pytest -q` | PASS, 347 tests, no skips (baseline before this work: 320) |
+| `python -m build --wheel` | PASS, `voice_studio-0.3.0rc1-py3-none-any.whl` |
+| `python -m pip check` | PASS |
+| `python -m pip_audit` | PASS, no known vulnerabilities |
+| new recovery tests fail before the implementation | PASS, 9 failed / 6 passed on the untouched module |
+| real GUI start under Xvfb, clean profile, no journal | PASS, startup unchanged, clean exit |
+| real GUI start under Xvfb over a killed restore | PASS, see below |
+
+The killed-restore run left no data directory, an orphaned staging directory, an
+orphaned `*.recovery-*` directory and a `swap_started` journal. Starting the
+real GUI over that state produced `action = "completed"`, one restored record in
+history, the archived `auto_copy: true` settings with a
+`settings.json.pre-restore-<timestamp>` snapshot kept, the journal and staging
+gone, and the `*.recovery-*` directory still on disk.
+
+Not run for this change: Windows and macOS execution, and recovery after a real
+power loss or forced termination on a physical machine. The interruption is
+simulated in-process.
+
 ## Final Windows verification — 2026-08-28
 
 Environment: Windows 11 x64, Python 3.12 virtual environment.

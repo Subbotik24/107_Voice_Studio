@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
 import shutil
@@ -14,6 +16,24 @@ from .models import Settings, Transcript
 from .storage import LocalStore
 
 BACKUP_VERSION = 1
+RESTORE_JOURNAL_VERSION = 1
+RESTORE_SIDECAR_VERSION = 1
+RESTORE_SIDECAR_NAME = ".restore-settings.json"
+RESTORE_JOURNAL_FIELDS = frozenset(
+    {
+        "journal_version",
+        "backup_version",
+        "created_at",
+        "data_root",
+        "staging_path",
+        "recovery_path",
+        "expected_records",
+        "settings_target",
+        "settings_payload_written",
+        "stage",
+    }
+)
+_RESTORE_STAGES = ("swap_started", "swap_completed")
 BACKUP_FREE_SPACE_MARGIN_BYTES = 256 * 1024**2
 BACKUP_ZIP_BUDGET = ZipBudget(
     max_container_bytes=4 * 1024**3,
@@ -186,6 +206,318 @@ def verify_backup(path: Path) -> dict[str, Any]:
     }
 
 
+def restore_journal_path(data_root: Path) -> Path:
+    """Return the sidecar journal that describes an in-flight restore swap."""
+
+    data_root = data_root.expanduser()
+    return data_root.parent / f".{data_root.name}.restore-journal.json"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_restore_sidecar(
+    staging: Path,
+    *,
+    settings_target: Path,
+    settings_payload: dict[str, Any],
+    dictionary_payload: bytes | None,
+    timestamp: str,
+) -> None:
+    """Park the settings payload inside staging so the swap carries it along.
+
+    The journal records only paths and counters. The payload travels inside the
+    staging directory instead, so a process death between the swap and the
+    settings write leaves the payload inside the new ``data_root``.
+    """
+
+    _write_json_atomic(
+        staging / RESTORE_SIDECAR_NAME,
+        {
+            "sidecar_version": RESTORE_SIDECAR_VERSION,
+            "timestamp": timestamp,
+            "settings_target": str(settings_target),
+            "settings": settings_payload,
+            "dictionary_base64": (
+                base64.b64encode(dictionary_payload).decode("ascii")
+                if dictionary_payload is not None
+                else None
+            ),
+        },
+    )
+
+
+def _apply_restored_settings(
+    settings_target: Path,
+    settings_payload: dict[str, Any],
+    dictionary_payload: bytes | None,
+    timestamp: str,
+) -> None:
+    if settings_target.exists():
+        preserved = settings_target.with_name(
+            f"{settings_target.name}.pre-restore-{timestamp}"
+        )
+        # Never overwrite an existing pre-restore snapshot: a second pass must
+        # not replace the user's original settings with post-restore content.
+        if not preserved.exists():
+            shutil.copy2(settings_target, preserved)
+    settings_target.parent.mkdir(parents=True, exist_ok=True)
+    if dictionary_payload is not None:
+        dictionary_target = settings_target.parent / "dictionary.restored.json"
+        dictionary_target.write_bytes(dictionary_payload)
+    settings_target.write_text(
+        json.dumps(settings_payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _read_restore_sidecar(data_root: Path) -> dict[str, Any] | None:
+    sidecar = data_root / RESTORE_SIDECAR_NAME
+    if not sidecar.is_file():
+        return None
+    try:
+        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"restore settings sidecar is unreadable: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("restore settings sidecar must contain a JSON object")
+    if payload.get("sidecar_version") != RESTORE_SIDECAR_VERSION:
+        raise ValueError(
+            f"unsupported restore sidecar version: {payload.get('sidecar_version')}"
+        )
+    if not isinstance(payload.get("settings"), dict):
+        raise ValueError("restore settings sidecar has no settings object")
+    # The sidecar is an on-disk file. Refuse to write settings that would not
+    # load, exactly as the pre-swap path validates them before parking them.
+    try:
+        Settings.from_dict(payload["settings"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"restore settings sidecar is not valid settings: {exc}") from exc
+    return payload
+
+
+def _finish_restored_settings(data_root: Path, settings_target: Path | None) -> bool:
+    """Apply a parked settings payload, then drop the sidecar. Idempotent."""
+
+    payload = _read_restore_sidecar(data_root)
+    if payload is None:
+        return False
+    target = settings_target or (
+        Path(payload["settings_target"]) if payload.get("settings_target") else None
+    )
+    if target is None:
+        (data_root / RESTORE_SIDECAR_NAME).unlink(missing_ok=True)
+        return False
+    encoded = payload.get("dictionary_base64")
+    dictionary_payload: bytes | None = None
+    if isinstance(encoded, str):
+        try:
+            dictionary_payload = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"restore sidecar dictionary is corrupt: {exc}") from exc
+    _apply_restored_settings(
+        target.expanduser(),
+        payload["settings"],
+        dictionary_payload,
+        str(payload.get("timestamp") or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")),
+    )
+    (data_root / RESTORE_SIDECAR_NAME).unlink(missing_ok=True)
+    return True
+
+
+def _fail(error: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "status": "FAIL",
+        "action": "none",
+        "records": None,
+        "recovery": None,
+        "error": error,
+        **extra,
+    }
+
+
+def _load_restore_journal(journal_path: Path, data_root: Path) -> dict[str, Any]:
+    """Parse and validate a journal. Raises ``ValueError`` when unusable."""
+
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"restore journal is unreadable: {exc}") from exc
+    if not isinstance(journal, dict):
+        raise ValueError("restore journal must contain a JSON object")
+    if journal.get("journal_version") != RESTORE_JOURNAL_VERSION:
+        raise ValueError(
+            f"unsupported restore journal version: {journal.get('journal_version')}"
+        )
+    if journal.get("backup_version") != BACKUP_VERSION:
+        raise ValueError(
+            f"unsupported restore journal backup version: {journal.get('backup_version')}"
+        )
+    if journal.get("stage") not in _RESTORE_STAGES:
+        raise ValueError(f"unsupported restore journal stage: {journal.get('stage')}")
+    if type(journal.get("expected_records")) is not int or journal["expected_records"] < 0:
+        raise ValueError("restore journal record count is invalid")
+    recorded_root = journal.get("data_root")
+    if not isinstance(recorded_root, str):
+        raise ValueError("restore journal data root is invalid")
+    if Path(recorded_root).resolve() != data_root.resolve():
+        raise ValueError("restore journal belongs to a different data directory")
+    staging = journal.get("staging_path")
+    if not isinstance(staging, str):
+        raise ValueError("restore journal staging path is invalid")
+    # A journal is an on-disk file in a user-writable directory. Refuse to move
+    # anything that does not sit beside the data root, so a tampered journal
+    # cannot promote an arbitrary directory into the user's storage.
+    if Path(staging).parent.resolve() != data_root.parent.resolve():
+        raise ValueError("restore journal staging path is outside the data directory")
+    recovery = journal.get("recovery_path")
+    if recovery is not None:
+        if not isinstance(recovery, str):
+            raise ValueError("restore journal recovery path is invalid")
+        if Path(recovery).parent.resolve() != data_root.parent.resolve():
+            raise ValueError(
+                "restore journal recovery path is outside the data directory"
+            )
+    return journal
+
+
+def _restored_store_is_sound(data_root: Path, expected_records: int) -> bool:
+    """Report whether ``data_root`` holds the complete store the manifest promised."""
+
+    try:
+        store = LocalStore(data_root)
+        if len(store.list(limit=1_000_000)) != expected_records:
+            return False
+        return store.audit()["status"] == "PASS"
+    except Exception:
+        return False
+
+
+def _promote_staging(staging: Path, data_root: Path, expected_records: int) -> bool:
+    """Move staging into place, keeping it only if it audits as the real store.
+
+    ``restore_backup`` rewrites every managed source path to its post-swap
+    ``data_root`` location before the swap, so staging can only be audited from
+    the position it was built for. The move is therefore made first and undone
+    when the audit rejects the result.
+    """
+
+    if not staging.is_dir() or not (staging / "history.sqlite3").is_file():
+        return False
+    staging.replace(data_root)
+    if _restored_store_is_sound(data_root, expected_records):
+        return True
+    data_root.replace(staging)
+    return False
+
+
+def recover_interrupted_restore(
+    data_root: Path,
+    *,
+    settings_target: Path | None = None,
+) -> dict[str, Any]:
+    """Finish or undo a restore that a process death left half applied.
+
+    Deterministic and non-interactive. A ``*.recovery-*`` directory is never
+    deleted, and staging is only discarded once ``data_root`` is known to be
+    intact.
+    """
+
+    data_root = data_root.expanduser()
+    journal_path = restore_journal_path(data_root)
+    if not journal_path.is_file():
+        return {"status": "PASS", "action": "none", "records": None, "recovery": None}
+    try:
+        journal = _load_restore_journal(journal_path, data_root)
+    except ValueError as exc:
+        return _fail(str(exc))
+
+    staging = Path(journal["staging_path"])
+    recovery = Path(journal["recovery_path"]) if journal.get("recovery_path") else None
+    expected_records = journal["expected_records"]
+    recovery_value = str(recovery) if recovery is not None else None
+
+    def _settings_step() -> None:
+        if journal.get("settings_payload_written") is True:
+            return
+        _finish_restored_settings(data_root, settings_target)
+
+    if journal["stage"] == "swap_completed":
+        try:
+            _settings_step()
+        except (OSError, ValueError) as exc:
+            return _fail(f"restored settings could not be written: {exc}")
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "settings_completed",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
+
+    if data_root.exists():
+        # Swap step A never happened: the live data is untouched and staging is
+        # the only thing to drop.
+        try:
+            if staging.is_dir():
+                shutil.rmtree(staging)
+        except OSError as exc:
+            return _fail(f"interrupted restore staging could not be removed: {exc}")
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "staging_discarded",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
+
+    try:
+        promoted = _promote_staging(staging, data_root, expected_records)
+    except OSError as exc:
+        return _fail(f"interrupted restore staging could not be promoted: {exc}")
+    if promoted:
+        try:
+            _settings_step()
+        except (OSError, ValueError) as exc:
+            return _fail(f"restored settings could not be written: {exc}")
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "completed",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
+
+    if recovery is not None and recovery.is_dir():
+        try:
+            recovery.replace(data_root)
+        except OSError as exc:
+            return _fail(f"interrupted restore could not be rolled back: {exc}")
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "rolled_back",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
+
+    return _fail(
+        "interrupted restore left neither a usable staging directory nor a "
+        "recovery directory; nothing was removed",
+        recovery=recovery_value,
+    )
+
+
 def restore_backup(
     path: Path,
     data_root: Path,
@@ -201,6 +533,7 @@ def restore_backup(
         margin_bytes=BACKUP_FREE_SPACE_MARGIN_BYTES,
     )
     temporary = data_root.parent / f".{data_root.name}.restore-{uuid.uuid4().hex}"
+    journal_path = restore_journal_path(data_root)
     recovery: Path | None = None
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     settings_payload: dict[str, Any] | None = None
@@ -257,32 +590,55 @@ def restore_backup(
                     data_root / "sources" / Path(transcript.source_path).name
                 )
                 store.save(transcript)
+        has_settings_payload = settings_target is not None and settings_payload is not None
+        if settings_target is not None and settings_payload is not None:
+            _write_restore_sidecar(
+                temporary,
+                settings_target=settings_target,
+                settings_payload=settings_payload,
+                dictionary_payload=dictionary_payload,
+                timestamp=timestamp,
+            )
+        # The swap below is two renames. A process death between them leaves no
+        # data root at all, so record which directory holds the real data before
+        # the first rename rather than after it.
         if data_root.exists():
             recovery_name = (
                 f"{data_root.name}.recovery-{timestamp}-{uuid.uuid4().hex[:8]}"
             )
             recovery = data_root.parent / recovery_name
+        journal = {
+            "journal_version": RESTORE_JOURNAL_VERSION,
+            "backup_version": BACKUP_VERSION,
+            "created_at": datetime.now(UTC).isoformat(),
+            "data_root": str(data_root.resolve()),
+            "staging_path": str(temporary),
+            "recovery_path": str(recovery) if recovery is not None else None,
+            "expected_records": int(verified["records"]),
+            "settings_target": str(settings_target) if settings_target is not None else None,
+            "settings_payload_written": not has_settings_payload,
+            "stage": "swap_started",
+        }
+        _write_json_atomic(journal_path, journal)
+        if recovery is not None:
             data_root.replace(recovery)
         try:
             temporary.replace(data_root)
         except BaseException:
             if recovery and recovery.exists() and not data_root.exists():
                 recovery.replace(data_root)
+                journal_path.unlink(missing_ok=True)
+            elif recovery is None and not data_root.exists():
+                journal_path.unlink(missing_ok=True)
             raise
-        if settings_target and settings_payload is not None:
-            if settings_target.exists():
-                preserved = settings_target.with_name(
-                    f"{settings_target.name}.pre-restore-{timestamp}"
-                )
-                shutil.copy2(settings_target, preserved)
-            settings_target.parent.mkdir(parents=True, exist_ok=True)
-            if dictionary_payload is not None:
-                dictionary_target = settings_target.parent / "dictionary.restored.json"
-                dictionary_target.write_bytes(dictionary_payload)
-            settings_target.write_text(
-                json.dumps(settings_payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
+        journal["stage"] = "swap_completed"
+        _write_json_atomic(journal_path, journal)
+        if settings_target is not None and settings_payload is not None:
+            _apply_restored_settings(
+                settings_target, settings_payload, dictionary_payload, timestamp
             )
+        (data_root / RESTORE_SIDECAR_NAME).unlink(missing_ok=True)
+        journal_path.unlink(missing_ok=True)
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
@@ -291,4 +647,5 @@ def restore_backup(
         "records": verified["records"],
         "data": str(data_root.resolve()),
         "recovery": str(recovery.resolve()) if recovery else None,
+        "journal_cleared": not journal_path.exists(),
     }
