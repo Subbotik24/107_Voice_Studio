@@ -42,7 +42,9 @@ def settings_path() -> Path:
 def load_settings(path: Path | None = None) -> Settings:
     target = path or settings_path()
     if not target.exists():
-        return Settings()
+        settings = Settings()
+        save_settings(settings, target)
+        return settings
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

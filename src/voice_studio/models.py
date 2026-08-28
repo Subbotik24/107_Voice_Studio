@@ -6,8 +6,9 @@ from typing import Any, ClassVar
 
 SUPPORTED_LANGUAGES = ("auto", "uk", "cs", "en")
 SUPPORTED_UI_LANGUAGES = ("uk", "cs", "en")
-SUPPORTED_ENGINES = ("faster-whisper", "openai-cloud")
-SUPPORTED_CLEANUP_PROVIDERS = ("ollama", "openai")
+SUPPORTED_PROFILES = ("ollama-local", "whisper-local", "openai-cloud")
+SUPPORTED_ENGINES = ("ollama", "faster-whisper", "openai-cloud")
+SUPPORTED_CLEANUP_PROVIDERS = ("none", "ollama", "openai")
 RETENTION_POLICIES = ("keep", "delete_after_transcription")
 
 
@@ -83,6 +84,7 @@ class Transcript:
 @dataclass
 class Settings:
     STRING_FIELDS: ClassVar[tuple[str, ...]] = (
+        "profile",
         "language",
         "ui_language",
         "engine",
@@ -101,11 +103,13 @@ class Settings:
     BOOLEAN_FIELDS: ClassVar[tuple[str, ...]] = (
         "auto_copy",
         "offline_only",
+        "automatic_cleanup",
     )
 
+    profile: str = "ollama-local"
     language: str = "uk"
     ui_language: str = "uk"
-    engine: str = "faster-whisper"
+    engine: str = "ollama"
     model: str = "small"
     device: str = "auto"
     compute_type: str = "default"
@@ -113,7 +117,8 @@ class Settings:
     retention: str = "keep"
     dictionary_path: str = ""
     auto_copy: bool = False
-    offline_only: bool = False
+    offline_only: bool = True
+    automatic_cleanup: bool = True
     task_timeout_seconds: int = 7_200
     cloud_provider: str = "openai"
     cleanup_provider: str = "ollama"
@@ -137,6 +142,8 @@ class Settings:
             raise ValueError(f"unsupported language: {self.language}")
         if self.ui_language not in SUPPORTED_UI_LANGUAGES:
             raise ValueError(f"unsupported interface language: {self.ui_language}")
+        if self.profile not in SUPPORTED_PROFILES:
+            raise ValueError(f"unsupported profile: {self.profile}")
         if self.engine not in SUPPORTED_ENGINES:
             raise ValueError(f"unsupported engine: {self.engine}")
         if self.retention not in RETENTION_POLICIES:
@@ -166,6 +173,17 @@ class Settings:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Settings:
         data = dict(data)
+        if "profile" not in data:
+            legacy_engine = data.get("engine")
+            data["profile"] = {
+                "faster-whisper": "whisper-local",
+                "openai-cloud": "openai-cloud",
+                "ollama": "ollama-local",
+            }.get(legacy_engine, "ollama-local")
+            if legacy_engine in {"faster-whisper", "openai-cloud"}:
+                data.setdefault("automatic_cleanup", False)
+            if legacy_engine == "openai-cloud":
+                data.setdefault("offline_only", False)
         if data.get("hotkey") == "<ctrl>+<alt>+space":
             data["hotkey"] = "<ctrl>+<alt>+<space>"
         allowed = {item.name for item in fields(cls) if item.init}

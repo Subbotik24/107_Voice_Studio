@@ -10,6 +10,61 @@ from voice_studio.config import (
     save_settings,
 )
 from voice_studio.models import Settings
+from voice_studio.profiles import apply_profile
+
+
+def test_missing_settings_file_is_created_with_local_ollama_profile(tmp_path):
+    path = tmp_path / "settings.json"
+
+    settings = load_settings(path)
+
+    assert path.is_file()
+    assert settings.profile == "ollama-local"
+    assert settings.engine == "ollama"
+    assert settings.cleanup_provider == "ollama"
+    assert settings.automatic_cleanup is True
+    assert settings.offline_only is True
+    assert json.loads(path.read_text(encoding="utf-8")) == settings.to_dict()
+
+
+@pytest.mark.parametrize(
+    ("engine", "expected_profile"),
+    [
+        ("faster-whisper", "whisper-local"),
+        ("openai-cloud", "openai-cloud"),
+        ("ollama", "ollama-local"),
+    ],
+)
+def test_settings_without_profile_keep_their_legacy_engine(engine, expected_profile):
+    settings = Settings.from_dict({"engine": engine, "model": "small"})
+
+    assert settings.engine == engine
+    assert settings.profile == expected_profile
+
+
+@pytest.mark.parametrize(
+    ("profile", "engine", "cleanup_provider", "automatic_cleanup", "offline_only"),
+    [
+        ("ollama-local", "ollama", "ollama", True, True),
+        ("whisper-local", "faster-whisper", "none", False, True),
+        ("openai-cloud", "openai-cloud", "openai", False, False),
+    ],
+)
+def test_applying_profile_sets_the_related_engine_and_privacy_fields(
+    profile,
+    engine,
+    cleanup_provider,
+    automatic_cleanup,
+    offline_only,
+):
+    updated = apply_profile(Settings(ollama_model="gemma4:12b"), profile)
+
+    assert updated.profile == profile
+    assert updated.engine == engine
+    assert updated.cleanup_provider == cleanup_provider
+    assert updated.automatic_cleanup is automatic_cleanup
+    assert updated.offline_only is offline_only
+    assert updated.ollama_model == "gemma4:12b"
 
 
 def test_settings_round_trip(tmp_path):

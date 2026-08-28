@@ -31,7 +31,7 @@ def test_distribution_exposes_only_voice_studio_entry_points() -> None:
 def test_product_contains_only_supported_transcription_engines() -> None:
     models = importlib.import_module("voice_studio.models")
 
-    assert models.SUPPORTED_ENGINES == ("faster-whisper", "openai-cloud")
+    assert models.SUPPORTED_ENGINES == ("ollama", "faster-whisper", "openai-cloud")
     packages = {
         path.parent.name
         for path in (PROJECT_ROOT / "src").glob("*/__init__.py")
