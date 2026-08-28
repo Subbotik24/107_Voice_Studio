@@ -50,6 +50,18 @@ Current Test RC status and verified evidence are tracked in
    - окремі результати для Mac mini M4 і Windows target.
    - стан: harness і synthetic smoke готові; licensed corpus та production results відсутні.
 
+7. **Persistent engine profiles**
+   - `Локальна Ollama` як приватний профіль за замовчуванням;
+   - `Локальний Whisper` і `OpenAI cloud` як явні альтернативи;
+   - збереження точного engine/model/language selection без startup wizard;
+   - стан: реалізовано й перевірено у фінальному Windows EXE.
+
+8. **Localized in-app Help**
+   - один canonical source у `docs/help/{uk,cs,en}`;
+   - Help автоматично відповідає мові UI;
+   - packaged assets і links перевіряються build gate;
+   - стан: реалізовано; український і чеський Help візуально перевірено.
+
 ## P1
 
 - speaker diarization;

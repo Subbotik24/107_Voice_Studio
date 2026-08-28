@@ -10,6 +10,20 @@ from ..models import Segment
 from ..ollama_local import OllamaClient
 from .base import EngineResult
 
+OLLAMA_AUDIO_RATE = 16_000
+MAX_OLLAMA_AUDIO_SECONDS = 30 * 60
+MAX_OLLAMA_AUDIO_SAMPLES = OLLAMA_AUDIO_RATE * MAX_OLLAMA_AUDIO_SECONDS
+
+
+def _bounded_sample_count(current: int, incoming: int) -> int:
+    total = current + incoming
+    if total > MAX_OLLAMA_AUDIO_SAMPLES:
+        raise ValueError(
+            "Local Ollama audio is limited to 30 minutes per transcription. "
+            "Use Local Whisper for a longer recording."
+        )
+    return total
+
 
 def audio_as_wav(source: Path) -> tuple[bytes, float]:
     """Decode media into an in-memory 16 kHz mono PCM WAV for Ollama."""
@@ -31,16 +45,19 @@ def audio_as_wav(source: Path) -> tuple[bytes, float]:
             )
             if input_stream is None:
                 raise ValueError(f"media file has no audio stream: {source}")
-            output_stream = output_container.add_stream("pcm_s16le", rate=16_000)
+            output_stream = output_container.add_stream("pcm_s16le", rate=OLLAMA_AUDIO_RATE)
             output_stream.layout = "mono"
             resampler = av.audio.resampler.AudioResampler(
-                format="s16", layout="mono", rate=16_000
+                format="s16", layout="mono", rate=OLLAMA_AUDIO_RATE
             )
 
             def encode(frames: Any) -> None:
                 nonlocal sample_count
                 for converted in frames:
-                    sample_count += int(converted.samples)
+                    sample_count = _bounded_sample_count(
+                        sample_count,
+                        int(converted.samples),
+                    )
                     for packet in output_stream.encode(converted):
                         output_container.mux(packet)
 
@@ -57,7 +74,7 @@ def audio_as_wav(source: Path) -> tuple[bytes, float]:
     encoded = buffer.getvalue()
     if not encoded:
         raise RuntimeError("local Ollama audio conversion produced an empty WAV")
-    return encoded, sample_count / 16_000
+    return encoded, sample_count / OLLAMA_AUDIO_RATE
 
 
 def _transcription_prompt(language: str | None) -> str:

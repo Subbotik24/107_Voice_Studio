@@ -448,6 +448,33 @@ def test_cleanup_success_guards_before_durable_apply_then_displays_result(
     assert app.editor.text == "cleanup result"
 
 
+def test_automatic_cleanup_failure_is_reported_without_hiding_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    transcript = _transcript("dictionary result")
+    transcript.metadata.update(
+        {
+            "automatic_cleanup": "failed",
+            "cleanup_warning": "Ollama did not return a cleanup proposal",
+        }
+    )
+    app._t = lambda key, **values: f"{key}:{values.get('error', '')}"
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showwarning",
+        lambda *args, **_kwargs: warnings.append(args),
+    )
+
+    assert app._report_automatic_cleanup_warning(transcript) is True
+
+    assert app.status.values[-1].startswith("cleanup_automatic_failed")
+    assert "Ollama did not return" in str(warnings[-1])
+    assert transcript.corrected_text == "dictionary result"
+    assert transcript.raw_text == "raw immutable"
+
+
 def test_cleanup_real_store_persists_valid_proposal_and_displays_result(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

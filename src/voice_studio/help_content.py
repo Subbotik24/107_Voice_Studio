@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import unquote, urlsplit
 
+from .models import SUPPORTED_UI_LANGUAGES
+
 MANIFEST_NAME = "help-index.json"
 _INLINE_MARKUP = re.compile(r"(\*\*|__|`|(?<!\*)\*(?!\*)|(?<!_)_(?!_))")
 _LINK = re.compile(r"^\[([^]]+)]\(([^)]+)\)$")
@@ -81,20 +83,52 @@ def _inside(root: Path, candidate: Path) -> Path:
     return resolved_candidate
 
 
-def load_help_topics(help_root: Path | None = None) -> tuple[HelpTopic, ...]:
-    root = resolve_help_root(help_root) if help_root is not None else resolve_help_root()
+def _read_manifest(root: Path) -> dict[str, object]:
     try:
         payload = json.loads((root / MANIFEST_NAME).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read Help manifest: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("version") != 1:
+    if not isinstance(payload, dict) or payload.get("version") != 2:
         raise ValueError("Help manifest has an unsupported format")
-    if payload.get("language") != "uk" or not isinstance(payload.get("topics"), list):
-        raise ValueError("Help manifest must define Ukrainian topics")
+    default_language = payload.get("default_language")
+    languages = payload.get("languages")
+    if default_language not in SUPPORTED_UI_LANGUAGES or not isinstance(languages, dict):
+        raise ValueError("Help manifest must define a supported default language")
+    if set(languages) != set(SUPPORTED_UI_LANGUAGES):
+        raise ValueError("Help manifest must define Ukrainian, Czech, and English")
+    expected_slugs: tuple[str, ...] | None = None
+    for language in SUPPORTED_UI_LANGUAGES:
+        catalog = languages.get(language)
+        topics = catalog.get("topics") if isinstance(catalog, dict) else None
+        if not isinstance(topics, list) or not topics:
+            raise ValueError(f"Help manifest must define topics for {language}")
+        slugs = tuple(
+            item.get("slug") if isinstance(item, dict) else None for item in topics
+        )
+        if expected_slugs is None:
+            expected_slugs = slugs
+        elif slugs != expected_slugs:
+            raise ValueError("Help locale topic slugs and order must match")
+    return payload
+
+
+def load_help_topics(
+    help_root: Path | None = None,
+    language: str | None = None,
+) -> tuple[HelpTopic, ...]:
+    root = resolve_help_root(help_root) if help_root is not None else resolve_help_root()
+    payload = _read_manifest(root)
+    selected = language or str(payload["default_language"])
+    if selected not in SUPPORTED_UI_LANGUAGES:
+        raise ValueError(f"unsupported Help language: {selected}")
+    languages = payload["languages"]
+    catalog = languages[selected]
+    locale_root = root / selected
+    topics_payload = catalog["topics"]
 
     topics: list[HelpTopic] = []
     slugs: set[str] = set()
-    for item in payload["topics"]:
+    for item in topics_payload:
         if not isinstance(item, dict):
             raise ValueError("Help manifest topic must be an object")
         slug, title, filename = item.get("slug"), item.get("title"), item.get("file")
@@ -102,9 +136,10 @@ def load_help_topics(help_root: Path | None = None) -> tuple[HelpTopic, ...]:
             raise ValueError("Help manifest topic fields cannot be empty")
         if slug in slugs or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
             raise ValueError(f"invalid or duplicate Help topic slug: {slug}")
-        source_path = _inside(root, root / filename)
+        source_path = _inside(locale_root, locale_root / filename)
         if not source_path.is_file():
-            raise FileNotFoundError(f"Help topic is missing: {filename}")
+            relative = source_path.relative_to(root).as_posix()
+            raise FileNotFoundError(f"Help topic is missing: {relative}")
         slugs.add(slug)
         topics.append(
             HelpTopic(
@@ -243,7 +278,8 @@ def validate_help_tree(help_root: Path | None = None) -> tuple[str, ...]:
     root = resolve_help_root(help_root) if help_root is not None else resolve_help_root()
     issues: list[str] = []
     try:
-        load_help_topics(root)
+        for language in SUPPORTED_UI_LANGUAGES:
+            load_help_topics(root, language)
     except (OSError, ValueError) as exc:
         return (str(exc),)
     for source in sorted(root.rglob("*.md")):
@@ -263,6 +299,29 @@ def validate_help_tree(help_root: Path | None = None) -> tuple[str, ...]:
                     f"missing local target {local_target}"
                 )
                 continue
+            if resolved is not None:
+                source_relative = source.relative_to(root)
+                target_relative = resolved.relative_to(root)
+                locale = (
+                    source_relative.parts[0]
+                    if source_relative.parts
+                    and source_relative.parts[0] in SUPPORTED_UI_LANGUAGES
+                    else None
+                )
+                if locale is not None:
+                    same_locale = (
+                        target_relative.parts
+                        and target_relative.parts[0] == locale
+                    )
+                    same_locale_asset = (
+                        len(target_relative.parts) >= 2
+                        and target_relative.parts[:2] == ("assets", locale)
+                    )
+                    if not same_locale and not same_locale_asset:
+                        issues.append(
+                            f"{source_relative.as_posix()}: cross-locale target {target}"
+                        )
+                        continue
             if parsed.scheme or parsed.netloc or not parsed.fragment:
                 continue
             target_source = resolved if resolved is not None else source

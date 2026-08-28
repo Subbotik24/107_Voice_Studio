@@ -10,6 +10,11 @@ SUPPORTED_PROFILES = ("ollama-local", "whisper-local", "openai-cloud")
 SUPPORTED_ENGINES = ("ollama", "faster-whisper", "openai-cloud")
 SUPPORTED_CLEANUP_PROVIDERS = ("none", "ollama", "openai")
 RETENTION_POLICIES = ("keep", "delete_after_transcription")
+PROFILE_INVARIANTS = {
+    "ollama-local": ("ollama", "ollama", True, True),
+    "whisper-local": ("faster-whisper", "none", False, True),
+    "openai-cloud": ("openai-cloud", "openai", False, False),
+}
 
 
 def utc_now() -> str:
@@ -136,6 +141,23 @@ class Settings:
         if type(self.task_timeout_seconds) is not int:
             raise ValueError("settings.task_timeout_seconds must be an integer")
 
+    def validate_profile_invariants(self) -> None:
+        if self.profile not in SUPPORTED_PROFILES:
+            raise ValueError(f"unsupported profile: {self.profile}")
+        relevant_values = (self.profile, self.engine, self.cleanup_provider)
+        if not all(isinstance(value, str) for value in relevant_values) or any(
+            type(value) is not bool for value in (self.automatic_cleanup, self.offline_only)
+        ):
+            raise ValueError(f"inconsistent settings for profile: {self.profile}")
+        actual_profile_fields = (
+            self.engine,
+            self.cleanup_provider,
+            self.automatic_cleanup,
+            self.offline_only,
+        )
+        if actual_profile_fields != PROFILE_INVARIANTS[self.profile]:
+            raise ValueError(f"inconsistent settings for profile: {self.profile}")
+
     def validate(self) -> None:
         self._validate_types()
         if self.language not in SUPPORTED_LANGUAGES:
@@ -162,10 +184,11 @@ class Settings:
             raise ValueError(f"unsupported cloud provider: {self.cloud_provider}")
         if self.cleanup_provider not in SUPPORTED_CLEANUP_PROVIDERS:
             raise ValueError(f"unsupported cleanup provider: {self.cleanup_provider}")
-        if not self.openai_transcription_model.strip() or not self.openai_cleanup_model.strip():
-            raise ValueError("OpenAI model identifiers cannot be empty")
         if self.offline_only and self.engine == "openai-cloud":
             raise ValueError("offline_only blocks the OpenAI cloud engine")
+        self.validate_profile_invariants()
+        if not self.openai_transcription_model.strip() or not self.openai_cleanup_model.strip():
+            raise ValueError("OpenAI model identifiers cannot be empty")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -175,15 +198,34 @@ class Settings:
         data = dict(data)
         if "profile" not in data:
             legacy_engine = data.get("engine")
-            data["profile"] = {
+            legacy_profiles = {
                 "faster-whisper": "whisper-local",
                 "openai-cloud": "openai-cloud",
                 "ollama": "ollama-local",
-            }.get(legacy_engine, "ollama-local")
-            if legacy_engine in {"faster-whisper", "openai-cloud"}:
-                data.setdefault("automatic_cleanup", False)
-            if legacy_engine == "openai-cloud":
-                data.setdefault("offline_only", False)
+            }
+            profile = (
+                legacy_profiles.get(legacy_engine)
+                if isinstance(legacy_engine, str)
+                else None
+            )
+            if legacy_engine is None:
+                profile = "ollama-local"
+            data["profile"] = profile or "ollama-local"
+            if profile is not None:
+                engine, cleanup_provider, automatic_cleanup, offline_only = (
+                    PROFILE_INVARIANTS[profile]
+                )
+                invariants = {
+                    "engine": engine,
+                    "cleanup_provider": cleanup_provider,
+                    "automatic_cleanup": automatic_cleanup,
+                    "offline_only": offline_only,
+                }
+                if legacy_engine is None:
+                    for key, value in invariants.items():
+                        data.setdefault(key, value)
+                else:
+                    data.update(invariants)
         if data.get("hotkey") == "<ctrl>+<alt>+space":
             data["hotkey"] = "<ctrl>+<alt>+<space>"
         allowed = {item.name for item in fields(cls) if item.init}

@@ -34,6 +34,9 @@ def test_canonical_help_is_included_in_wheel_and_frozen_distributions() -> None:
     assert '"share/voice-studio/help"' in pyproject
     assert '"docs/help/*.md"' in pyproject
     assert '"docs/help/*.json"' in pyproject
+    for language in ("uk", "cs", "en"):
+        assert f'"share/voice-studio/help/{language}"' in pyproject
+        assert f'"docs/help/{language}/*.md"' in pyproject
     assert 'Join-Path $ProjectRoot "docs/help"' in windows_build
     assert 'Join-Path $WheelSourceDirectory "docs/help"' in windows_build
 
@@ -57,6 +60,9 @@ def test_frozen_launcher_enables_multiprocessing_support() -> None:
     assert "VOICE_STUDIO_RUNTIME_PROBE_OUTPUT" in launcher
     assert "VOICE_STUDIO_TRANSCRIPTION_PROBE_MODEL" in launcher
     assert "frozen_worker_roundtrip" in launcher
+    assert '"voice_studio.profiles"' in launcher
+    assert '"voice_studio.engines.ollama_audio"' in launcher
+    assert '"voice_studio.help_content"' in launcher
     assert "development_only_excluded" in launcher
 
 
@@ -92,6 +98,12 @@ def test_windows_build_is_atomic_and_runtime_verified() -> None:
     assert "Move-Item" in build_script
     assert '".wheel-source"' in build_script
     assert "all(n.split('/', 1)[0].startswith('voice_studio')" in build_script
+    assert "RequiredWheelSuffixes" in build_script
+    assert "voice_studio/profiles.py" in build_script
+    assert "voice_studio/engines/ollama_audio.py" in build_script
+    assert "RequiredFrozenHelpPaths" in build_script
+    for language in ("uk", "cs", "en"):
+        assert f'"{language}\\quick-start.md"' in build_script
 
 
 def test_windows_quality_gate_accepts_an_explicit_python_executable() -> None:

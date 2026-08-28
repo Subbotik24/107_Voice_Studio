@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,25 +24,76 @@ def _write_help_tree(root: Path) -> Path:
     (root / "help-index.json").write_text(
         json.dumps(
             {
-                "version": 1,
-                "language": "uk",
-                "topics": [
-                    {"slug": "quick-start", "title": "Швидкий старт", "file": "quick.md"},
-                    {"slug": "workflows", "title": "Основні сценарії", "file": "work.md"},
-                ],
+                "version": 2,
+                "default_language": "uk",
+                "languages": {
+                    "uk": {
+                        "topics": [
+                            {
+                                "slug": "quick-start",
+                                "title": "Швидкий старт",
+                                "file": "quick.md",
+                            },
+                            {
+                                "slug": "workflows",
+                                "title": "Основні сценарії",
+                                "file": "work.md",
+                            },
+                        ]
+                    },
+                    "cs": {
+                        "topics": [
+                            {
+                                "slug": "quick-start",
+                                "title": "Rychlý start",
+                                "file": "quick.md",
+                            },
+                            {
+                                "slug": "workflows",
+                                "title": "Hlavní postupy",
+                                "file": "work.md",
+                            },
+                        ]
+                    },
+                    "en": {
+                        "topics": [
+                            {
+                                "slug": "quick-start",
+                                "title": "Quick start",
+                                "file": "quick.md",
+                            },
+                            {
+                                "slug": "workflows",
+                                "title": "Main workflows",
+                                "file": "work.md",
+                            },
+                        ]
+                    },
+                },
             },
             ensure_ascii=False,
         ),
         encoding="utf-8",
     )
-    (root / "quick.md").write_text(
-        "# Швидкий старт\n\nОберіть **Транскрибувати файл…**.\n",
-        encoding="utf-8",
-    )
-    (root / "work.md").write_text(
-        "# Сценарії\n\nЛокальна Ollama виправляє редагований текст.\n",
-        encoding="utf-8",
-    )
+    content = {
+        "uk": (
+            "# Швидкий старт\n\nОберіть **Транскрибувати файл…**.\n",
+            "# Сценарії\n\nЛокальна Ollama виправляє редагований текст.\n",
+        ),
+        "cs": (
+            "# Rychlý start\n\nVyberte **Přepsat soubor…**.\n",
+            "# Postupy\n\nLokální Ollama opravuje upravovaný text.\n",
+        ),
+        "en": (
+            "# Quick start\n\nChoose **Transcribe file…**.\n",
+            "# Workflows\n\nLocal Ollama corrects the editable text.\n",
+        ),
+    }
+    for language, (quick, work) in content.items():
+        locale = root / language
+        locale.mkdir()
+        (locale / "quick.md").write_text(quick, encoding="utf-8")
+        (locale / "work.md").write_text(work, encoding="utf-8")
     return root
 
 
@@ -54,21 +106,38 @@ def test_help_catalog_loads_manifest_order_and_canonical_markdown(tmp_path: Path
         ("quick-start", "Швидкий старт"),
         ("workflows", "Основні сценарії"),
     ]
-    assert topics[0].source_path == root / "quick.md"
+    assert topics[0].source_path == root / "uk" / "quick.md"
     assert "Транскрибувати файл" in topics[0].markdown
 
 
 def test_help_catalog_rejects_topic_outside_canonical_root(tmp_path: Path) -> None:
     root = _write_help_tree(tmp_path / "help")
     manifest = json.loads((root / "help-index.json").read_text(encoding="utf-8"))
-    manifest["topics"][0]["file"] = "../private.md"
+    manifest["languages"]["uk"]["topics"][0]["file"] = "../private.md"
     (root / "help-index.json").write_text(
         json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
     )
-    (tmp_path / "private.md").write_text("secret", encoding="utf-8")
+    (root / "private.md").write_text("secret", encoding="utf-8")
 
     with pytest.raises(ValueError, match="inside the help directory"):
         load_help_topics(root)
+
+
+def test_help_catalog_loads_the_requested_interface_language(tmp_path: Path) -> None:
+    root = _write_help_tree(tmp_path / "help")
+
+    topics = load_help_topics(root, "cs")
+
+    assert topics[0].title == "Rychlý start"
+    assert "Vyberte" in topics[0].markdown
+    assert topics[0].source_path == root / "cs" / "quick.md"
+
+
+def test_help_catalog_rejects_a_missing_locale_topic(tmp_path: Path) -> None:
+    root = _write_help_tree(tmp_path / "help")
+    (root / "en" / "work.md").unlink()
+
+    assert validate_help_tree(root) == ("Help topic is missing: en/work.md",)
 
 
 def test_help_search_matches_titles_and_body_without_case_sensitivity(tmp_path: Path) -> None:
@@ -129,9 +198,12 @@ def test_help_asset_resolution_stays_inside_help_root(tmp_path: Path) -> None:
     image = assets / "main-window.png"
     image.write_bytes(b"png")
 
-    assert resolve_help_asset(root, root / "quick.md", "assets/main-window.png") == image
+    assert (
+        resolve_help_asset(root, root / "uk" / "quick.md", "../assets/main-window.png")
+        == image
+    )
     with pytest.raises(ValueError, match="inside the help directory"):
-        resolve_help_asset(root, root / "quick.md", "../../private.png")
+        resolve_help_asset(root, root / "uk" / "quick.md", "../../private.png")
 
 
 def test_help_root_resolution_supports_source_frozen_and_installed_layouts(
@@ -169,26 +241,26 @@ def test_help_validator_reports_broken_local_links_and_accepts_valid_tree(
     tmp_path: Path,
 ) -> None:
     root = _write_help_tree(tmp_path / "help")
-    (root / "quick.md").write_text(
-        "# Швидкий старт\n\n[Сценарії](work.md)\n\n![UI](assets/main.png)\n",
+    (root / "uk" / "quick.md").write_text(
+        "# Швидкий старт\n\n[Сценарії](work.md)\n\n![UI](../assets/uk/main.png)\n",
         encoding="utf-8",
     )
 
     issues = validate_help_tree(root)
 
-    assert issues == ("quick.md: missing local target assets/main.png",)
-    (root / "assets").mkdir()
-    (root / "assets" / "main.png").write_bytes(b"png")
+    assert issues == ("uk/quick.md: missing local target ../assets/uk/main.png",)
+    (root / "assets" / "uk").mkdir(parents=True)
+    (root / "assets" / "uk" / "main.png").write_bytes(b"png")
     assert validate_help_tree(root) == ()
 
 
 def test_help_fragments_match_ukrainian_headings_and_are_validated(tmp_path: Path) -> None:
     root = _write_help_tree(tmp_path / "help")
-    (root / "work.md").write_text(
+    (root / "uk" / "work.md").write_text(
         "# Основні сценарії\n\n## Локальне AI-редагування через Ollama\n",
         encoding="utf-8",
     )
-    (root / "quick.md").write_text(
+    (root / "uk" / "quick.md").write_text(
         "# Швидкий старт\n\n"
         "[Ollama](work.md#локальне-ai-редагування-через-ollama)\n",
         encoding="utf-8",
@@ -202,12 +274,12 @@ def test_help_fragments_match_ukrainian_headings_and_are_validated(tmp_path: Pat
     ) == ("work.md", "локальне-ai-редагування-через-ollama")
     assert validate_help_tree(root) == ()
 
-    (root / "quick.md").write_text(
+    (root / "uk" / "quick.md").write_text(
         "# Швидкий старт\n\n[Немає](work.md#відсутній-розділ)\n",
         encoding="utf-8",
     )
     assert validate_help_tree(root) == (
-        "quick.md: missing anchor #відсутній-розділ in work.md",
+        "uk/quick.md: missing anchor #відсутній-розділ in uk/work.md",
     )
 
 
@@ -232,3 +304,32 @@ def test_open_help_reuses_and_focuses_the_existing_window() -> None:
 
     assert VoiceStudioApp._raise_existing_help(app) is True
     assert actions == ["deiconify", "lift", "focus"]
+
+
+def test_in_app_help_loads_the_selected_interface_language(monkeypatch, tmp_path) -> None:
+    from voice_studio import app as app_module
+
+    app = object.__new__(VoiceStudioApp)
+    app.settings = SimpleNamespace(ui_language="cs")
+    requested: list[tuple[Path, str]] = []
+    monkeypatch.setattr(
+        app_module,
+        "load_help_topics",
+        lambda root, language: requested.append((root, language)) or ("topic",),
+    )
+
+    assert VoiceStudioApp._localized_help_topics(app, tmp_path) == ("topic",)
+    assert requested == [(tmp_path, "cs")]
+
+
+def test_saving_a_new_interface_language_rebuilds_open_help_before_ui_refresh() -> None:
+    app = object.__new__(VoiceStudioApp)
+    actions: list[str] = []
+    app.settings = SimpleNamespace(ui_language="en")
+    app.job_controller = SimpleNamespace(close=lambda: actions.append("close-worker"))
+    app._close_help_window = lambda: actions.append("close-help")
+    app._refresh_ui_text = lambda: actions.append("refresh-ui")
+
+    VoiceStudioApp._refresh_after_settings_save(app, "uk")
+
+    assert actions == ["close-worker", "close-help", "refresh-ui"]

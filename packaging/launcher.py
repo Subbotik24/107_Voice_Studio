@@ -23,6 +23,9 @@ def runtime_probe(output: Path) -> None:
         "tkinter",
         "keyring",
         "openai",
+        "voice_studio.profiles",
+        "voice_studio.engines.ollama_audio",
+        "voice_studio.help_content",
     )
     development_only_modules = (
         "PIL",

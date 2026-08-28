@@ -24,6 +24,7 @@ from .jobs import TranscriptionJobController
 from .media import validate_media_file
 from .model_catalog import ModelCatalog
 from .models import Settings
+from .profiles import apply_profile
 from .storage import LocalStore
 
 
@@ -59,8 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe = sub.add_parser("transcribe", help="transcribe an audio or video file")
     transcribe.add_argument("file", type=Path)
     transcribe.add_argument("--language", choices=["auto", "uk", "cs", "en"])
-    transcribe.add_argument("--engine", choices=["faster-whisper", "openai-cloud"])
+    transcribe.add_argument("--engine", choices=["ollama", "faster-whisper", "openai-cloud"])
     transcribe.add_argument("--model", help="faster-whisper model name or local model path")
+    transcribe.add_argument("--ollama-model", help="installed Ollama audio-capable model name")
     transcribe.add_argument("--device")
     transcribe.add_argument("--compute-type")
     transcribe.add_argument("--retention", choices=["keep", "delete_after_transcription"])
@@ -158,11 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _load_effective_settings(args: argparse.Namespace) -> Settings:
     settings = load_settings()
+    selected_engine = getattr(args, "engine", None)
+    if selected_engine is not None:
+        profile = {
+            "ollama": "ollama-local",
+            "faster-whisper": "whisper-local",
+            "openai-cloud": "openai-cloud",
+        }[selected_engine]
+        settings = apply_profile(settings, profile)
     overrides: dict[str, Any] = {}
     for argument, field in (
         ("language", "language"),
-        ("engine", "engine"),
         ("model", "model"),
+        ("ollama_model", "ollama_model"),
         ("device", "device"),
         ("compute_type", "compute_type"),
         ("retention", "retention"),

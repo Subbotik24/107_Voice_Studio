@@ -44,6 +44,12 @@ def test_help_navigation_is_localized_for_every_interface_language() -> None:
     assert translate("uk", "help_no_results") == "Нічого не знайдено."
 
 
+def test_help_intro_describes_the_current_localized_manual() -> None:
+    assert "canonical docs/help" in translate("uk", "help_intro")
+    assert "kanonických docs/help" in translate("cs", "help_intro")
+    assert "canonical docs/help" in translate("en", "help_intro")
+
+
 @pytest.mark.parametrize("language", ["uk", "cs", "en"])
 def test_profile_cards_are_localized_for_every_interface_language(language: str) -> None:
     for key in (

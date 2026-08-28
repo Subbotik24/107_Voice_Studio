@@ -80,6 +80,20 @@ try {
         throw "PyInstaller did not create $Executable"
     }
 
+    $RequiredFrozenHelpPaths = @(
+        "help-index.json",
+        "uk\quick-start.md", "uk\workflows.md", "uk\reference.md", "uk\troubleshooting.md",
+        "cs\quick-start.md", "cs\workflows.md", "cs\reference.md", "cs\troubleshooting.md",
+        "en\quick-start.md", "en\workflows.md", "en\reference.md", "en\troubleshooting.md"
+    )
+    $FrozenHelpRoot = Join-Path $AppDirectory "_internal\docs\help"
+    foreach ($RelativePath in $RequiredFrozenHelpPaths) {
+        $HelpPath = Join-Path $FrozenHelpRoot $RelativePath
+        if (-not (Test-Path -LiteralPath $HelpPath -PathType Leaf)) {
+            throw "Frozen Help payload is missing: $RelativePath"
+        }
+    }
+
     $env:VOICE_STUDIO_RUNTIME_PROBE_OUTPUT = $RuntimeProbe
     $ProbeProcess = Start-Process -FilePath $Executable -WorkingDirectory $AppDirectory `
         -WindowStyle Hidden -Wait -PassThru
@@ -127,9 +141,17 @@ try {
     if (-not $WheelPath) {
         throw "Python build did not create a wheel"
     }
+    $RequiredWheelSuffixes = @(
+        "voice_studio/profiles.py",
+        "voice_studio/engines/ollama_audio.py",
+        "share/voice-studio/help/help-index.json",
+        "share/voice-studio/help/uk/quick-start.md",
+        "share/voice-studio/help/cs/quick-start.md",
+        "share/voice-studio/help/en/quick-start.md"
+    )
     Invoke-Checked $Python -c `
-        "import sys, zipfile; names=zipfile.ZipFile(sys.argv[1]).namelist(); raise SystemExit(0 if names and all(n.split('/', 1)[0].startswith('voice_studio') for n in names) else 2)" `
-        $WheelPath
+        "import sys, zipfile; names=zipfile.ZipFile(sys.argv[1]).namelist(); required=sys.argv[2:]; valid=names and all(n.split('/', 1)[0].startswith('voice_studio') for n in names) and all(any(n.endswith(s) for n in names) for s in required); raise SystemExit(0 if valid else 2)" `
+        $WheelPath @RequiredWheelSuffixes
     Remove-Item -LiteralPath $WheelSourceDirectory -Recurse -Force
 
     $ArchiveName = "VOICE-Studio-$ReleaseLabel-unsigned.zip"

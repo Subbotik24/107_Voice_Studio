@@ -38,16 +38,12 @@ def _engine_worker(
                 from .cloud_cleanup import propose_cleanup
 
                 transcript = Transcript.from_dict(request["transcript"])
-                provider = settings.cleanup_provider
-                model = (
-                    settings.ollama_model
-                    if provider == "ollama"
-                    else settings.openai_cleanup_model
-                )
+                if settings.profile != "ollama-local" or not settings.automatic_cleanup:
+                    raise ValueError("automatic worker cleanup is restricted to local Ollama")
                 proposal = propose_cleanup(
                     transcript,
-                    provider=provider,
-                    model=model,
+                    provider="ollama",
+                    model=settings.ollama_model,
                 )
                 results.put(
                     {
@@ -169,6 +165,7 @@ class TranscriptionJobController:
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[str, float], None] | None = None,
     ) -> Transcript:
+        settings.validate_profile_invariants()
         timeout = settings.task_timeout_seconds if timeout_seconds is None else timeout_seconds
         budget = OperationBudget(timeout, cancelled)
         service = TranscriptionService(self.store, engine=None, dictionary=dictionary)
@@ -250,7 +247,7 @@ class TranscriptionJobController:
                         transcript = self.store.apply_ai_cleanup(
                             transcript.id,
                             cleanup_response["proposal"],
-                            provider=settings.cleanup_provider,
+                            provider="ollama",
                             model=settings.ollama_model,
                         )
                         transcript = self._record_cleanup_outcome(transcript, "applied")

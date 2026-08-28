@@ -170,6 +170,24 @@ def test_local_ollama_profile_applies_cleanup_without_mutating_raw_text(tmp_path
     ]
 
 
+def test_inconsistent_ollama_profile_cannot_start_cloud_cleanup(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(store, tmp_path / "cache")
+    settings = Settings(
+        cleanup_provider="openai",
+        offline_only=False,
+        ollama_model="gemma4:12b",
+    )
+    try:
+        with pytest.raises(ValueError, match="inconsistent settings for profile"):
+            controller.run(source, settings, TerminologyDictionary())
+    finally:
+        controller.close()
+
+    assert store.list() == []
+
+
 def test_local_cleanup_failure_keeps_the_saved_transcript(tmp_path, make_wav):
     source = make_wav(tmp_path / "original.wav")
     store = LocalStore(tmp_path / "data")

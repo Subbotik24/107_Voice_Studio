@@ -1,26 +1,30 @@
 {
-  "version": 1,
-  "language": "uk",
-  "topics": [
-    {
-      "slug": "quick-start",
-      "title": "Швидкий старт",
-      "file": "quick-start.md"
+  "version": 2,
+  "default_language": "uk",
+  "languages": {
+    "uk": {
+      "topics": [
+        {"slug": "quick-start", "title": "Швидкий старт", "file": "quick-start.md"},
+        {"slug": "workflows", "title": "Основні сценарії", "file": "workflows.md"},
+        {"slug": "reference", "title": "Довідка екранів і параметрів", "file": "reference.md"},
+        {"slug": "troubleshooting", "title": "Вирішення проблем", "file": "troubleshooting.md"}
+      ]
     },
-    {
-      "slug": "workflows",
-      "title": "Основні сценарії",
-      "file": "workflows.md"
+    "cs": {
+      "topics": [
+        {"slug": "quick-start", "title": "Rychlý start", "file": "quick-start.md"},
+        {"slug": "workflows", "title": "Hlavní postupy", "file": "workflows.md"},
+        {"slug": "reference", "title": "Přehled obrazovek a nastavení", "file": "reference.md"},
+        {"slug": "troubleshooting", "title": "Řešení potíží", "file": "troubleshooting.md"}
+      ]
     },
-    {
-      "slug": "reference",
-      "title": "Довідка екранів і параметрів",
-      "file": "reference.md"
-    },
-    {
-      "slug": "troubleshooting",
-      "title": "Вирішення проблем",
-      "file": "troubleshooting.md"
+    "en": {
+      "topics": [
+        {"slug": "quick-start", "title": "Quick start", "file": "quick-start.md"},
+        {"slug": "workflows", "title": "Main workflows", "file": "workflows.md"},
+        {"slug": "reference", "title": "Screens and settings reference", "file": "reference.md"},
+        {"slug": "troubleshooting", "title": "Troubleshooting", "file": "troubleshooting.md"}
+      ]
     }
-  ]
+  }
 }

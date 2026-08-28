@@ -113,11 +113,27 @@ class StudioLayout:
 def studio_layout_for_width(width: int) -> StudioLayout:
     """Apply the approved full and compact sidebar proportions."""
 
-    if width >= 1200:
-        return StudioLayout(250, False, True)
     if width >= 1040:
+        return StudioLayout(250, False, True)
+    if width >= 760:
         return StudioLayout(250, False, False)
     return StudioLayout(88, True, False)
+
+
+def initial_window_size(screen_width: int, screen_height: int) -> tuple[int, int]:
+    """Fit the reference layout on the current display without shrinking its menu."""
+
+    width = max(900, min(1320, screen_width - 16))
+    height = max(640, min(820, screen_height - 32))
+    return width, height
+
+
+def studio_content_metrics(width: int) -> tuple[tuple[int, int, int, int], int, int]:
+    """Return body padding, panel gap, and subtitle wrap for the active width."""
+
+    if 1040 <= width < 1200:
+        return (16, 18, 16, 20), 12, 340
+    return (28, 22, 28, 24), 18, 560
 
 
 class VoiceStudioApp(tk.Tk):
@@ -125,7 +141,11 @@ class VoiceStudioApp(tk.Tk):
         super().__init__()
         self.title("VOICE Studio")
         self._install_window_icon()
-        self.geometry("1320x820")
+        width, height = initial_window_size(
+            self.winfo_screenwidth(),
+            self.winfo_screenheight(),
+        )
+        self.geometry(f"{width}x{height}")
         self.minsize(900, 640)
         try:
             self.settings = load_settings()
@@ -363,7 +383,7 @@ class VoiceStudioApp(tk.Tk):
         self.workspace_body.grid(row=1, column=0, sticky="nsew")
         self.workspace_body.grid_rowconfigure(0, weight=1)
         self.workspace_body.grid_columnconfigure(0, weight=1)
-        self.workspace_body.grid_columnconfigure(1, minsize=250)
+        self.workspace_body.grid_columnconfigure(1, minsize=214)
 
         self.main_area = ttk.Frame(self.workspace_body, style="Canvas.TFrame")
         main_area = self.main_area
@@ -412,6 +432,7 @@ class VoiceStudioApp(tk.Tk):
             toolbar,
             text=self._t("continuous_record"),
             command=self._toggle_continuous_recording,
+            style="CompactAction.TButton",
         )
         self.continuous_record_button.pack(side="left", padx=(8, 0))
         self.cancel_button = ttk.Button(
@@ -419,10 +440,14 @@ class VoiceStudioApp(tk.Tk):
             text=self._t("cancel"),
             command=self._cancel_current,
             state="disabled",
+            style="CompactAction.TButton",
         )
         self.cancel_button.pack(side="right", padx=(8, 0))
         self.copy_button = ttk.Button(
-            toolbar, text=self._t("copy_text"), command=self._copy_current
+            toolbar,
+            text=self._t("copy_text"),
+            command=self._copy_current,
+            style="CompactAction.TButton",
         )
         self.copy_button.pack(side="right")
 
@@ -581,7 +606,7 @@ class VoiceStudioApp(tk.Tk):
         self.delete_history_button.pack(side="right")
 
         self.readiness_frame = ttk.Frame(
-            self.workspace_body, width=250, padding=18, style="CardBorder.TFrame"
+            self.workspace_body, width=214, padding=18, style="CardBorder.TFrame"
         )
         self.readiness_frame.grid(row=0, column=1, sticky="nsew")
         self.readiness_frame.grid_propagate(False)
@@ -611,7 +636,7 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame,
             textvariable=self.readiness_engine_value,
             style="CardValue.TLabel",
-            wraplength=210,
+            wraplength=178,
         ).pack(anchor="w", pady=(2, 12))
         self.readiness_model_caption = ttk.Label(
             self.readiness_frame, text=self._t("active_model"), style="CardMuted.TLabel"
@@ -622,7 +647,7 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame,
             textvariable=self.readiness_model_value,
             style="CardValue.TLabel",
-            wraplength=210,
+            wraplength=178,
         ).pack(anchor="w", pady=(2, 12))
         self.readiness_language_caption = ttk.Label(
             self.readiness_frame,
@@ -647,7 +672,7 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame,
             textvariable=self.readiness_ai_value,
             style="CardValue.TLabel",
-            wraplength=210,
+            wraplength=178,
         ).pack(anchor="w", pady=(2, 12))
 
         ttk.Separator(self.readiness_frame).pack(fill="x", pady=(4, 14))
@@ -655,7 +680,7 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame,
             text=self._t("privacy_note"),
             style="CardMuted.TLabel",
-            wraplength=210,
+            wraplength=178,
             justify="left",
         )
         self.privacy_note_label.pack(anchor="w")
@@ -680,14 +705,17 @@ class VoiceStudioApp(tk.Tk):
             self.brand_details.grid_remove()
             self.sidebar_footer.grid_remove()
             self.workspace_body.configure(padding=(20, 18, 20, 20))
+            self.workspace_subtitle_label.configure(wraplength=340)
         else:
             self.brand_details.grid()
             self.sidebar_footer.grid()
-            self.workspace_body.configure(padding=(28, 22, 28, 24))
+            body_padding, panel_gap, subtitle_wrap = studio_content_metrics(width)
+            self.workspace_body.configure(padding=body_padding)
+            self.workspace_subtitle_label.configure(wraplength=subtitle_wrap)
         if layout.show_readiness:
             self.readiness_frame.grid()
-            self.workspace_body.grid_columnconfigure(1, minsize=250)
-            self.main_area.grid_configure(padx=(0, 18))
+            self.workspace_body.grid_columnconfigure(1, minsize=214)
+            self.main_area.grid_configure(padx=(0, panel_gap))
         else:
             self.readiness_frame.grid_remove()
             self.workspace_body.grid_columnconfigure(1, minsize=0)
@@ -964,8 +992,10 @@ class VoiceStudioApp(tk.Tk):
         style.map(
             "TCombobox",
             fieldbackground=[("readonly", theme.surface)],
+            foreground=[("readonly", theme.ink), ("disabled", theme.muted_ink)],
             bordercolor=[("focus", theme.accent)],
         )
+        style.configure("CompactAction.TButton", padding=(6, 7))
         style.configure(
             "TCheckbutton",
             background=theme.surface,
@@ -1285,6 +1315,21 @@ class VoiceStudioApp(tk.Tk):
             self._t("recording_cleanup_title"), "\n\n".join(details), parent=self
         )
 
+    def _report_automatic_cleanup_warning(self, transcript: Transcript) -> bool:
+        metadata = getattr(transcript, "metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+        warning = str(metadata.get("cleanup_warning", "")).strip()
+        if not warning:
+            return False
+        self.status.set(self._t("cleanup_automatic_failed"))
+        messagebox.showwarning(
+            self._t("cleanup_automatic_failed_title"),
+            self._t("cleanup_automatic_failed_message", error=warning),
+            parent=self,
+        )
+        return True
+
     def _poll_events(self) -> None:
         try:
             while True:
@@ -1301,6 +1346,7 @@ class VoiceStudioApp(tk.Tk):
                         self._refresh_history(
                             select_id=self.current.id if self.current else None
                         )
+                    self._report_automatic_cleanup_warning(transcript)
                 elif event == "error":
                     error, cleanup = value
                     self._cleanup_temp(cleanup)
@@ -1996,12 +2042,23 @@ class VoiceStudioApp(tk.Tk):
         window.focus_force()
         return True
 
+    def _localized_help_topics(self, help_root: Path) -> tuple[HelpTopic, ...]:
+        return load_help_topics(help_root, self.settings.ui_language)
+
+    def _close_help_window(self) -> str:
+        window = getattr(self, "_help_window", None)
+        self._help_window = None
+        self._help_images = []
+        if window is not None and window.winfo_exists():
+            window.destroy()
+        return "break"
+
     def _help_dialog(self) -> None:
         if self._raise_existing_help():
             return
         try:
             help_root = resolve_help_root()
-            topics = load_help_topics(help_root)
+            topics = self._localized_help_topics(help_root)
         except (OSError, ValueError) as exc:
             messagebox.showerror(
                 self._t("help"), self._t("help_unavailable", error=exc), parent=self
@@ -2021,10 +2078,7 @@ class VoiceStudioApp(tk.Tk):
         dialog.grid_columnconfigure(0, weight=1)
 
         def close_help(_event: Any = None) -> str:
-            self._help_window = None
-            self._help_images = []
-            dialog.destroy()
-            return "break"
+            return self._close_help_window()
 
         dialog.protocol("WM_DELETE_WINDOW", close_help)
         dialog.bind("<Escape>", close_help)
@@ -2244,6 +2298,12 @@ class VoiceStudioApp(tk.Tk):
         dialog.grab_release()
         dialog.destroy()
         self.after_idle(self._start_hotkey)
+
+    def _refresh_after_settings_save(self, previous_ui_language: str) -> None:
+        self.job_controller.close()
+        if previous_ui_language != self.settings.ui_language:
+            self._close_help_window()
+        self._refresh_ui_text()
 
     def _settings_dialog(self) -> None:
         # Do not let the currently configured global shortcut start a recording
@@ -2633,6 +2693,7 @@ class VoiceStudioApp(tk.Tk):
             self._close_settings_dialog(dialog)
 
         def save() -> None:
+            previous_ui_language = self.settings.ui_language
             try:
                 updated = replace(
                     self.settings,
@@ -2660,13 +2721,12 @@ class VoiceStudioApp(tk.Tk):
                 updated.validate()
                 if updated.dictionary_path:
                     TerminologyDictionary.load(updated.dictionary_path)
-                self.settings = updated
                 save_settings(updated)
+                self.settings = updated
             except Exception as exc:
                 messagebox.showerror(self._t("settings"), str(exc), parent=dialog)
                 return
-            self.job_controller.close()
-            self._refresh_ui_text()
+            self._refresh_after_settings_save(previous_ui_language)
             self.status.set(self._t("settings_saved"))
             self._close_settings_dialog(dialog)
 

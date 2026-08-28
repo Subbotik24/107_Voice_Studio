@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import io
 import wave
-from pathlib import Path
 
 import pytest
 
-from voice_studio.engines.ollama_audio import OllamaAudioEngine, audio_as_wav
+from voice_studio.engines.ollama_audio import (
+    MAX_OLLAMA_AUDIO_SAMPLES,
+    OllamaAudioEngine,
+    _bounded_sample_count,
+    audio_as_wav,
+)
 from voice_studio.models import Settings
 from voice_studio.ollama_local import OllamaClient
 
@@ -65,7 +69,10 @@ def test_audio_chat_rejects_missing_or_empty_assistant_content(monkeypatch, resp
     client = OllamaClient()
     monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: response)
 
-    with pytest.raises(RuntimeError, match="empty transcription"):
+    with pytest.raises(
+        RuntimeError,
+        match="returned no transcript.*recognition language.*Local Whisper",
+    ):
         client.audio_chat("gemma4:12b", b"RIFFaudio", "Transcribe")
 
 
@@ -80,6 +87,15 @@ def test_audio_conversion_produces_16khz_mono_pcm_wav(make_wav, tmp_path):
         assert result.getsampwidth() == 2
         assert result.getnframes() == 1_600
     assert duration == pytest.approx(0.1, abs=0.001)
+
+
+def test_ollama_audio_conversion_rejects_over_30_minutes_before_buffer_growth():
+    assert _bounded_sample_count(MAX_OLLAMA_AUDIO_SAMPLES - 1, 1) == (
+        MAX_OLLAMA_AUDIO_SAMPLES
+    )
+
+    with pytest.raises(ValueError, match="30 minutes"):
+        _bounded_sample_count(MAX_OLLAMA_AUDIO_SAMPLES, 1)
 
 
 class FakeOllama:

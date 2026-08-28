@@ -12,6 +12,7 @@ from . import __version__
 from .config import cache_dir, config_dir, data_dir
 from .model_catalog import ModelCatalog
 from .models import Settings
+from .ollama_local import OllamaClient
 
 
 def _redact_paths(value: object) -> object:
@@ -84,9 +85,24 @@ def _microphone_status(available: bool) -> tuple[bool, str | None]:
     return True, None
 
 
+def _ollama_model_status(model: str) -> tuple[bool, str | None]:
+    model_name = model.strip()
+    if not model_name:
+        return False, "no Ollama model is selected"
+    try:
+        details = OllamaClient().show_model(model_name)
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    capabilities = details.get("capabilities")
+    if not isinstance(capabilities, list) or "audio" not in capabilities:
+        return False, f"Ollama model {model_name!r} does not report audio capability"
+    return True, None
+
+
 def diagnostics(settings: Settings | None = None) -> dict[str, Any]:
     selected = settings or Settings()
     module_names = (
+        "av",
         "numpy",
         "platformdirs",
         "faster_whisper",
@@ -98,8 +114,12 @@ def diagnostics(settings: Settings | None = None) -> dict[str, Any]:
     )
     errors = {name: module_error(name) for name in module_names}
     modules = {name: errors[name] is None for name in module_names}
-    required = ["numpy", "platformdirs", "tkinter"]
-    if selected.engine == "faster-whisper":
+    required = ["av", "numpy", "platformdirs", "tkinter"]
+    model_error: str | None = None
+    model_ready: bool | None = None
+    if selected.engine == "ollama":
+        model_ready, model_error = _ollama_model_status(selected.ollama_model)
+    elif selected.engine == "faster-whisper":
         required.append("faster_whisper")
     elif selected.engine == "openai-cloud":
         required.extend(["keyring", "openai"])
@@ -116,8 +136,6 @@ def diagnostics(settings: Settings | None = None) -> dict[str, Any]:
                 model_ready = ModelCatalog(data_dir() / "models").get(selected.model) is not None
             except ValueError:
                 model_ready = False
-    else:
-        model_ready = None
     gui_ready = modules["tkinter"]
     runtime_ready = not missing and gui_ready and model_ready is not False
     return {
@@ -126,7 +144,13 @@ def diagnostics(settings: Settings | None = None) -> dict[str, Any]:
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "selected_engine": selected.engine,
-        "selected_model": selected.model,
+        "selected_model": (
+            selected.ollama_model
+            if selected.engine == "ollama"
+            else selected.openai_transcription_model
+            if selected.engine == "openai-cloud"
+            else selected.model
+        ),
         "dependencies": modules,
         "dependency_errors": {name: error for name, error in errors.items() if error},
         "missing_required": missing,
@@ -143,6 +167,7 @@ def diagnostics(settings: Settings | None = None) -> dict[str, Any]:
             for name, error in {
                 "microphone": microphone_error,
                 "hotkey": hotkey_error,
+                "model": model_error,
             }.items()
             if error
         },

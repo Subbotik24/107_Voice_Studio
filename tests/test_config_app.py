@@ -44,6 +44,88 @@ def test_settings_without_profile_keep_their_legacy_engine(engine, expected_prof
 
     assert settings.engine == engine
     assert settings.profile == expected_profile
+    assert {
+        "faster-whisper": ("none", False, True),
+        "openai-cloud": ("openai", False, False),
+        "ollama": ("ollama", True, True),
+    }[engine] == (
+        settings.cleanup_provider,
+        settings.automatic_cleanup,
+        settings.offline_only,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "engine",
+        "expected_profile",
+        "expected_cleanup",
+        "expected_automatic_cleanup",
+        "expected_offline_only",
+    ),
+    [
+        ("faster-whisper", "whisper-local", "none", False, True),
+        ("openai-cloud", "openai-cloud", "openai", False, False),
+    ],
+)
+def test_full_pre_profile_settings_migrate_without_resetting_saved_choices(
+    engine,
+    expected_profile,
+    expected_cleanup,
+    expected_automatic_cleanup,
+    expected_offline_only,
+):
+    legacy_payload = {
+        "language": "cs",
+        "ui_language": "en",
+        "engine": engine,
+        "model": "medium",
+        "device": "cpu",
+        "compute_type": "int8",
+        "hotkey": "<f14>",
+        "retention": "keep",
+        "dictionary_path": "dictionary.json",
+        "auto_copy": True,
+        "offline_only": False,
+        "task_timeout_seconds": 3600,
+        "cloud_provider": "openai",
+        "cleanup_provider": "ollama",
+        "ollama_model": "gemma4:12b",
+        "openai_transcription_model": "gpt-transcribe",
+        "openai_cleanup_model": "gpt-4.1-mini-2025-04-14",
+    }
+
+    settings = Settings.from_dict(legacy_payload)
+
+    assert settings.profile == expected_profile
+    assert settings.engine == engine
+    assert settings.cleanup_provider == expected_cleanup
+    assert settings.automatic_cleanup is expected_automatic_cleanup
+    assert settings.offline_only is expected_offline_only
+    assert settings.language == "cs"
+    assert settings.ui_language == "en"
+    assert settings.model == "medium"
+    assert settings.device == "cpu"
+    assert settings.compute_type == "int8"
+    assert settings.hotkey == "<f14>"
+    assert settings.dictionary_path == "dictionary.json"
+    assert settings.auto_copy is True
+    assert settings.task_timeout_seconds == 3600
+    assert settings.ollama_model == "gemma4:12b"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"cleanup_provider": "openai", "offline_only": False},
+        {"engine": "faster-whisper"},
+        {"automatic_cleanup": False},
+        {"profile": "whisper-local"},
+    ],
+)
+def test_settings_reject_inconsistent_profile_privacy_fields(overrides):
+    with pytest.raises(ValueError, match="inconsistent settings for profile"):
+        Settings(**overrides).validate()
 
 
 @pytest.mark.parametrize(

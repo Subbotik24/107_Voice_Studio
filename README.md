@@ -1,8 +1,10 @@
 # VOICE Studio 0.3.0 Test RC
 
 Privacy-first desktop transcription for macOS Apple Silicon and Windows x64.
-`faster-whisper` is the default local engine: audio, transcripts, history and
-models remain on the device unless a user explicitly chooses a cloud action.
+Ollama is the default local engine: one installed audio-capable Ollama model
+transcribes the recording and then improves the editable text locally. Audio,
+transcripts, history and settings remain on the device unless a user explicitly
+chooses the OpenAI cloud profile.
 The current customer-facing brand is **VOICE Studio**. Existing
 `voice_studio` package paths and the `voice-studio` CLI are retained for
 compatibility.
@@ -12,7 +14,8 @@ data-safety controls below still require native Windows/macOS acceptance.
 
 Українська версія: [README.uk.md](README.uk.md).
 
-User help: [Ukrainian user guide](docs/help/README.md).
+User help: [Українська](docs/help/uk/quick-start.md) ·
+[Čeština](docs/help/cs/quick-start.md) · [English](docs/help/en/quick-start.md).
 
 ## Quick start from source
 
@@ -27,29 +30,47 @@ environment on first run and do not upgrade dependencies on subsequent runs.
 run_windows.bat
 ```
 
-Install a local model only after choosing it:
+Start Ollama and make sure an installed model supports audio input. VOICE Studio
+discovers those models without installing, updating or deleting them:
+
+```bash
+ollama list
+voice-studio transcribe recording.wav --engine ollama --ollama-model gemma4:12b
+```
+
+Whisper is an optional local profile when timed subtitle segments are needed.
+Install its model only after choosing that profile:
 
 ```bash
 voice-studio models install tiny
 voice-studio transcribe recording.wav --engine faster-whisper --model tiny
 ```
 
-`tiny` is the starter profile; `small` usually gives better quality but needs
-substantially more disk space. Offline import is available with
+`small` usually gives better Whisper quality than `tiny` but needs substantially
+more disk space. Offline import is available with
 `voice-studio models install tiny --from-directory PATH`. Set
 `VOICE_STUDIO_MODEL_REGISTRY_URL` to the published `models-v1` registry URL to
 install the verified GitHub Release packs; no model binary belongs in Git.
 
-## Interface language and local Ollama
+## Saved profiles, interface language and local Ollama
 
-Open **Settings** to switch the interface between Ukrainian, Czech and English.
-The change is saved locally and applied immediately.
+Open **Settings → Profiles** to switch between **Local Ollama** (default),
+**Local Whisper**, and **OpenAI cloud**. Profile, model, interface language and
+the remaining settings are saved locally and restored on the next launch. No
+first-run AI setup window is shown.
 
-Local Ollama is the default AI-cleanup provider. When Ollama is running on its
-standard loopback endpoint, **Settings → Local Ollama model** lists the models
-already installed on this computer. No API key or cloud-consent switch is
-needed for that local path. You can refresh the list in the same dialog or use
-the CLI:
+The interface and in-app Help switch together between Ukrainian, Czech and
+English. When Ollama is running on its standard loopback endpoint,
+**Settings → Local Ollama model** lists the audio-capable models already
+installed on this computer. No API key or cloud-consent switch is needed.
+
+In the default profile, the selected Ollama model performs direct speech
+transcription and automatic local cleanup. The immutable STT result remains in
+`raw_text`; cleanup changes only `corrected_text`. A cleanup failure is shown to
+the user and does not discard the saved transcript. Ollama input is bounded to
+30 minutes per transcription; use the Local Whisper profile for longer media.
+
+Explicit cleanup remains available from the CLI:
 
 ```bash
 voice-studio cleanup TRANSCRIPT_ID --provider ollama --model MODEL_NAME

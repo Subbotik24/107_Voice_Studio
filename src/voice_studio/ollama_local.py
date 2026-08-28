@@ -10,6 +10,10 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 MAX_OLLAMA_RESPONSE_BYTES = 16 * 1024**2
 MAX_OLLAMA_ERROR_BYTES = 4 * 1024
 MAX_OLLAMA_WAV_BYTES = 64 * 1024**2
+EMPTY_TRANSCRIPTION_ERROR = (
+    "Ollama returned no transcript. Try recognition language 'auto', verify that the "
+    "selected model supports the spoken language, or choose Local Whisper."
+)
 
 
 class OllamaClient:
@@ -110,13 +114,13 @@ class OllamaClient:
         )
         choices = result.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
-            raise RuntimeError("Ollama returned an empty transcription")
+            raise RuntimeError(EMPTY_TRANSCRIPTION_ERROR)
         message = choices[0].get("message")
         if not isinstance(message, dict):
-            raise RuntimeError("Ollama returned an empty transcription")
+            raise RuntimeError(EMPTY_TRANSCRIPTION_ERROR)
         content = message.get("content")
         if not isinstance(content, str) or not content.strip():
-            raise RuntimeError("Ollama returned an empty transcription")
+            raise RuntimeError(EMPTY_TRANSCRIPTION_ERROR)
         return content.strip()
 
     def chat(self, **payload: object) -> dict[str, Any]:

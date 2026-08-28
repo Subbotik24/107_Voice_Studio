@@ -17,7 +17,7 @@
 - `raw_text` and raw segment text are immutable after recognition.
 - New engines implement `SpeechEngine` and return `EngineResult`.
 - Existing settings without `profile` retain their selected engine through legacy classification.
-- Hermes must not appear in product code, UI, Help, metadata, or release artifacts.
+- Retired product identifiers must not appear in code, UI, Help, metadata, or release artifacts.
 
 ---
 
@@ -311,7 +311,7 @@ Commit: `git commit -m "feat(ui): add reusable engine profile cards"`
 - [ ] **Step 1: Add failing checks for default CLI/settings identity**
 
 Assert clean settings JSON reports `profile=ollama-local`, `engine=ollama`, and
-no Hermes identifier. Assert diagnostics checks Ollama only for the active
+no retired product identifier. Assert diagnostics checks Ollama only for the active
 Ollama profile and managed Whisper only for the Whisper profile.
 
 - [ ] **Step 2: Run focused tests and confirm RED**

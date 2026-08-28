@@ -105,12 +105,6 @@ _CATALOGS: dict[str, dict[str, str]] = {
             "Файл налаштувань пошкоджений. Використано безпечні значення "
             "за замовчуванням.\n\n{error}"
         ),
-        "first_run_title": "Початкове налаштування local AI",
-        "first_run_prompt": (
-            "Local — Tiny рекомендовано для першого запуску.\n\nВиберіть «Так», "
-            "щоб відкрити Моделі й явно підтвердити встановлення. Small доступна "
-            "як профіль кращої якості; модель також можна імпортувати offline."
-        ),
         "models_title": "Локальні моделі faster-whisper",
         "import_local": "Імпортувати локальну",
         "download": "Завантажити",
@@ -162,6 +156,9 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_preview": "До:\n{before}\n\nПісля:\n{after}\n\nЗастосувати це AI-редагування?",
         "cleanup_stale": "AI-редагування застаріло — правки не застосовано",
         "cleanup_applied": "AI-редагування застосовано; оригінальний текст не змінено",
+        "cleanup_automatic_failed": "Транскрипт збережено без автоматичного AI-виправлення",
+        "cleanup_automatic_failed_title": "Автоматичне AI-виправлення не виконано",
+        "cleanup_automatic_failed_message": "Транскрипт і оригінальний текст безпечно збережено. Ollama не змогла виконати автоматичне виправлення.\n\n{error}",
         "cleanup_not_applied": "Пропозицію AI-редагування не застосовано",
         "cleanup_error": "Помилка AI-редагування",
         "recording_corrupt_title": "Пошкоджений запис",
@@ -226,7 +223,7 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "settings": "Nastavení",
         "help": "Nápověda",
         "help_title": "Nápověda VOICE Studio",
-        "help_intro": "Uživatelská příručka 0.3.0 Test RC; obsah příručky je v ukrajinštině.",
+        "help_intro": "Uživatelská příručka 0.3.0 Test RC — přímo z kanonických docs/help.",
         "help_search": "Hledat v nápovědě",
         "help_search_action": "Hledat",
         "help_no_results": "Nic nebylo nalezeno.",
@@ -316,12 +313,6 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "settings_file_error": (
             "Soubor nastavení je poškozen. Byly použity bezpečné výchozí hodnoty.\n\n{error}"
         ),
-        "first_run_title": "Počáteční nastavení lokální AI",
-        "first_run_prompt": (
-            "Pro první spuštění doporučujeme lokální model Tiny.\n\nZvolte Ano, "
-            "chcete-li otevřít Modely a instalaci výslovně potvrdit. Small je "
-            "dostupný jako kvalitnější profil; model lze také importovat offline."
-        ),
         "models_title": "Lokální modely faster-whisper",
         "import_local": "Importovat lokálně",
         "download": "Stáhnout",
@@ -373,6 +364,9 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_preview": "Před:\n{before}\n\nPo:\n{after}\n\nPoužít tuto AI úpravu?",
         "cleanup_stale": "AI úprava je zastaralá — změny nebyly použity",
         "cleanup_applied": "AI úprava použita; původní text se nezměnil",
+        "cleanup_automatic_failed": "Přepis byl uložen bez automatické AI úpravy",
+        "cleanup_automatic_failed_title": "Automatická AI úprava se nezdařila",
+        "cleanup_automatic_failed_message": "Přepis a původní text byly bezpečně uloženy. Ollama nemohla provést automatickou úpravu.\n\n{error}",
         "cleanup_not_applied": "Návrh AI úpravy nebyl použit",
         "cleanup_error": "Chyba AI úpravy",
         "recording_corrupt_title": "Poškozená nahrávka",
@@ -437,7 +431,7 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "settings": "Settings",
         "help": "Help",
         "help_title": "VOICE Studio Help",
-        "help_intro": "VOICE Studio 0.3.0 Test RC user guide; manual content is in Ukrainian.",
+        "help_intro": "VOICE Studio 0.3.0 Test RC user guide — rendered from canonical docs/help.",
         "help_search": "Search Help",
         "help_search_action": "Search",
         "help_no_results": "No results found.",
@@ -525,12 +519,6 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "restore": "Restore…",
         "include_audio": "Include managed audio copies",
         "settings_file_error": "The settings file is damaged. Safe defaults were used.\n\n{error}",
-        "first_run_title": "Initial local AI setup",
-        "first_run_prompt": (
-            "Local Tiny is recommended for the first launch.\n\nChoose Yes to open "
-            "Models and explicitly confirm installation. Small is available as a "
-            "higher-quality profile; you can also import a model offline."
-        ),
         "models_title": "Local faster-whisper models",
         "import_local": "Import local",
         "download": "Download",
@@ -582,6 +570,9 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_preview": "Before:\n{before}\n\nAfter:\n{after}\n\nApply this AI cleanup?",
         "cleanup_stale": "AI cleanup is stale — edits were not applied",
         "cleanup_applied": "AI cleanup applied; original text was not changed",
+        "cleanup_automatic_failed": "Transcript saved without automatic AI cleanup",
+        "cleanup_automatic_failed_title": "Automatic AI cleanup failed",
+        "cleanup_automatic_failed_message": "The transcript and original text were saved safely. Ollama could not complete automatic cleanup.\n\n{error}",
         "cleanup_not_applied": "AI cleanup proposal was not applied",
         "cleanup_error": "AI cleanup error",
         "recording_corrupt_title": "Damaged recording",

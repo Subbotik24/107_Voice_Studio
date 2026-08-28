@@ -31,6 +31,8 @@ from voice_studio.app import (
     VOICE_STUDIO_THEME,
     StudioLayout,
     VoiceStudioApp,
+    initial_window_size,
+    studio_content_metrics,
     studio_icon_pixel,
     studio_layout_for_width,
 )
@@ -41,9 +43,20 @@ from voice_studio.app import (
 def test_studio_layout_matches_the_approved_sidebar_breakpoint() -> None:
     assert studio_layout_for_width(1320) == StudioLayout(250, False, True)
     assert studio_layout_for_width(1200) == StudioLayout(250, False, True)
-    assert studio_layout_for_width(1199) == StudioLayout(250, False, False)
-    assert studio_layout_for_width(1040) == StudioLayout(250, False, False)
-    assert studio_layout_for_width(1039) == StudioLayout(88, True, False)
+    assert studio_layout_for_width(1040) == StudioLayout(250, False, True)
+    assert studio_layout_for_width(1039) == StudioLayout(250, False, False)
+    assert studio_layout_for_width(900) == StudioLayout(250, False, False)
+    assert studio_layout_for_width(759) == StudioLayout(88, True, False)
+
+
+def test_initial_window_fits_the_current_screen_without_narrowing_the_sidebar() -> None:
+    assert initial_window_size(1073, 852) == (1057, 820)
+    assert initial_window_size(1920, 1080) == (1320, 820)
+
+
+def test_reference_width_uses_compact_content_spacing_not_a_narrow_menu() -> None:
+    assert studio_content_metrics(1057) == ((16, 18, 16, 20), 12, 340)
+    assert studio_content_metrics(1320) == ((28, 22, 28, 24), 18, 560)
 
 
 def test_voice_studio_theme_matches_approved_cream_reference() -> None:
@@ -62,6 +75,19 @@ def test_configured_theme_consumes_the_approved_theme_contract() -> None:
     assert "VOICE_STUDIO_THEME" in source
     assert 'background="#172641"' not in source
     assert 'background="#315eae"' not in source
+    assert 'foreground=[("readonly", theme.ink)' in source
+
+
+def test_reference_layout_uses_the_narrow_readiness_panel() -> None:
+    source = inspect.getsource(VoiceStudioApp._build_ui)
+
+    assert "width=214" in source
+
+
+def test_toolbar_uses_compact_reference_actions_to_avoid_label_clipping() -> None:
+    source = inspect.getsource(VoiceStudioApp._build_ui)
+
+    assert source.count('style="CompactAction.TButton"') == 3
 
 
 def test_brand_mark_uses_the_approved_rounded_vo_canvas() -> None:

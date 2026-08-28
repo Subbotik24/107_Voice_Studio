@@ -23,7 +23,7 @@ This is a privacy-first desktop transcription application. Treat this file and
 - `src/voice_studio/`: Tk GUI, CLI, local SQLite storage, exports,
   settings and STT engine adapters.
 - `src/voice_studio/` is the standalone product runtime.
-- `faster-whisper` is the default local engine.
+- Ollama is the default local audio/cleanup engine; `faster-whisper` is an optional profile.
 - `openai-cloud` is explicit opt-in only; it is never a fallback from local.
 - `raw_text` is immutable STT output. Users and AI cleanup may change only
   `corrected_text` and segment `corrected_text`.
@@ -44,27 +44,29 @@ This is a privacy-first desktop transcription application. Treat this file and
 
 ## Current verified state
 
-The source quality gate passed locally on 2026-08-08: compilation, Ruff,
-`95 passed, 5 subtests passed`, wheel build, `pip check` and `pip-audit`.
-No live OpenAI key, real cloud request, Windows physical-device run, or unsigned
-Test RC artifact build was performed in this checkout. Do not represent those as
-verified.
+The final Windows gate passed locally on 2026-08-28 with locked CPython 3.12.10:
+compilation, Ruff, Help validation, 362 tests, dependency checks, wheel/frozen
+payload assertions, the PyInstaller runtime probe and packaged GUI startup. The
+final unsigned EXE completed a real local `gemma4:12b` synthetic-audio workflow.
+See `VERIFICATION.md` for exact artifact hashes and unverified limits.
 
 ## Highest-priority next work
 
-1. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
-   `RELEASE_ACCEPTANCE.md`; capture evidence without private data.
+1. Run the remaining clean-machine Windows, physical microphone/hotkey and
+   macOS Apple Silicon acceptance checklist in `RELEASE_ACCEPTANCE.md`; capture
+   evidence without private data.
 2. Create Tiny/Small `models-v1` release assets with
    `scripts/build_model_release.py`, including upstream revision, inventory,
    license/model card and SHA256SUMS. Never add those archives to Git.
-3. Build unsigned Test RC artifacts only after acceptance is green. Do not tag
-   or publish a release until checksums and release manifest exist.
+3. Sign and clean-machine-test a release candidate before tagging or publishing
+   it as a production release.
 
 ## Windows source launch
 
-Install Python 3.11/3.12 and run `run_windows.bat`. On first launch, explicitly
-install/import a local model (Tiny is the starter profile). FFmpeg is recommended
-for all supported media formats. See `README.md` for commands.
+Install Python 3.11/3.12 and run `run_windows.bat`. Start Ollama and select an
+installed audio-capable model in Settings; no setup popup is shown. The optional
+Whisper profile manages its models separately. FFmpeg is recommended for all
+supported media formats. See `README.md` for commands.
 
 ## Change discipline
 

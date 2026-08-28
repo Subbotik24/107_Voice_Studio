@@ -1,6 +1,49 @@
 from voice_studio import cli
+from voice_studio.models import Settings
 
 main = cli.main
+
+
+def test_transcribe_cli_selects_local_ollama_profile(monkeypatch):
+    monkeypatch.setattr(cli, "load_settings", Settings)
+    args = cli.build_parser().parse_args(
+        [
+            "transcribe",
+            "recording.wav",
+            "--engine",
+            "ollama",
+            "--ollama-model",
+            "gemma4:12b",
+        ]
+    )
+
+    settings = cli._load_effective_settings(args)
+
+    assert settings.profile == "ollama-local"
+    assert settings.engine == "ollama"
+    assert settings.ollama_model == "gemma4:12b"
+    assert settings.cleanup_provider == "ollama"
+    assert settings.automatic_cleanup is True
+    assert settings.offline_only is True
+
+
+def test_transcribe_cli_engine_override_applies_matching_profile(monkeypatch):
+    monkeypatch.setattr(cli, "load_settings", Settings)
+    whisper_args = cli.build_parser().parse_args(
+        ["transcribe", "recording.wav", "--engine", "faster-whisper", "--model", "tiny"]
+    )
+    cloud_args = cli.build_parser().parse_args(
+        ["transcribe", "recording.wav", "--engine", "openai-cloud"]
+    )
+
+    whisper = cli._load_effective_settings(whisper_args)
+    cloud = cli._load_effective_settings(cloud_args)
+
+    assert whisper.profile == "whisper-local"
+    assert whisper.model == "tiny"
+    assert whisper.automatic_cleanup is False
+    assert cloud.profile == "openai-cloud"
+    assert cloud.offline_only is False
 
 
 def test_validate_cli(tmp_path, capsys, make_wav):

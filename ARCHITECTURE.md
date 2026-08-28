@@ -2,8 +2,8 @@
 
 ## 1. Межа системи
 
-`VOICE Studio` — одна desktop‑програма з local-first STT та одним
-явно opt-in cloud adapter.
+`VOICE Studio` — самостійна desktop‑програма з Ollama-first локальним STT,
+альтернативним локальним Whisper та одним явно opt-in cloud adapter.
 
 ```text
 Microphone / media file
@@ -11,15 +11,18 @@ Microphone / media file
         ▼
 TranscriptionService
         │
-        ├── EngineManager ── faster-whisper (default, local)
+        ├── EngineManager ── Ollama audio (default, loopback only)
+        │                 ├─ faster-whisper (optional local profile)
         │                 └─ openai-cloud (explicit consent only)
         │
         ├── TerminologyDictionary
+        ├── Ollama cleanup (default profile, corrected_text only)
         ├── LocalStore / SQLite
         └── TXT / MD / JSON / SRT / VTT
 ```
 
-UI та storage не залежать від внутрішньої архітектури моделі. Обидва движки повертають один `EngineResult`.
+UI та storage не залежать від внутрішньої архітектури моделі. Усі движки
+повертають один `EngineResult`.
 
 ## 2. Пакети
 
@@ -50,8 +53,17 @@ transcribe(source: Path, language: str | None) -> EngineResult
 - engine‑specific metadata.
 
 `corrected_text` не є raw output моделлю. Це окремий редагований шар програми.
-OpenAI AI cleanup може запропонувати правки лише після explicit user action;
-він не змінює `raw_text` і не надсилає його в cloud.
+У типовому профілі Ollama автоматично пропонує локальні правки після збереження
+STT-результату. Вони застосовуються лише до `corrected_text`; `raw_text`
+залишається незмінним навіть у разі помилки або скасування cleanup. OpenAI AI
+cleanup доступний лише як explicit cloud action.
+
+Ollama audio adapter працює тільки зі стандартним loopback runtime, попередньо
+перевіряє capability `audio` і не має прихованого fallback. Оскільки Ollama не
+повертає надійні часові межі, такий transcript має один untimed segment;
+для SRT/VTT із точними сегментами слід вибрати профіль faster-whisper.
+PCM-конвертація для Ollama має окремий incremental bound 30 хвилин, тому не
+накопичує довільно великий WAV; довші записи обробляє профіль faster-whisper.
 
 ## 3.1 Cloud boundary
 

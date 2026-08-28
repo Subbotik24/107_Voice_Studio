@@ -10,8 +10,8 @@ local Ollama model as the default speech and text-processing engine, offer
 small reusable profiles for alternative engines, and render the complete Help
 in the selected Ukrainian, Czech, or English interface language.
 
-VOICE Studio remains a standalone local/private product. Hermes is not part of
-the product. No telemetry, background cloud fallback, automatic model download,
+VOICE Studio remains a standalone local/private product with no external
+product identity. No telemetry, background cloud fallback, automatic model download,
 or deletion of user originals is introduced.
 
 ## Confirmed current behavior and root causes
@@ -213,7 +213,7 @@ docs/help/
 - Verify on the final EXE: no startup popup; Local Ollama is the clean-profile
   default; the stored Ollama model survives a second launch; each interface
   language opens Help entirely in that language; Whisper and OpenAI are
-  selectable profiles; no Hermes references exist.
+  selectable profiles; no retired product identifiers exist.
 
 Definition of done:
 
