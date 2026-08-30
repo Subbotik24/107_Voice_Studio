@@ -40,7 +40,7 @@ release evidence remains in `VERIFICATION.md`.
 Focused command:
 
 ```powershell
-$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest -q tests/test_config_app.py tests/test_faster_whisper_app.py tests/test_hardware_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_runtime_boundaries_app.py tests/test_i18n_app.py
+$env:PYTHONPATH='src'; .\.venv\Scripts\python.exe -m pytest -q tests/test_config_app.py tests/test_faster_whisper_app.py tests/test_hardware_app.py tests/test_jobs_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_runtime_boundaries_app.py tests/test_i18n_app.py
 ```
 
 Final source gate (run once after the final production-code change):
