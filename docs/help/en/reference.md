@@ -69,6 +69,19 @@ blocked item has `id`, `path`, and `reason`), `staging_removed`,
 Normal `models` commands report a non-trivial recovery result on stderr with
 the `model-catalog:` prefix; healthy, unchanged catalogs stay quiet.
 
+## Backup and local state
+
+Restore replaces the backed-up transcripts, settings, and saved sources. The
+current machine's local `models/` and `exports/` trees are preserved unchanged;
+they deliberately remain **outside the archive** and are never added to a
+`.voice-backup`.
+
+Before changing the live root, the program validates those trees without
+following links. A symlink, junction, or other Windows reparse point (as well
+as another unsafe special entry) aborts restore **before** the live root is
+changed. The user receives a concrete error such as `local restore state
+contains an unsafe path: <path>`; current data remains in place.
+
 ## Privacy
 
 - Ollama uses the fixed loopback endpoint `127.0.0.1:11434`.

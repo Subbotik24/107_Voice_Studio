@@ -3,6 +3,30 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-C1 restore preserves machine-local state — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, base code commit
+`dba3407`. The restore implementation preserves the current machine's
+`models/` and `exports/` trees in restore staging before the first live-root
+rename. The archive boundary remains unchanged: those trees are not archive
+members. Unsafe links, Windows junctions/reparse points and special entries are
+rejected with a concrete `local restore state contains an unsafe path: ...`
+error before the live root changes.
+
+| Check | Result |
+| --- | --- |
+| `$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_backup_app.py -k "local_restore or preserves_local or interrupted_swap or interrupted_local or free_space"` | PASS, 10 passed, 2 skipped; the skips are symlink-creation privilege boundaries (`WinError 1314`), while junction/reparse regressions ran |
+| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compile, Ruff, Help validation (13 Markdown files), 435 tests passed / 3 skipped, and CLI version `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w2-c1-wheel` | PASS; `build\\w2-c1-wheel\\voice_studio-0.3.0rc1-py3-none-any.whl`, 687,353 bytes |
+| `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` | PASS; no whitespace errors |
+
+The source tests simulate copy interruption and assert that the live root is
+untouched; they do not constitute a physical power-loss or forced-termination
+acceptance run. Removable-media, antivirus and filesystem-failure races were
+not run. This increment also does not add packaged, signed, clean-machine or
+native macOS/Windows acceptance evidence.
+
 ## W2-C2 model-catalog self-healing — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12. The W2-C2 focused

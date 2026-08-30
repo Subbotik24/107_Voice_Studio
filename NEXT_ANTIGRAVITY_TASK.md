@@ -1,4 +1,41 @@
-# ЗАВДАННЯ ДЛЯ ANTIGRAVITY — COMPLETE
+# ЗАВДАННЯ ДЛЯ ANTIGRAVITY — COMPLETION AUDIT RECORDS
+
+## W2-C1 restore-preserve-local-state — COMPLETE
+
+**TASK_ID:** W2-C1-restore-preserve-local-state
+**СТАТУС:** `COMPLETE` — цей запис закриває лише W2-C1; ширший R0, native,
+пакетований, підписаний і clean-machine acceptance залишаються відкритими.
+**ГІЛКА РОБОТИ:** `main`. Нових гілок **не створювати** — уся розробка й пуші
+йдуть безпосередньо в `main`.
+**BASELINE:** `dba3407` (`main`) — останній кодовий commit Task 2 W2-C1.
+**Останній перевірений зелений стан:** Windows x64 з CPython 3.12 у `.venv`:
+quality gate — `435 passed`, `3 skipped` (symlink privilege), Ruff, Help
+validation, wheel і `pip check` — PASS; точні команди й обмеження наведені у
+`VERIFICATION.md`. Completion commit має повідомлення
+`docs: record restore local-state verification`.
+**Джерело завдання:** `docs/superpowers/plans/2026-08-30-restore-preserve-local-state.md`,
+Task 3; поведінка визначена R0.2 у
+`docs/superpowers/specs/2026-08-30-voice-studio-r0-completion-design.md`.
+
+### W2-C1 acceptance summary
+
+- Restore replaces archived transcripts, settings and saved sources, while the
+  current machine's `models/` and `exports/` remain outside the archive and are
+  preserved through the staged swap.
+- Unsafe links, junctions/reparse points and special entries abort with the
+  concrete `local restore state contains an unsafe path: ...` error before the
+  live root changes.
+- Headless interruption and archive-boundary regressions are covered; real
+  power loss, forced termination, removable-media, antivirus and clean-machine
+  acceptance were not run and are not claimed here.
+
+The complete W2-C1 implementation history remains in
+`.superpowers/sdd/2026-08-30-restore-preserve-local-state/`; the previously
+completed W2-C2 acceptance criteria and evidence are retained below unchanged.
+
+---
+
+## Previously completed W2-C2 model-catalog self-healing record
 
 **TASK_ID:** W2-C2-model-catalog-self-healing
 **СТАТУС:** `COMPLETE` — цей запис закриває лише W2-C2, а не всі R0 або продуктову

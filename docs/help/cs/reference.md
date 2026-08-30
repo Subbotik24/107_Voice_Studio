@@ -67,5 +67,17 @@ blokovaná položka má `id`, `path` a `reason`), `staging_removed`,
 Při selhání přidá také `error`. Běžné příkazy `models` oznámí netriviální výsledek na
 stderr s prefixem `model-catalog:`; zdravý nezměněný katalog zůstane tichý.
 
+## Záloha a místní stav
+
+Obnova nahradí ze zálohy přepisy, nastavení a uložené zdroje. Aktuální místní
+stromy tohoto počítače `models/` a `exports/` zůstanou beze změny; záměrně jsou
+**mimo archiv** a do `.voice-backup` se nikdy nepřidávají.
+
+Před změnou živého kořene program zkontroluje tyto stromy bez následování
+odkazů. Symlink, junction nebo jiný Windows reparse point (stejně jako jiný
+nebezpečný speciální prvek) obnovu přeruší **před** změnou živého kořene.
+Zobrazí se konkrétní chyba, například `local restore state contains an unsafe
+path: <path>`; současná data zůstanou na místě.
+
 Ollama používá jen `127.0.0.1:11434`; cloud není fallback; `raw_text` je
 neměnný; API keys nejsou v nastavení, metadata, záloze ani diagnostice.
