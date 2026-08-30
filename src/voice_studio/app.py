@@ -1323,6 +1323,23 @@ class VoiceStudioApp(tk.Tk):
                 return True
         return False
 
+    @staticmethod
+    def _is_unresolved_writer_timeout(error: BaseException | None) -> bool:
+        return (
+            isinstance(error, TimeoutError)
+            and str(error) == "audio recorder writer did not stop within 2.0 seconds"
+        )
+
+    def _retain_unresolved_recorder_path(self, path: str | Path | None) -> Path | None:
+        safe_path = self._safe_recording_path(path)
+        if safe_path is None:
+            return None
+        pending = self.__dict__.setdefault("_pending_microphone_files", set())
+        ambiguous = self.__dict__.setdefault("_ambiguous_microphone_files", set())
+        pending.add(safe_path)
+        ambiguous.add(safe_path)
+        return safe_path
+
     def _register_recorder_residues(self, error: BaseException | None = None) -> None:
         owners = [error, getattr(error, "cleanup_error", None), self.recorder]
         raw_paths: list[Path] = []
@@ -1657,8 +1674,12 @@ class VoiceStudioApp(tk.Tk):
             self._continuous_recording = False
             self.continuous_record_button.configure(text=self._t("continuous_record"))
             self._active_recording_path = None
+            writer_timeout = self._is_unresolved_writer_timeout(exc)
+            if writer_timeout:
+                self._retain_unresolved_recorder_path(active_path)
             self._register_recorder_residues(exc)
-            self._cleanup_temp(active_path)
+            if not writer_timeout:
+                self._cleanup_temp(active_path)
             self._report_recorder_error(exc, register_residues=False)
             return
 
@@ -3082,14 +3103,25 @@ class VoiceStudioApp(tk.Tk):
             return
         if self.hotkey:
             self.hotkey.stop()
+        writer_timeout_path: Path | None = None
         try:
             self.recorder.cancel()
         except Exception as exc:
+            if self._is_unresolved_writer_timeout(exc):
+                writer_timeout_path = self._retain_unresolved_recorder_path(
+                    self._active_recording_path
+                    or getattr(self.recorder, "destination", None)
+                )
             self._report_recorder_error(exc)
         self._active_recording_path = None
         self._cancel_event.set()
         self.job_controller.close()
         for path in list(self.__dict__.get("_pending_microphone_files", set())):
+            if (
+                writer_timeout_path is not None
+                and self._safe_recording_path(path) == writer_timeout_path
+            ):
+                continue
             self._cleanup_temp(path)
         self._report_recording_residues()
         self.destroy()

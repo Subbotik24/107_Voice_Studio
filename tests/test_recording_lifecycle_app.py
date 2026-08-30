@@ -305,6 +305,64 @@ def test_structured_ambiguous_residue_is_preserved_and_reported(
     assert errors and "збереж" in str(errors[0]).lower()
 
 
+def test_record_stop_writer_timeout_retains_active_recording_for_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    recorder.stop_error = TimeoutError(
+        "audio recorder writer did not stop within 2.0 seconds"
+    )
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app._record_stop(force=True)
+
+    assert path.exists()
+    assert path in app._pending_microphone_files
+    assert path in app._ambiguous_microphone_files
+    assert app._active_recording_path is None
+    assert errors and path.name in errors[0][1]
+    assert "audio recorder writer did not stop" in errors[0][1]
+
+
+def test_close_writer_timeout_retains_writer_owned_file_but_cleans_other_temps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    unrelated = root / "unrelated.wav"
+    unrelated.write_bytes(b"temp")
+    app._pending_microphone_files.add(unrelated)
+    recorder.cancel_error = TimeoutError(
+        "audio recorder writer did not stop within 2.0 seconds"
+    )
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app._close()
+
+    assert path.exists()
+    assert path in app._pending_microphone_files
+    assert path in app._ambiguous_microphone_files
+    assert not unrelated.exists()
+    assert app.destroyed is True
+    assert errors and path.name in errors[0][1]
+    assert "audio recorder writer did not stop" in errors[0][1]
+
+
 def test_duration_limit_stops_only_current_recording_and_reports_two_hours(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
