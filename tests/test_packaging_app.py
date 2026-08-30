@@ -21,6 +21,7 @@ def test_desktop_profile_collects_runtime_and_excludes_dev_modules() -> None:
     assert 'collect_submodules("faster_whisper")' in spec
     assert 'collect_data_files("faster_whisper")' in spec
     assert 'collect_submodules("openai")' in spec
+    assert 'collect_submodules("cryptography")' in spec
     for module in ("pytest", "pygments"):
         assert f'"{module}"' in spec
     assert "runtime_hooks=[]" in spec

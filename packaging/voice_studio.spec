@@ -7,7 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 project_root = Path(SPECPATH).parent
 sys.path.insert(0, str(project_root / "src"))
-hiddenimports = collect_submodules("faster_whisper") + collect_submodules("openai") + [
+hiddenimports = collect_submodules("faster_whisper") + collect_submodules("openai") + collect_submodules("cryptography") + [
     "av",
     "ctranslate2",
     "pynput",

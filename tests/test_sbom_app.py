@@ -226,8 +226,9 @@ def test_cli_rejects_bare_carriage_return_without_replacing_output(tmp_path):
     assert output.read_bytes() == b"keep me\n"
 
 
-def test_repository_lock_contains_exact_58_components():
+def test_repository_lock_contains_exact_59_components():
     lock_path = Path(__file__).parents[1] / "requirements-windows.lock"
     components = parse_locked_components(lock_path.read_text(encoding="utf-8"))
-    assert len(components) == 58
+    assert len(components) == 59
     assert any(item.name == "faster-whisper" and item.version == "1.2.1" for item in components)
+    assert any(item.name == "cryptography" and item.version == "50.0.1" for item in components)

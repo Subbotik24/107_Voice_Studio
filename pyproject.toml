@@ -22,6 +22,7 @@ classifiers = [
 ]
 dependencies = [
   "av>=14,<19",
+  "cryptography>=50,<51",
   "faster-whisper>=1.1,<2",
   "numpy>=1.26,<3",
   "platformdirs>=4.2,<5",
