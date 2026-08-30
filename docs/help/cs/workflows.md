@@ -41,6 +41,9 @@ bezpečné záznam odmítnout a zopakovat.
 
 **Originál** je pouze ke čtení. SRT/VTT z profilu Ollama mají jeden úsek přes
 celou délku; pro přesné segmenty použijte **Lokální Whisper**.
+Po uložení ruční úpravy používají TXT/MD a SRT/VTT stejný opravený text. Úprava
+přes hranice časovaných segmentů je sloučí do jejich existujícího vnějšího
+intervalu; aplikace žádný časový kód nevytváří, nedělí ani neposouvá.
 
 ## Ruční AI oprava
 

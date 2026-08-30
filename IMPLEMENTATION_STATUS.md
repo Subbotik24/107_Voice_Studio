@@ -36,6 +36,8 @@ in the supported flow.
 | W2-S1 coordinated worker shutdown (app/recorder/hotkey/maintenance thread half, 2026-08-30) | PASS source/headless | GUI worker registry, one-budget bounded joins, late-event gating, recorder residue retention, bounded hotkey stop and maintenance refusal are covered by regression tests and a clean-profile source GUI close smoke; native physical and packaged acceptance remain open, so full W2-S1 is still IN PROGRESS |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | R0 W3-H1 hardware settings and advisory detection (2026-08-30) | PASS source/headless + temporary frozen probe | `device`/`compute_type` lexical validation fails at the job boundary before source preparation or worker startup; runtime CTranslate2 preflight selects the runtime device for `auto`, rejects unavailable CUDA and unsupported concrete pairs before WhisperModel load, and reports broken runtime imports concretely; bounded spawn detection returns immutable capabilities with `auto/default` fallback; GUI detection uses the retained worker registry and never mutates saved settings; a fresh console-only PyInstaller probe completed the cold no-parent-preload round-trip, while the normal windowed launcher remains GUI-only |
+| R0 W3-V1 configurable VAD (2026-08-30) | PASS source/headless | enabled remains the migration-compatible default; Settings, GUI and mutually exclusive CLI flags preserve the explicit choice; only Faster Whisper receives `vad_filter`; focused 13 tests and the prior full gate passed |
+| R0 W3-E1 minimal subtitle consistency (2026-08-30) | PASS source/headless | manual saves synchronize the editable segment layer without creating, splitting or moving timestamps; cross-boundary edits merge into existing outer intervals, empty cues disappear while their raw wording is absorbed into an adjacent honest outer interval, one bounded validated undo snapshot is retained, and dictionary correction derives consistently from segment results; focused 21 tests passed and the final compile/Ruff/pytest gate passed 643 tests with 9 Windows symlink-privilege skips |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
 | Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
@@ -77,8 +79,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 - W2-S1 native physical and packaged acceptance (the process/queue and
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);
-- R0 W3-V1 configurable VAD with the current enabled default preserved;
-- R0 W3-E1 minimal subtitle consistency for existing exports;
 - R1-excluded word-level timestamps and the full split/retime subtitle editor;
 - W4 signed/notarized installers and updater (the reproducible SBOM increment is complete; native signing remains open);
 - W5 physical 50-task acceptance per OS;

@@ -8,6 +8,7 @@ from .media import PROBE_TIMEOUT_SECONDS, validate_media_file
 from .models import Segment, Transcript, utc_now
 from .operation import OperationBudget
 from .storage import LocalStore
+from .subtitles import document_text_from_segments
 
 
 class PreparedSource:
@@ -85,7 +86,6 @@ class TranscriptionService:
         budget: OperationBudget | None = None,
     ) -> Transcript:
         raw = result.text
-        corrected = self.dictionary.apply(raw)
         corrected_segments = [
             Segment(
                 start=segment.start,
@@ -97,6 +97,7 @@ class TranscriptionService:
             )
             for segment in result.segments
         ]
+        corrected = document_text_from_segments(corrected_segments)
         transcript = Transcript(
             id=self.store.new_id(),
             created_at=utc_now(),

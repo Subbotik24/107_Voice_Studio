@@ -184,7 +184,9 @@ copying occurs only when the user explicitly enables `auto_copy`. Otherwise,
 placing text in the OS clipboard requires the explicit Copy action. Clipboard
 history, manager processes and OS sync can retain or disclose copied text.
 Unsaved editor changes trigger a Save/Discard/Cancel prompt before history
-navigation or close; Save persists only `corrected_text` and formatting.
+navigation or close. Save keeps TXT/MD and SRT/VTT wording consistent by
+updating the editable segment layer without creating or moving timestamps;
+`raw_text` and the original user file remain unchanged.
 
 Microphone capture is recorder-owned and private under the app cache. It streams
 100 ms blocks through a bounded 64-block queue, stops at two hours, surfaces

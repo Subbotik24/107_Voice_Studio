@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import stat
@@ -12,12 +13,13 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .models import Transcript
+from .models import Segment, Transcript
 from .operation import (
     ManagedTargetAllocationError,
     OperationBudget,
     OwnedPartialCleanupError,
 )
+from .subtitles import document_text_from_segments, sync_segments
 
 IMMUTABLE_TRANSCRIPT_FIELDS = (
     "created_at",
@@ -650,9 +652,141 @@ class LocalStore:
             if row is None:
                 raise KeyError(f"transcript not found: {transcript_id}")
             transcript = Transcript.from_dict(json.loads(row["payload_json"]))
-            transcript.corrected_text = corrected_text
+            text_changed = corrected_text != transcript.corrected_text
+            if text_changed:
+                had_segments = bool(transcript.segments)
+                previous_formatting = transcript.metadata.get("editor_formatting")
+                transcript.metadata = {
+                    **transcript.metadata,
+                    "manual_edit_undo": {
+                        "version": 1,
+                        "corrected_text": transcript.corrected_text,
+                        "segments": [segment.to_dict() for segment in transcript.segments],
+                        "editor_formatting": previous_formatting,
+                    },
+                }
+                transcript.segments = sync_segments(
+                    transcript.corrected_text,
+                    corrected_text,
+                    transcript.segments,
+                )
+                transcript.corrected_text = (
+                    document_text_from_segments(transcript.segments)
+                    if had_segments
+                    else corrected_text
+                )
+            else:
+                transcript.corrected_text = corrected_text
             transcript.metadata = {**transcript.metadata, "editor_formatting": normalized}
             payload = json.dumps(transcript.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            db.execute(
+                """
+                UPDATE transcripts
+                SET created_at = ?, source_sha256 = ?, language = ?, engine = ?, model = ?,
+                    status = ?, payload_json = ?
+                WHERE id = ?
+                """,
+                (
+                    transcript.created_at,
+                    transcript.source_sha256,
+                    transcript.language,
+                    transcript.engine,
+                    transcript.model,
+                    transcript.status,
+                    payload,
+                    transcript.id,
+                ),
+            )
+            return transcript
+
+    def undo_last_manual_edit(self, transcript_id: str) -> Transcript:
+        """Restore the one bounded snapshot created by the latest manual edit."""
+
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT payload_json FROM transcripts WHERE id = ?", (transcript_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"transcript not found: {transcript_id}")
+            transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            snapshot = transcript.metadata.get("manual_edit_undo")
+            if not isinstance(snapshot, dict) or type(snapshot.get("version")) is not int:
+                raise ValueError("there is no manual edit revision to undo")
+            if snapshot["version"] != 1:
+                raise ValueError("there is no manual edit revision to undo")
+            corrected_text = snapshot.get("corrected_text")
+            segment_values = snapshot.get("segments")
+            if not isinstance(corrected_text, str) or not isinstance(segment_values, list):
+                raise ValueError("stored manual edit revision is invalid")
+
+            def numeric(item: object) -> bool:
+                return (
+                    isinstance(item, (int, float))
+                    and not isinstance(item, bool)
+                    and math.isfinite(float(item))
+                )
+
+            restored_segments: list[Segment] = []
+            previous_start = -math.inf
+            for value in segment_values:
+                if not isinstance(value, dict):
+                    raise ValueError("stored manual edit revision is invalid")
+                start = value.get("start")
+                end = value.get("end")
+                text = value.get("text")
+                segment_corrected = value.get("corrected_text")
+                language = value.get("language")
+                confidence = value.get("confidence")
+                if (
+                    not numeric(start)
+                    or not numeric(end)
+                    or float(start) > float(end)
+                    or float(start) < previous_start
+                    or not isinstance(text, str)
+                    or not (segment_corrected is None or isinstance(segment_corrected, str))
+                    or not (language is None or isinstance(language, str))
+                    or not (confidence is None or numeric(confidence))
+                ):
+                    raise ValueError("stored manual edit revision is invalid")
+                restored_segments.append(Segment.from_dict(value))
+                previous_start = float(start)
+            if restored_segments:
+                raw_join = " ".join(
+                    segment.text.strip()
+                    for segment in restored_segments
+                    if segment.text.strip()
+                )
+                if raw_join != transcript.raw_text:
+                    raise ValueError("stored manual edit revision is invalid")
+                if document_text_from_segments(restored_segments) != corrected_text:
+                    raise ValueError("stored manual edit revision is invalid")
+
+            metadata = dict(transcript.metadata)
+            metadata.pop("manual_edit_undo", None)
+            previous_formatting = snapshot.get("editor_formatting")
+            if previous_formatting is None:
+                metadata.pop("editor_formatting", None)
+            elif isinstance(previous_formatting, dict):
+                allowed_tags = {"bold", "italic"}
+                if any(tag not in allowed_tags for tag in previous_formatting):
+                    raise ValueError("stored manual edit revision is invalid")
+                for ranges in previous_formatting.values():
+                    if not isinstance(ranges, list) or any(
+                        not isinstance(item, list)
+                        or len(item) != 2
+                        or not all(isinstance(position, str) for position in item)
+                        for item in ranges
+                    ):
+                        raise ValueError("stored manual edit revision is invalid")
+                metadata["editor_formatting"] = previous_formatting
+            else:
+                raise ValueError("stored manual edit revision is invalid")
+            transcript.corrected_text = corrected_text
+            transcript.segments = restored_segments
+            transcript.metadata = metadata
+            payload = json.dumps(
+                transcript.to_dict(), ensure_ascii=False, separators=(",", ":")
+            )
             db.execute(
                 """
                 UPDATE transcripts

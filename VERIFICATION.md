@@ -3,6 +3,41 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## R0 W3-E1 minimal subtitle consistency — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.
+This was a source/headless increment; no packaged GUI, physical microphone or
+native release acceptance is inferred from it.
+
+K3 stopped at the turn step limit after leaving the implementation uncommitted.
+The mandatory baseline exposed the unfinished boundary as 10 W3-E1 failures
+with 626 passed and 9 Windows symlink-privilege skips. The controller completed
+the storage integration, bounded manual-edit undo, segment-derived dictionary
+correction and export consistency, then independently reviewed and corrected
+confidence loss, independent-edit over-merging, ambiguous boundary insertion,
+raw-segment loss after cue deletion and malformed undo acceptance.
+
+| Check | Result |
+| --- | --- |
+| Initial incomplete-state full pytest | expected RED; 10 failed, 626 passed, 9 skipped |
+| Confidence preservation regression | expected RED; 1 failed before the fix |
+| Independent review regressions | expected RED; 5 failed before the first review fixes, then 2 focused failures before the final fixes |
+| `pytest -q tests/test_subtitle_sync_app.py` | PASS; 21 passed |
+| Related storage/service/export/editor/dictionary/backup suites | PASS; 156 passed, 6 Windows symlink-privilege skips |
+| `python -m compileall -q src tests scripts packaging` | PASS |
+| `python -m ruff check src tests scripts packaging` | PASS |
+| `pytest -q` | PASS; 643 passed, 9 Windows symlink-privilege skips in 47.91 s |
+| `python scripts/check_help.py` | PASS; 13 Markdown files |
+| `git diff --check` before commit | PASS; no whitespace errors |
+| Independent read-only code review | PASS; no remaining Critical or Important findings |
+
+Acceptance covers inside-segment and independent adjacent edits, deterministic
+boundary insertion, cross-boundary and low-similarity replace-all merges,
+single/all deletion, document-only transcripts, validated one-level undo,
+backup round-trip, dictionary consistency and TXT/MD/SRT/VTT wording. All cue
+endpoints come from existing segments; top-level `raw_text` remains immutable.
+Full split/retime and word timestamps remain R1.
+
 ## R0 W3-H1 hardware settings validation and advisory detection — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.

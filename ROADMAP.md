@@ -72,11 +72,18 @@ R1/R2 capabilities are not part of the current completion scope.
      CTranslate2 import, bounded 5 s deadline); normal windowed bundle CLI
      dispatch remains a separate launcher limitation.
 
+10. **Recognition and subtitle controls (W3-V1, W3-E1)**
+   - VAD можна явно ввімкнути або вимкнути; сумісний default лишається enabled;
+   - ручні правки синхронізуються з наявними subtitle intervals без вигаданих
+     timecode; TXT/MD і SRT/VTT використовують один виправлений текстовий шар;
+   - стан: реалізовано й перевірено source/headless; повний split/retime editor
+     та word timestamps лишаються поза R0.
+
 ## P1
 
 - speaker diarization;
 - word timestamps;
-- segment editor із синхронізацією subtitle text;
+- повний segment editor із split/retime і ручною корекцією часових меж;
 - batch transcription;
 - profiles словників за проєктами;
 - автоматичне вставлення в active app після окремого security review;

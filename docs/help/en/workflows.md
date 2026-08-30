@@ -48,6 +48,9 @@ the safe choice is to reject it and record again.
 
 **Original** is read-only. Ollama-profile SRT/VTT contains one segment for the
 whole duration; use **Local Whisper** when accurate timed segments are needed.
+Saving a manual edit keeps TXT/MD and SRT/VTT wording aligned. An edit across
+timed segment boundaries merges those cues into their existing outer interval;
+it never creates, splits, or moves a timecode.
 
 ## Manual AI cleanup
 

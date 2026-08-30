@@ -34,6 +34,7 @@ UI та storage не залежать від внутрішньої архіте
 | `voice_studio.hardware` | Bounded spawn-based local capability detection (advisory only) |
 | `voice_studio.service` | Оркестрація транскрибування |
 | `voice_studio.storage` | SHA‑256, SQLite, retention |
+| `voice_studio.subtitles` | Детермінована синхронізація ручних правок із наявними subtitle intervals без створення часу |
 | `voice_studio.dictionary` | Детерміновані термінологічні заміни |
 | `voice_studio.exporters` | Формати експорту |
 
@@ -95,6 +96,14 @@ SQLite використовує `PRAGMA user_version`. `.voice-backup` міст�
 JSONL records, SHA‑256 inventory та опційні managed copies. Restore зберігає попереднє
 сховище в recovery directory.
 
+Ручне збереження встановлює один редагований текстовий шар для документа й
+субтитрів. Правка всередині сегмента зберігає його interval і metadata; правка
+через межі зливає лише охоплені сусідні сегменти в їхній наявний зовнішній
+`[start, end]`. Порожній редагований сегмент зникає. Нові timecode не
+створюються, а попередній список сегментів зберігається в одному versioned undo
+snapshot. Словник застосовується посегментно, після чого документний
+`corrected_text` виводиться з тих самих результатів.
+
 Підміна сховища під час restore — дві операції rename. Перед першою на диск
 атомарно пишеться restore journal (`.<data_root>.restore-journal.json`) зі
 шляхами, лічильником записів і міткою етапу; секретів і тексту транскриптів він
@@ -107,7 +116,7 @@ JSONL records, SHA‑256 inventory та опційні managed copies. Restore �
 - hard cancellation виконується на process boundary, не всередині model kernels;
 - transcription progress фазовий, без точного відсотка inference;
 - немає diarization;
-- ручна правка суцільного тексту не перерозподіляється автоматично по subtitle segments;
+- немає split/retime редактора subtitle segments або word-level timestamps;
 - немає підписаних native installers;
 - точність розпізнавання не заявляється без закритого benchmark.
 - `device`/`compute_type` спочатку перевіряються за статичним словником, а
