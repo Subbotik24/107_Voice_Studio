@@ -92,3 +92,20 @@ def test_interrupted_restore_outcomes_are_localized_everywhere() -> None:
         assert translate(code, "restore_rolled_back")
         assert translate(code, "restore_staging_discarded")
         assert translate(code, "restore_recovery_failed", error="boom")
+
+
+def test_model_catalog_messages_exist_in_every_locale() -> None:
+    required = {
+        "model_catalog_repaired",
+        "model_catalog_attention",
+        "model_catalog_rebuilt",
+        "model_catalog_repair_failed",
+    }
+    for catalog in _CATALOGS.values():
+        assert required <= set(catalog)
+
+    for language, _label in UI_LANGUAGE_CHOICES:
+        assert translate(language, "model_catalog_repaired", adopted="tiny", dropped="missing")
+        assert translate(language, "model_catalog_attention", details="broken")
+        assert translate(language, "model_catalog_rebuilt", path="catalog.json.corrupt")
+        assert translate(language, "model_catalog_repair_failed", error="disk")

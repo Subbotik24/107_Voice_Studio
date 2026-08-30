@@ -192,6 +192,7 @@ class VoiceStudioApp(tk.Tk):
         self._settings_info_var: tk.StringVar | None = None
         self._build_ui()
         self._report_restore_recovery()
+        self._settle_model_catalog()
         self._refresh_history()
         self.after(100, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -238,6 +239,52 @@ class VoiceStudioApp(tk.Tk):
             return
         values = {"records": result.get("records") or 0} if key == "restore_recovered" else {}
         self.status.set(self._t(key, **values))
+
+    def _settle_model_catalog(self) -> dict[str, Any]:
+        """Reconcile local model state without preventing the GUI from starting."""
+
+        try:
+            result = ModelCatalog(self.store.models).reconcile()
+        except Exception as exc:  # startup must survive any catalog defect
+            result = {"status": "FAIL", "action": "attention", "error": str(exc)}
+
+        status = result.get("status")
+        action = result.get("action", "none")
+        if status == "FAIL":
+            message = self._t(
+                "model_catalog_repair_failed", error=result.get("error", "unknown")
+            )
+            self.status.set(message)
+            self.after(
+                250, lambda: messagebox.showwarning(self._t("models"), message)
+            )
+            return result
+
+        if action == "repaired" or action == "attention":
+            if result.get("catalog_quarantined"):
+                message = self._t(
+                    "model_catalog_rebuilt", path=result["catalog_quarantined"]
+                )
+            elif action == "repaired":
+                message = self._t(
+                    "model_catalog_repaired",
+                    adopted=", ".join(str(item) for item in result.get("adopted") or []),
+                    dropped=", ".join(str(item) for item in result.get("dropped") or []),
+                )
+            else:
+                details = "; ".join(
+                    f"{item.get('id', '?')}: {item.get('reason', 'unknown')}"
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in result.get("blocked") or []
+                ) or "unknown model catalog issue"
+                message = self._t("model_catalog_attention", details=details)
+            self.status.set(message)
+            if action == "attention":
+                self.after(
+                    250, lambda: messagebox.showwarning(self._t("models"), message)
+                )
+        return result
 
     def _install_window_icon(self) -> None:
         icon = tk.PhotoImage(master=self, width=32, height=32)

@@ -23,6 +23,7 @@ covered properly in `tests/test_editor_state_app.py`.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -150,6 +151,52 @@ def test_startup_does_not_schedule_a_first_run_model_prompt() -> None:
     source = inspect.getsource(VoiceStudioApp.__init__)
 
     assert "_first_run_model_prompt" not in source
+
+
+def test_startup_settles_model_catalog_after_restore_report_before_history() -> None:
+    source = inspect.getsource(VoiceStudioApp.__init__)
+    restore = source.index("self._report_restore_recovery()")
+    models = source.index("self._settle_model_catalog()")
+    history = source.index("self._refresh_history()")
+    assert restore < models < history
+    assert "_first_run_model_prompt" not in source
+
+
+def test_model_catalog_repair_reaches_status_line(monkeypatch) -> None:
+    recorded: list[str] = []
+    stub = SimpleNamespace(
+        store=SimpleNamespace(models=Path("models")),
+        status=SimpleNamespace(set=recorded.append),
+        _t=lambda key, **values: f"{key}:{values}",
+        after=lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        app_module.ModelCatalog,
+        "reconcile",
+        lambda _self: {
+            "status": "PASS", "action": "repaired", "adopted": ["tiny"],
+            "dropped": [], "blocked": [], "catalog_quarantined": None,
+        },
+    )
+    result = VoiceStudioApp._settle_model_catalog.__get__(stub)()
+    assert result["action"] == "repaired"
+    assert recorded and recorded[0].startswith("model_catalog_repaired")
+
+
+def test_model_catalog_failure_does_not_abort_startup(monkeypatch) -> None:
+    stub = SimpleNamespace(
+        store=SimpleNamespace(models=Path("models")),
+        status=SimpleNamespace(set=lambda _value: None),
+        _t=lambda key, **values: f"{key}:{values.get('error', '')}",
+        after=lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        app_module.ModelCatalog,
+        "reconcile",
+        lambda _self: (_ for _ in ()).throw(OSError("disk")),
+    )
+    result = VoiceStudioApp._settle_model_catalog.__get__(stub)()
+    assert result == {"status": "FAIL", "action": "attention", "error": "disk"}
 
 
 def test_close_is_blocked_while_backup_or_restore_is_running(monkeypatch) -> None:
