@@ -9,6 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from scripts.generate_sbom import validate_sbom_document
+else:
+    from generate_sbom import validate_sbom_document
+
+_PROJECT_VERSION = "0.3.0rc1"
+
 
 def _hash_file(path: Path) -> tuple[str, int]:
     digest = hashlib.sha256()
@@ -72,6 +79,7 @@ def artifact_info(root: Path, path: Path) -> dict[str, Any]:
 def create_manifest(
     release_directory: Path,
     artifacts: list[Path],
+    sbom: Path,
     *,
     release_label: str,
     acceptance_result: Path,
@@ -81,9 +89,19 @@ def create_manifest(
     acceptance = json.loads(acceptance_result.read_text(encoding="utf-8"))
     if acceptance.get("status") != "PASS" or acceptance.get("tasks", 0) < 50:
         raise ValueError("release manifest requires a passing 50-task acceptance result")
+    sbom_inventory = artifact_info(release_directory, sbom)
+    if sbom_inventory["kind"] != "file":
+        raise ValueError("release manifest SBOM must be a regular file")
+    sbom_document = json.loads(sbom.read_text(encoding="utf-8"))
+    validate_sbom_document(sbom_document)
+    sbom_component = sbom_document["metadata"]["component"]
+    if sbom_component["version"] != _PROJECT_VERSION:
+        raise ValueError(
+            f"release manifest SBOM application version must be {_PROJECT_VERSION}"
+        )
     return {
         "manifest_version": 1,
-        "project_version": "0.3.0rc1",
+        "project_version": _PROJECT_VERSION,
         "release_label": release_label,
         "release_kind": "unsigned-macos-test-rc",
         "created_at": datetime.now(UTC).isoformat(),
@@ -96,6 +114,13 @@ def create_manifest(
         "artifacts": [
             artifact_info(release_directory, artifact) for artifact in artifacts
         ],
+        "sbom": {
+            "format": sbom_document["bomFormat"],
+            "spec_version": sbom_document["specVersion"],
+            "path": sbom_inventory["path"],
+            "sha256": sbom_inventory["sha256"],
+            "size": sbom_inventory["size"],
+        },
         "acceptance": {
             "file": "acceptance-result.json",
             "sha256": acceptance_sha256,
@@ -120,11 +145,13 @@ def main() -> int:
     parser.add_argument("--acceptance-result", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, action="append", required=True)
+    parser.add_argument("--sbom", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     manifest = create_manifest(
         args.release_directory,
         args.artifact,
+        args.sbom,
         release_label=args.release_label,
         acceptance_result=args.acceptance_result,
         repository_root=args.repository_root,
