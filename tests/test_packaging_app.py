@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -79,6 +81,39 @@ def test_test_rc_build_is_atomic_and_refuses_overwrite() -> None:
     assert 'codesign --force --deep --sign - "$FINAL_APP"' in build_script
     assert '"$PYTHON_BIN" -m build' in build_script
     assert '"$PYTHON_BIN" -m pip wheel' not in build_script
+
+
+@pytest.mark.parametrize(
+    "script_name",
+    ["build_windows.ps1", "build_test_rc.sh"],
+)
+def test_release_staging_generates_sbom_from_repository_lock(script_name: str) -> None:
+    build_script = (PROJECT_ROOT / "scripts" / script_name).read_text(
+        encoding="utf-8"
+    )
+
+    assert "scripts/generate_sbom.py" in build_script
+    assert "requirements-windows.lock" in build_script
+    assert "voice-studio" in build_script
+    assert "0.3.0rc1" in build_script
+    assert "voice-studio-sbom.cdx.json" in build_script
+    assert "--project-name" in build_script
+    assert "--project-version" in build_script
+    assert "--output" in build_script
+    assert "pip freeze" not in build_script
+    assert "pip list" not in build_script
+    assert "https://" not in build_script
+    assert "http://" not in build_script
+
+
+def test_windows_release_checksums_the_staged_sbom() -> None:
+    build_script = (PROJECT_ROOT / "scripts" / "build_windows.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "$ChecksumTargets" in build_script
+    assert "$SBOM" in build_script
+    assert "$ChecksumTargets = @($ArchivePath, $RuntimeProbe, $ReadmePath, $SBOM)" in build_script
 
 
 def test_windows_build_is_atomic_and_runtime_verified() -> None:

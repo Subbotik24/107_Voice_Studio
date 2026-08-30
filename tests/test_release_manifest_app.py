@@ -13,6 +13,8 @@ import scripts.create_release_manifest as manifest_module
 from scripts.create_release_manifest import create_manifest
 from scripts.generate_sbom import build_sbom
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def acceptance(path, *, tasks=50):
     path.write_text(
@@ -189,6 +191,16 @@ def test_release_manifest_cli_exposes_required_sbom_option():
 
     assert result.returncode == 0
     assert "--sbom SBOM" in result.stdout
+
+
+def test_macos_staging_passes_sbom_to_manifest_and_checksum() -> None:
+    build_script = (PROJECT_ROOT / "scripts" / "build_test_rc.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--sbom \"$SBOM\"" in build_script
+    assert '"voice-studio-sbom.cdx.json"' in build_script
+    assert '"$PYTHON_BIN" scripts/generate_sbom.py' in build_script
 
 
 def test_release_manifest_hashes_exact_validated_sbom_bytes(tmp_path, monkeypatch):

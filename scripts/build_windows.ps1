@@ -62,6 +62,7 @@ $WorkDirectory = Join-Path $ProjectRoot "build\.windows-work-$Identifier"
 $AppDirectory = Join-Path $StageDirectory "VOICE Studio"
 $Executable = Join-Path $AppDirectory "VOICE Studio.exe"
 $RuntimeProbe = Join-Path $StageDirectory "runtime-probe.json"
+$SBOM = Join-Path $StageDirectory "voice-studio-sbom.cdx.json"
 $SmokeProfile = Join-Path $StageDirectory "smoke-profile"
 $WheelSourceDirectory = Join-Path $StageDirectory ".wheel-source"
 
@@ -69,6 +70,12 @@ New-Item -ItemType Directory -Force -Path $StageDirectory | Out-Null
 New-Item -ItemType Directory -Force -Path $WorkDirectory | Out-Null
 
 try {
+    Invoke-Checked $Python scripts/generate_sbom.py `
+        --lock (Join-Path $ProjectRoot "requirements-windows.lock") `
+        --project-name "voice-studio" `
+        --project-version "0.3.0rc1" `
+        --output $SBOM
+
     & (Join-Path $PSScriptRoot "quality_gate.ps1")
 
     Invoke-Checked $Python -m PyInstaller --noconfirm --clean `
@@ -174,7 +181,7 @@ This artifact must pass a real Windows 10/11 x64 microphone, hotkey and
 50-task acceptance run before it can be called production-ready.
 "@ | Set-Content -Path $ReadmePath -Encoding UTF8
 
-    $ChecksumTargets = @($ArchivePath, $RuntimeProbe, $ReadmePath)
+    $ChecksumTargets = @($ArchivePath, $RuntimeProbe, $ReadmePath, $SBOM)
     $ChecksumTargets += Get-ChildItem -LiteralPath $StageDirectory -Filter "*.whl" |
         Select-Object -ExpandProperty FullName
     $ChecksumLines = foreach ($Target in $ChecksumTargets) {

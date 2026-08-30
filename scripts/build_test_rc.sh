@@ -28,6 +28,7 @@ fi
 
 mkdir -p "$PROJECT_ROOT/dist"
 STAGE_DIRECTORY="$(mktemp -d "$PROJECT_ROOT/dist/.${RELEASE_LABEL}.XXXXXX")"
+SBOM="$STAGE_DIRECTORY/voice-studio-sbom.cdx.json"
 cleanup() {
   rm -rf "$STAGE_DIRECTORY"
 }
@@ -84,11 +85,18 @@ fi
 cp "$ACCEPTANCE_RESULT" "$STAGE_DIRECTORY/acceptance-result.json"
 rm -rf "$STAGE_DIRECTORY/pyinstaller-dist" "$STAGE_DIRECTORY/pyinstaller-work"
 
+"$PYTHON_BIN" scripts/generate_sbom.py \
+  --lock "$PROJECT_ROOT/requirements-windows.lock" \
+  --project-name "voice-studio" \
+  --project-version "0.3.0rc1" \
+  --output "$SBOM"
+
 "$PYTHON_BIN" scripts/create_release_manifest.py \
   --release-directory "$STAGE_DIRECTORY" \
   --release-label "$RELEASE_LABEL" \
   --acceptance-result "$STAGE_DIRECTORY/acceptance-result.json" \
   --repository-root "$PROJECT_ROOT" \
+  --sbom "$SBOM" \
   --artifact "$FINAL_APP" \
   --artifact "$STAGE_DIRECTORY/$DMG_NAME" \
   --artifact "$WHEEL" \
@@ -104,6 +112,7 @@ rm -rf "$STAGE_DIRECTORY/pyinstaller-dist" "$STAGE_DIRECTORY/pyinstaller-work"
     "voice_studio-0.3.0rc1-py3-none-any.whl" \
     "runtime-probe.json" \
     "acceptance-result.json" \
+    "voice-studio-sbom.cdx.json" \
     "release-manifest.json" \
     > SHA256SUMS.txt
 )
