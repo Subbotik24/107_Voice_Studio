@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 import wave
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -40,6 +41,26 @@ class FakeInputStream:
         self.callback(data, len(data), None, status)
 
 
+class FakeWriter:
+    def __init__(self) -> None:
+        self.alive = True
+        self.join_timeouts: list[float | None] = []
+
+    def is_alive(self) -> bool:
+        return self.alive
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(timeout)
+
+
+class FakeWriterStream:
+    def stop(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
 @pytest.fixture
 def fake_sounddevice(monkeypatch: pytest.MonkeyPatch) -> type[FakeInputStream]:
     FakeInputStream.instances.clear()
@@ -58,6 +79,92 @@ def _assert_no_writer_threads() -> None:
         for thread in threading.enumerate()
         if thread.name.startswith("audio-recorder-writer")
     ]
+
+
+def _recorder_with_blocked_writer(tmp_path: Any) -> tuple[AudioRecorder, Path, FakeWriter]:
+    recorder = AudioRecorder()
+    destination = tmp_path / "partial.wav"
+    destination.write_bytes(b"owned partial")
+    identity = recorder._file_identity(destination.stat())
+    writer = FakeWriter()
+    recorder._writer_thread = writer  # type: ignore[assignment]
+    recorder._stream = FakeWriterStream()
+    recorder._destination = destination
+    recorder._recording_directory = tmp_path
+    recorder._destination_owned = True
+    recorder._expected_identity = identity
+    recorder._destination_identity = identity
+    for _ in range(recorder_module.MAX_PENDING_BLOCKS):
+        recorder._frames.put_nowait(object())
+    return recorder, destination, writer
+
+
+def test_recorder_writer_timeout_is_bounded_and_retains_owned_residue(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, destination, writer = _recorder_with_blocked_writer(tmp_path)
+    monkeypatch.setattr(recorder_module, "WRITER_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(recorder, "_drain_queue", lambda: None)
+
+    started = time.monotonic()
+    with pytest.raises(
+        TimeoutError,
+        match="audio recorder writer did not stop within 2.0 seconds",
+    ):
+        recorder.cancel()
+
+    assert time.monotonic() - started < 0.5
+    assert all(timeout is not None and timeout < float("inf") for timeout in writer.join_timeouts)
+    assert recorder._writer_thread is writer
+    assert recorder.destination == destination
+    assert recorder._destination_owned is True
+    assert destination.exists()
+
+
+def test_recorder_writer_timeout_retry_cleans_only_after_writer_stops(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, destination, writer = _recorder_with_blocked_writer(tmp_path)
+    monkeypatch.setattr(recorder_module, "WRITER_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(recorder, "_drain_queue", lambda: None)
+
+    with pytest.raises(TimeoutError):
+        recorder.cancel()
+    assert destination.exists()
+
+    writer.alive = False
+    recorder._writer_done.set()
+    recorder.cancel()
+
+    assert writer.join_timeouts
+    assert recorder._writer_thread is None
+    assert recorder.destination is None
+    assert not destination.exists()
+
+
+def test_recorder_writer_timeout_retry_preserves_foreign_replacement(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder, destination, writer = _recorder_with_blocked_writer(tmp_path)
+    monkeypatch.setattr(recorder_module, "WRITER_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(recorder, "_drain_queue", lambda: None)
+
+    with pytest.raises(TimeoutError):
+        recorder.cancel()
+    foreign = tmp_path / "foreign.wav"
+    foreign.write_bytes(b"foreign replacement")
+    destination.unlink()
+    foreign.replace(destination)
+
+    writer.alive = False
+    recorder._writer_done.set()
+    with pytest.raises(recorder_module.RecorderCleanupError, match="foreign destination") as raised:
+        recorder.cancel()
+
+    assert destination.read_bytes() == b"foreign replacement"
+    assert recorder._writer_thread is None
+    assert recorder.destination is None
+    assert raised.value.residue_paths == (destination,)
 
 
 def test_recorder_streams_fixed_blocks_to_wav(

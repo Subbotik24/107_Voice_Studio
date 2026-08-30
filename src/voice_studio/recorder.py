@@ -5,6 +5,7 @@ import queue
 import stat
 import tempfile
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ MAX_PENDING_BLOCKS = 64
 MAX_RECORDING_SECONDS = 7_200
 MAX_STATUS_CATEGORIES = 32
 MAX_STATUS_LENGTH = 200
+WRITER_STOP_TIMEOUT_SECONDS = 2.0
 
 
 class RecorderCleanupError(RuntimeError):
@@ -354,15 +356,26 @@ class AudioRecorder:
         thread = self._writer_thread
         if thread is None:
             return
+
+        deadline = time.monotonic() + WRITER_STOP_TIMEOUT_SECONDS
         while not self._writer_done.is_set() and thread.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("audio recorder writer did not stop within 2.0 seconds")
             try:
-                self._frames.put(self._sentinel, timeout=0.05)
+                self._frames.put(self._sentinel, timeout=min(0.05, remaining))
                 break
             except queue.Full:
                 continue
-        thread.join()
-        if not self._writer_done.is_set():
-            self._writer_done.set()
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 and thread.is_alive():
+            raise TimeoutError("audio recorder writer did not stop within 2.0 seconds")
+        if remaining > 0:
+            thread.join(timeout=remaining)
+
+        if thread.is_alive() or not self._writer_done.is_set():
+            raise TimeoutError("audio recorder writer did not stop within 2.0 seconds")
         self._writer_thread = None
 
     def _close_stream(self) -> None:
