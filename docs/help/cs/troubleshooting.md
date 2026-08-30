@@ -58,6 +58,10 @@ jsou uvedeny ve vnořených objektech `model_catalog` a `exports`, nic se však
 neopravuje ani nemaže. Export `canonical_stale` je pouze konzervativní kandidát
 a automaticky se nikdy neodstraní.
 
+Tato hranice platí pro samotný `storage audit`. GUI nadále sjednotí katalog
+modelů při spuštění a každý příkaz `models` jej sjednotí před provedením;
+`voice-studio models reconcile` je přímý výslovný příkaz.
+
 Nejprve mimo VOICE Studio ověřte, že spravovaná kopie skutečně chybí. Pokud má
 záznam zůstat v historii bez uchovaného zvuku, výslovně odpojte pouze chybějící
 odkaz:
@@ -68,9 +72,7 @@ voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
 
 Pokud očekávaná cesta nesouhlasí, soubor se znovu objevil nebo cesta není
 bezpečná, příkaz změnu záznamu odmítne. Úspěšná oprava zvuk nemaže ani znovu
-nevytváří, nemění text přepisu ani původní soubor uživatele. Odchylky katalogu
-modelů se podle potřeby opravují samostatně příkazem
-`voice-studio models reconcile`.
+nevytváří, nemění text přepisu ani původní soubor uživatele.
 
 ## Soubor nelze otevřít
 

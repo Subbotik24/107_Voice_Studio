@@ -50,10 +50,11 @@ only its documented formats and up to 25 MB.
 
 ## Model catalog recovery
 
-The model-management commands reconcile the local Faster Whisper catalog before
-they run. This applies to `models list`, `models install`, `models verify`,
-`models remove`, and the explicit recovery command. Reconciliation is local and
-offline; it does not download, update, or delete a model implicitly.
+The GUI reconciles the local Faster Whisper catalog once during startup, and
+model-management commands reconcile it before they run. This applies to
+`models list`, `models install`, `models verify`, `models remove`, and the
+explicit recovery command. Reconciliation is local and offline; it does not
+download, update, or delete a model implicitly.
 
 To inspect or request recovery directly, run:
 
@@ -77,18 +78,22 @@ Run the read-only storage inspection with:
 voice-studio storage audit
 ```
 
-The command never reconciles the model catalog and never changes the database
-or filesystem. Its top-level `status` continues to describe SQLite and managed
-source health. `missing_records` identifies transcript rows with a missing
-managed source. The nested `model_catalog` object reports manifest, missing,
-orphan, blocked, staging, and residue drift. The nested `exports` object lists
-regular `files`, conservative `canonical_stale` candidates, `unmanaged` files,
-and unsafe or non-regular `blocked` entries. Export candidates are a report
-only and are never deleted automatically.
+This audit command never reconciles the model catalog and never changes the live
+data tree. It reads SQLite from a stable temporary database/WAL snapshot outside
+the data tree, removes that temporary snapshot afterwards, and scans managed
+sources, models, and exports without writing to them. Its top-level `status`
+continues to describe SQLite and managed source health. `missing_records`
+identifies transcript rows with a missing managed source. The nested
+`model_catalog` object reports manifest, missing, orphan, blocked, staging, and
+residue drift. The nested `exports` object lists regular `files`, conservative
+`canonical_stale` candidates, `unmanaged` files, and unsafe or non-regular
+`blocked` entries. Export candidates are a report only and are never deleted
+automatically.
 
-Model-catalog changes require the separate explicit `models reconcile` action.
-If a transcript points to a managed source that is proven
-missing, detach only that stale reference with:
+Automatic reconciliation still occurs during GUI startup and before every
+`models` command. `voice-studio models reconcile` is the direct explicit
+command. If a transcript points to a managed source that is proven missing,
+detach only that stale reference with:
 
 ```text
 voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes

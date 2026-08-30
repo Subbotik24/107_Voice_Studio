@@ -60,6 +60,10 @@ in the nested `model_catalog` and `exports` objects but is not repaired or
 deleted. A `canonical_stale` export is only a conservative candidate and is
 never removed automatically.
 
+That boundary applies to `storage audit` itself. The GUI still reconciles the
+model catalog during startup, and every `models` command reconciles it before
+running; `voice-studio models reconcile` is the direct explicit command.
+
 First verify outside VOICE Studio that the managed copy is truly absent. If the
 row should remain in history without retained audio, explicitly detach only the
 missing reference:
@@ -71,8 +75,7 @@ voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
 If the expected path does not match, the file has reappeared, or the path is
 unsafe, the command refuses to change the row. A successful repair does not
 delete or recreate audio and does not alter transcript text or the user's
-original file. Model drift is repaired separately, when appropriate, with
-`voice-studio models reconcile`.
+original file.
 
 ## The media file cannot be opened
 

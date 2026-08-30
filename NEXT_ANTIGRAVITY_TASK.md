@@ -8,26 +8,29 @@ W2-C3, але не ширший R0, native, packaged, clean-machine, signed аб
 acceptance.
 **ГІЛКА РОБОТИ:** локальна `main`; нових гілок або worktree не створено, push не
 виконувався.
-**BASELINE:** `82364f0` (`main`) — останній кодовий commit W2-C3 перед
-документуванням.
+**PRODUCTION HEAD:** `b7ba7fd` (`main`) — фінальний кодовий commit W2-C3;
+незалежний production review — CLEAN.
 **Останній перевірений зелений стан:** Windows x64, CPython 3.12 у `.venv`:
-quality gate — `524 passed`, `8 skipped` через відсутній привілей створення
-symlink; Ruff, Help validation, wheel і `pip check` — PASS. Фокусний набір
-storage/model/backup/CLI — `141 passed`, `8 skipped`. Точні команди, wheel hash
-та обмеження наведені у `VERIFICATION.md`. Completion commit має повідомлення
-`docs: record storage audit verification`.
+повний source gate — `533 passed`, `8 skipped` через відсутній привілей
+створення symlink; Ruff, compileall, Help validation і diff check — PASS.
+Пов'язаний набір storage/model/backup/CLI — `150 passed`, `8 skipped`. Точні
+команди, актуальний wheel hash та обмеження наведені у `VERIFICATION.md`.
 **Джерело завдання:**
 `docs/superpowers/plans/2026-08-30-storage-audit-and-repair.md` і R0.4 у
 `docs/superpowers/specs/2026-08-30-voice-studio-r0-completion-design.md`.
 
 ### W2-C3 acceptance summary
 
-- `storage audit` працює лише для читання, зберігає верхній core `status` для
-  сумісності backup/restore і додає `missing_records`, вкладений
-  `model_catalog` та консервативний inventory `exports`.
+- `storage audit` працює лише для читання від початку до кінця: не створює й не
+  відновлює live store, а читає SQLite зі стабільного тимчасового знімка бази та
+  WAL поза деревом даних із bounded retry і перевіркою identity кореня. Верхній
+  core `status` лишається сумісним із backup/restore; звіт додає
+  `missing_records`, вкладений `model_catalog` та консервативний inventory
+  `exports`.
 - Аудит не викликає `models reconcile`, не змінює модельний каталог і не
   видаляє export candidates; `canonical_stale` ніколи не видаляються
-  автоматично.
+  автоматично. GUI startup і кожна команда `models` і далі запускають
+  auto-reconcile, а `models reconcile` є прямою явною командою.
 - `storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes` під
   транзакцією від'єднує лише доведено відсутнє кероване посилання. Команда не
   видаляє й не створює аудіо заново, не змінює текст і не торкається user

@@ -6,17 +6,28 @@ stand in for a packaged Windows executable check.
 ## W2-C3 storage audit and confirmed repair — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, source tree on local
-`main`, implementation base `82364f0`. This record closes W2-C3 at
+`main`, final production implementation `b7ba7fd`. This record closes W2-C3 at
 source/headless level only. It does not claim packaged, physical-device,
 clean-machine, signed-release or broader R0 acceptance.
 
-The additive `LocalStore.audit()` contract remains read-only: regression tests
-snapshot database/filesystem state, model-catalog bytes and mtimes, and verify
-that audit does not call reconciliation. Its existing top-level `status` still
-represents only SQLite and managed-source health, so preserved model/export
-drift does not reject backup restore staging. Nested `model_catalog` and
-`exports` sections report drift independently; `canonical_stale` exports are
-conservative inventory candidates and are never auto-deleted.
+The CLI `storage audit` route calls `LocalStore.audit_existing()` before restore
+settlement or `LocalStore` construction, so it does not initialize, recover or
+otherwise write the live store. It validates the existing root and SQLite
+entries without following reparse points, fingerprints the database plus WAL
+and SHM state, and copies the database and present WAL into an isolated
+temporary directory outside the live tree. It retries a changing snapshot at
+most three times, audits the stable temporary copy, rechecks the live root
+identity after the scan and removes the temporary directory afterwards.
+
+Regression tests verify database/WAL churn, live-root replacement and unsafe
+temporary-parent refusal without live-tree mutation. The audit itself never
+calls model reconciliation; model commands and GUI startup retain their
+automatic reconciliation boundaries, while `models reconcile` remains the
+direct explicit action. The existing top-level `status` still represents only
+SQLite and managed-source health, so preserved model/export drift does not
+reject backup restore staging. Nested `model_catalog` and `exports` sections
+report drift independently; `canonical_stale` exports are conservative
+inventory candidates and are never auto-deleted.
 
 `storage repair-missing` requires `--yes`, optionally pins the audited path with
 `--expected-path`, re-reads the row under `BEGIN IMMEDIATE`, and refuses outside,
@@ -29,11 +40,17 @@ transaction before removing a direct regular managed child.
 
 | Check | Result |
 | --- | --- |
-| `.\scripts\quality_gate.ps1` with resolved `.venv\Scripts\python.exe` | PASS; compileall, Ruff, Help validation (13 Markdown files), 524 passed / 8 skipped, CLI `0.3.0rc1` |
-| `.\.venv\Scripts\python.exe -m pytest -q tests\test_storage_app.py tests\test_model_catalog_app.py tests\test_backup_app.py tests\test_cli_app.py` | PASS; 141 passed / 8 skipped |
-| `.\.venv\Scripts\python.exe -m build --wheel --no-isolation --outdir build\w2-c3-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 698,821 bytes, SHA-256 `10877B1165273174D0B8826B96B9A85B012DAA2712807AE6270D91276E5634E0` |
+| Full source gate at `b7ba7fd` (`pytest`, compileall, Ruff, Help validation, diff check) | PASS; 533 passed / 8 skipped; CLI `0.3.0rc1`; final independent production review CLEAN |
+| Related storage/model/backup/CLI tests at `b7ba7fd` | PASS; 150 passed / 8 skipped |
+| `.\.venv\Scripts\python.exe scripts\check_help.py` after documentation correction | PASS; 13 Markdown files |
+| `.\.venv\Scripts\python.exe -m build --wheel --no-isolation --outdir build\w2-c3-wheel` | PASS after final production and Help corrections; `voice_studio-0.3.0rc1-py3-none-any.whl`, 700,821 bytes, SHA-256 `33441D2FB1932501241DA09E205C566EB6BD7DB392666ECAD29AFD0FEADBFCC8` |
 | `.\.venv\Scripts\python.exe -m pip check` | PASS; `No broken requirements found.` |
 | `git diff --check` | PASS; no whitespace errors |
+
+The 533-test full result and 150-test related result are the final controller
+verification on production HEAD `b7ba7fd`. They were not rerun after this
+documentation-only correction; Help validation, wheel rebuild, `pip check` and
+the diff check above were run after the documentation changed.
 
 All eight skips are Windows symlink-creation cases denied with `WinError 1314`.
 The suite did execute Windows junction/reparse coverage for model inspection,

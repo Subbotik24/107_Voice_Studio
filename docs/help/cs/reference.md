@@ -49,10 +49,11 @@ přepis. Export: TXT, MD, JSON, SRT a VTT. Ollama vytváří jeden časový úse
 
 ## Obnova katalogu modelů
 
-Příkazy pro správu modelů před provedením operace zkontrolují a sjednotí místní
-katalog Faster Whisper. Platí to pro `models list`, `models install`,
-`models verify`, `models remove` i pro výslovný příkaz obnovy. Obnova je místní
-a offline; sama nestahuje, neaktualizuje ani nemaže model.
+GUI při spuštění jednou sjednotí místní katalog Faster Whisper a příkazy pro
+správu modelů jej sjednotí před provedením operace. Platí to pro `models list`,
+`models install`, `models verify`, `models remove` i pro výslovný příkaz
+obnovy. Obnova je místní a offline; sama nestahuje, neaktualizuje ani nemaže
+model.
 
 Kontrolu nebo obnovu lze vyvolat přímo:
 
@@ -75,8 +76,10 @@ Spusťte kontrolu úložiště pouze pro čtení:
 voice-studio storage audit
 ```
 
-Příkaz nikdy nesjednocuje katalog modelů a nemění databázi ani souborový systém.
-Hlavní `status` nadále popisuje stav SQLite a spravovaných zdrojů.
+Samotný příkaz auditu nikdy nesjednocuje katalog modelů a nemění aktivní datový
+strom. SQLite čte ze stabilního dočasného snímku databáze a WAL mimo datový
+strom, poté tento snímek odstraní, a spravované zdroje, modely a exporty skenuje
+bez zápisu. Hlavní `status` nadále popisuje stav SQLite a spravovaných zdrojů.
 `missing_records` označuje záznamy přepisů s chybějícím spravovaným zdrojem.
 Vnořený objekt `model_catalog` hlásí manifest, chybějící, osiřelé a blokované
 modely, staging a zbytky. Vnořený objekt `exports` uvádí běžné `files`,
@@ -84,9 +87,10 @@ konzervativní kandidáty `canonical_stale`, soubory `unmanaged` a nebezpečné 
 nesouborové položky `blocked`. Kandidáti exportu jsou pouze hlášení a nikdy se
 automaticky nemažou.
 
-Změna katalogu modelů vyžaduje samostatnou výslovnou akci `models reconcile`.
-Pokud záznam přepisu odkazuje na spravovaný zdroj, jehož chybění je
-prokázáno, odpojte pouze tento zastaralý odkaz:
+Automatické sjednocení nadále probíhá při spuštění GUI a před každým příkazem
+`models`. `voice-studio models reconcile` je přímý výslovný příkaz. Pokud
+záznam přepisu odkazuje na spravovaný zdroj, jehož chybění je prokázáno,
+odpojte pouze tento zastaralý odkaz:
 
 ```text
 voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
