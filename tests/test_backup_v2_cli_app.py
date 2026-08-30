@@ -86,6 +86,12 @@ class _Tty:
         return True
 
 
+class _NonTty:
+    @staticmethod
+    def isatty() -> bool:
+        return False
+
+
 def _interactive(monkeypatch, answers=None, error=None):
     """Make stdin a tty and replace getpass with a scripted spy."""
     monkeypatch.setattr(sys, "stdin", _Tty())
@@ -108,6 +114,11 @@ def _fail_on_prompt(monkeypatch):
         raise AssertionError(f"unexpected passphrase prompt: {prompt}")
 
     monkeypatch.setattr("getpass.getpass", forbidden)
+
+
+def _noninteractive(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _NonTty())
+    _fail_on_prompt(monkeypatch)
 
 
 def _crash_pending_v2(tmp_path: Path, make_wav, monkeypatch) -> tuple[Path, Path]:
@@ -209,7 +220,7 @@ def test_encrypted_create_empty_passphrase(tmp_path, make_wav, monkeypatch, caps
 def test_encrypted_create_noninteractive(tmp_path, make_wav, monkeypatch, capsys):
     _profile(tmp_path, monkeypatch)
     _seed_store(tmp_path, make_wav)
-    _fail_on_prompt(monkeypatch)  # pytest stdin is non-interactive by default
+    _noninteractive(monkeypatch)
     out = tmp_path / "enc.voice-backup"
     assert main(["backup", "create", str(out), "--encrypt"]) == 2
     assert "interactive terminal" in capsys.readouterr().err
@@ -337,7 +348,7 @@ def test_noninteractive_pending_recovery_blocks_restore(
 ):
     data, _v2 = _crash_pending_v2(tmp_path, make_wav, monkeypatch)
     v1 = _make_v1_backup(tmp_path, make_wav, settings=False)
-    _fail_on_prompt(monkeypatch)  # pytest stdin is non-interactive by default
+    _noninteractive(monkeypatch)
     assert main(["backup", "restore", str(v1)]) == 2
     captured = capsys.readouterr()
     assert "interactive terminal" in captured.err
