@@ -263,6 +263,15 @@ class ModelCatalog:
                     )
                 continue
             if not stat.S_ISDIR(entry_stat.st_mode):
+                if stat.S_ISLNK(entry_stat.st_mode):
+                    if MODEL_ID_PATTERN.fullmatch(entry.name) and entry.name not in catalogued_ids:
+                        result["blocked"].append(
+                            {
+                                "id": entry.name,
+                                "path": str(self.root / entry.name),
+                                "reason": "model path is a symlink",
+                            }
+                        )
                 continue
             if not MODEL_ID_PATTERN.fullmatch(entry.name) or entry.name in catalogued_ids:
                 continue

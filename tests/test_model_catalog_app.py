@@ -101,11 +101,44 @@ def test_reconcile_blocks_incomplete_orphan_without_mutating_it(tmp_path):
     incomplete.mkdir()
     (incomplete / "config.json").write_text("{}", encoding="utf-8")
     result = catalog.reconcile()
+    blocked = result["blocked"]
     assert result["action"] == "attention"
     assert result["adopted"] == []
-    assert result["blocked"][0]["id"] == "broken"
-    assert "model.bin" in result["blocked"][0]["reason"]
+    assert blocked == [
+        {
+            "id": "broken",
+            "path": str(incomplete),
+            "reason": "model directory is incomplete; model.bin and config.json are required",
+        }
+    ]
+    assert set(blocked[0]) == {"id", "path", "reason"}
     assert incomplete.is_dir()
+
+
+def test_reconcile_blocks_orphan_model_symlink(tmp_path):
+    source = local_model(tmp_path / "source")
+    catalog = ModelCatalog(tmp_path / "managed")
+    symlink = catalog.root / "linked-model"
+    try:
+        symlink.symlink_to(source, target_is_directory=True)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+
+    result = catalog.reconcile()
+
+    assert result["action"] == "attention"
+    assert result["adopted"] == []
+    assert result["blocked"] == [
+        {
+            "id": "linked-model",
+            "path": str(symlink),
+            "reason": "model path is a symlink",
+        }
+    ]
+    assert set(result["blocked"][0]) == {"id", "path", "reason"}
+    assert symlink.is_symlink()
 
 
 @pytest.mark.parametrize("payload", [b"{not-json", b'{"version":999,"models":[]}'])
