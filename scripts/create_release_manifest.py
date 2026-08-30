@@ -97,6 +97,10 @@ def _file_fingerprint(info: os.stat_result) -> tuple[int, ...]:
     )
 
 
+def _file_identity(info: os.stat_result) -> tuple[int, int]:
+    return (getattr(info, "st_dev", 0), getattr(info, "st_ino", 0))
+
+
 def _sbom_stat(path: Path) -> os.stat_result:
     try:
         return os.lstat(path)
@@ -144,7 +148,8 @@ def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
         if (
             _is_reparse_point(opened)
             or not stat.S_ISREG(opened.st_mode)
-            or _file_fingerprint(opened) != _file_fingerprint(info)
+            or _file_identity(opened) != _file_identity(info)
+            or opened.st_size != info.st_size
         ):
             raise ValueError("release manifest SBOM changed while opening")
         try:
@@ -163,7 +168,7 @@ def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
             or _file_fingerprint(after_open) != _file_fingerprint(opened)
             or _is_reparse_point(after_path)
             or not stat.S_ISREG(after_path.st_mode)
-            or _file_fingerprint(after_path) != _file_fingerprint(opened)
+            or _file_identity(after_path) != _file_identity(opened)
         ):
             raise ValueError("release manifest SBOM changed during read")
         return content, relative.as_posix()
