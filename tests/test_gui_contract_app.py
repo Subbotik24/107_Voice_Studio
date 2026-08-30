@@ -23,6 +23,8 @@ covered properly in `tests/test_editor_state_app.py`.
 from __future__ import annotations
 
 import inspect
+import queue
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -445,6 +447,162 @@ def test_close_is_blocked_while_backup_or_restore_is_running(monkeypatch) -> Non
     VoiceStudioApp._close(app)
 
     assert warnings and "резерв" in warnings[0].lower()
+
+
+def _worker_registry_stub() -> VoiceStudioApp:
+    app = object.__new__(VoiceStudioApp)
+    app._shutdown_event = threading.Event()
+    app._worker_lock = threading.RLock()
+    app._worker_threads = {}
+    app._shutdown_residue_threads = ()
+    app._cancel_event = threading.Event()
+    return app
+
+
+def test_worker_registry_registers_and_removes_only_its_current_handle() -> None:
+    app = _worker_registry_stub()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def work() -> None:
+        entered.set()
+        assert release.wait(1)
+
+    thread = VoiceStudioApp._start_worker(app, "probe", work)
+
+    assert thread is not None
+    assert thread.name == "voice-studio-probe"
+    assert entered.wait(1)
+    assert app._worker_threads["probe"] is thread
+    release.set()
+    thread.join(1)
+    assert not thread.is_alive()
+    assert "probe" not in app._worker_threads
+
+
+def test_worker_registry_rejects_new_work_after_shutdown() -> None:
+    app = _worker_registry_stub()
+    app._shutdown_event.set()
+
+    assert VoiceStudioApp._start_worker(app, "late", lambda: None) is None
+    assert app._worker_threads == {}
+
+
+def test_post_event_drops_events_after_shutdown() -> None:
+    app = _worker_registry_stub()
+    app.events = queue.Queue()
+
+    assert VoiceStudioApp._post_event(app, "before", 1)
+    assert app.events.get_nowait() == ("before", 1)
+    app._shutdown_event.set()
+    assert not VoiceStudioApp._post_event(app, "after", 2)
+    with pytest.raises(queue.Empty):
+        app.events.get_nowait()
+
+
+def test_join_workers_uses_finite_shared_deadline_and_reports_live_roles() -> None:
+    app = _worker_registry_stub()
+
+    class LiveThread:
+        def __init__(self) -> None:
+            self.joins: list[float] = []
+
+        def is_alive(self) -> bool:
+            return True
+
+        def join(self, timeout: float) -> None:
+            self.joins.append(timeout)
+
+    first = LiveThread()
+    second = LiveThread()
+    app._worker_threads = {"first": first, "second": second}
+
+    residue = VoiceStudioApp._join_workers(app, timeout_seconds=0.05)
+
+    assert residue == ("first", "second")
+    assert first.joins and second.joins
+    assert all(0 < timeout <= 0.05 for timeout in first.joins + second.joins)
+
+
+def test_poll_events_does_not_schedule_after_shutdown() -> None:
+    app = _worker_registry_stub()
+    app.events = queue.Queue()
+    app.after = lambda *_args: pytest.fail("shutdown must not reschedule event polling")
+    app._shutdown_event.set()
+
+    VoiceStudioApp._poll_events(app)
+
+
+def test_background_worker_families_use_registry_and_event_gate() -> None:
+    source = inspect.getsource(VoiceStudioApp)
+    for method in (
+        "_start_ollama_model_discovery",
+        "_process",
+        "_ai_cleanup",
+        "_backup_dialog",
+    ):
+        body = inspect.getsource(getattr(VoiceStudioApp, method))
+        assert "_start_worker" in body, method
+        assert "self.events.put(" not in body, method
+    assert "_post_event" in source
+
+
+def test_close_cancels_producers_joins_residues_and_destroys_once(monkeypatch) -> None:
+    app = _worker_registry_stub()
+    app._closing = False
+    app._confirm_editor_transition = lambda: True
+    order: list[str] = []
+    app.hotkey = _FakeHotkey([False])
+    app.recorder = SimpleNamespace(
+        cancel=lambda: (_ for _ in ()).throw(
+            TimeoutError("audio recorder writer did not stop within 2.0 seconds")
+        )
+    )
+    app.job_controller = SimpleNamespace(close=lambda: order.append("controller"))
+    app._active_recording_path = None
+    app._pending_microphone_files = set()
+    app._t = lambda key, **values: key
+    app.destroy = lambda: order.append("destroy")
+    app._retain_unresolved_recorder_path = lambda _path: None
+    app._report_recorder_error = lambda _error: order.append("recorder")
+    app._report_recording_residues = lambda: order.append("residues")
+
+    def join_workers() -> tuple[str, ...]:
+        order.append("join")
+        return ("transcription",)
+
+    monkeypatch.setattr(VoiceStudioApp, "_join_workers", lambda _self: join_workers())
+
+    VoiceStudioApp._close(app)
+    VoiceStudioApp._close(app)
+
+    assert app._closing is True
+    assert app._shutdown_event.is_set()
+    assert app._cancel_event.is_set()
+    assert app._shutdown_residue_threads == ("global-hotkey", "transcription")
+    assert order.count("controller") == 1
+    assert order.count("destroy") == 1
+
+
+def test_close_remains_blocked_by_non_daemon_maintenance_before_shutdown() -> None:
+    app = _worker_registry_stub()
+    app._closing = False
+    app._maintenance_thread = SimpleNamespace(is_alive=lambda: True)
+    app._t = lambda _key: "wait"
+    app._confirm_editor_transition = lambda: pytest.fail("editor gate must not run")
+    app.destroy = lambda: pytest.fail("maintenance keeps the window alive")
+    warnings: list[str] = []
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(
+            "voice_studio.app.messagebox.showwarning",
+            lambda _title, message, **_kwargs: warnings.append(message),
+        )
+        VoiceStudioApp._close(app)
+
+    assert warnings == ["wait"]
+    assert not app._shutdown_event.is_set()
+    assert app._closing is False
 
 
 # --- static widget-construction tripwires -----------------------------------

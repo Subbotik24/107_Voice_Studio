@@ -68,6 +68,14 @@ def test_hotkey_stop_retry_detail_is_localized(language: str, expected_detail: s
 
 
 @pytest.mark.parametrize("language", ["uk", "cs", "en"])
+def test_shutdown_residue_is_localized_and_accepts_worker_names(language: str) -> None:
+    message = translate(language, "shutdown_residue", workers="transcription")
+
+    assert "transcription" in message
+    assert message != "shutdown_residue"
+
+
+@pytest.mark.parametrize("language", ["uk", "cs", "en"])
 def test_profile_cards_are_localized_for_every_interface_language(language: str) -> None:
     for key in (
         "profiles_settings",

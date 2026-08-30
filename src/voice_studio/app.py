@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 import tkinter as tk
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -174,6 +176,11 @@ class VoiceStudioApp(tk.Tk):
         self._cleanup_provider = "openai"
         self._cleanup_model = self.settings.openai_cleanup_model
         self.events: queue.Queue[tuple[str, Any]] = queue.Queue()
+        self._shutdown_event = threading.Event()
+        self._worker_lock = threading.RLock()
+        self._worker_threads: dict[str, threading.Thread] = {}
+        self._closing = False
+        self._shutdown_residue_threads: tuple[str, ...] = ()
         self._history_items: list[Transcript] = []
         self._busy = False
         self._continuous_recording = False
@@ -303,18 +310,105 @@ class VoiceStudioApp(tk.Tk):
         def discover() -> None:
             try:
                 models = discover_ollama_audio_models()
-                self.events.put(("ollama_models", {"models": models, "error": ""}))
+                self._post_event("ollama_models", {"models": models, "error": ""})
             except Exception as exc:
-                self.events.put(
-                    ("ollama_models", {"models": [], "error": str(exc)[:500]})
+                self._post_event(
+                    "ollama_models", {"models": [], "error": str(exc)[:500]}
                 )
 
-        self._ollama_discovery_thread = threading.Thread(
-            target=discover,
-            daemon=True,
-            name="ollama-model-discovery",
+        self._ollama_discovery_thread = self._start_worker(
+            "ollama-model-discovery", discover
         )
-        self._ollama_discovery_thread.start()
+
+    def _start_worker(
+        self,
+        role: str,
+        target: Callable[[], None],
+        *,
+        daemon: bool = True,
+    ) -> threading.Thread | None:
+        """Start and retain one named GUI worker until it has really stopped."""
+
+        shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())
+        lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
+        workers = self.__dict__.setdefault("_worker_threads", {})
+        with lock:
+            if shutdown.is_set():
+                return None
+            previous = workers.get(role)
+            if previous is not None and previous.is_alive():
+                raise RuntimeError(f"worker '{role}' is already running")
+            holder: dict[str, threading.Thread] = {}
+
+            def run() -> None:
+                try:
+                    target()
+                finally:
+                    with lock:
+                        if workers.get(role) is holder.get("thread"):
+                            workers.pop(role, None)
+                        if role == "maintenance" and self.__dict__.get(
+                            "_maintenance_thread"
+                        ) is holder.get("thread"):
+                            self._maintenance_thread = None
+                        if role == "ollama-model-discovery" and self.__dict__.get(
+                            "_ollama_discovery_thread"
+                        ) is holder.get("thread"):
+                            self._ollama_discovery_thread = None
+
+            thread = threading.Thread(
+                target=run,
+                daemon=daemon,
+                name=f"voice-studio-{role}",
+            )
+            holder["thread"] = thread
+            workers[role] = thread
+            try:
+                thread.start()
+            except BaseException:
+                if workers.get(role) is thread:
+                    workers.pop(role, None)
+                raise
+            return thread
+
+    def _post_event(self, event: str, value: Any) -> bool:
+        """Publish worker output only while the Tk window accepts events."""
+
+        shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())
+        lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
+        with lock:
+            if shutdown.is_set():
+                return False
+            self.events.put((event, value))
+        return True
+
+    def _join_workers(self, timeout_seconds: float = 3.0) -> tuple[str, ...]:
+        """Join daemon workers using one monotonic shutdown budget."""
+
+        lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
+        workers = self.__dict__.setdefault("_worker_threads", {})
+        with lock:
+            snapshot = tuple(workers.items())
+        current = threading.current_thread()
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        for _role, thread in snapshot:
+            if thread is current:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                if thread.is_alive():
+                    thread.join(timeout=remaining)
+            except (RuntimeError, OSError):
+                continue
+        return tuple(
+            sorted(
+                role
+                for role, thread in snapshot
+                if thread is not current and thread.is_alive()
+            )
+        )
 
     def _build_ui(self) -> None:
         theme = VOICE_STUDIO_THEME
@@ -1226,8 +1320,8 @@ class VoiceStudioApp(tk.Tk):
         try:
             self.hotkey = GlobalHotkey(
                 self.settings.hotkey,
-                lambda: self.events.put(("record_start", None)),
-                lambda: self.events.put(("record_stop", None)),
+                lambda: self._post_event("record_start", None),
+                lambda: self._post_event("record_stop", None),
             )
             self.hotkey.start()
         except Exception as exc:
@@ -1445,6 +1539,8 @@ class VoiceStudioApp(tk.Tk):
         return True
 
     def _poll_events(self) -> None:
+        if self.__dict__.setdefault("_shutdown_event", threading.Event()).is_set():
+            return
         try:
             while True:
                 event, value = self.events.get_nowait()
@@ -1499,7 +1595,6 @@ class VoiceStudioApp(tk.Tk):
                         )
                     )
                 elif event == "ollama_models":
-                    self._ollama_discovery_thread = None
                     models = [str(item) for item in value.get("models", []) if str(item)]
                     self._installed_ollama_audio_models = models
                     self._ollama_discovery_error = str(value.get("error", ""))
@@ -1535,7 +1630,6 @@ class VoiceStudioApp(tk.Tk):
                     self.status.set(self._t("task_cancelled"))
                 elif event == "backup_done":
                     action, result = value
-                    self._maintenance_thread = None
                     self._set_busy(False)
                     if action == "restore":
                         self._reload_after_restore()
@@ -1562,7 +1656,6 @@ class VoiceStudioApp(tk.Tk):
                     messagebox.showinfo(self._t("backup"), message)
                 elif event == "backup_error":
                     action, error = value
-                    self._maintenance_thread = None
                     if action == "restore":
                         self._reload_after_restore()
                     self._set_busy(False)
@@ -1602,7 +1695,8 @@ class VoiceStudioApp(tk.Tk):
                     messagebox.showerror(self._t("cleanup_error"), str(value), parent=self)
         except queue.Empty:
             pass
-        self.after(100, self._poll_events)
+        if not self._shutdown_event.is_set():
+            self.after(100, self._poll_events)
 
     def _new_recording_temp(self) -> Path:
         recordings_directory = self._recordings_directory()
@@ -1785,18 +1879,17 @@ class VoiceStudioApp(tk.Tk):
                     dictionary,
                     timeout_seconds=self.settings.task_timeout_seconds,
                     cancelled=self._cancel_event.is_set,
-                    progress=lambda phase, elapsed: self.events.put(
-                        ("job_progress", (phase, elapsed))
+                    progress=lambda phase, elapsed: self._post_event(
+                        "job_progress", (phase, elapsed)
                     ),
                 )
-                self.events.put(("done", (transcript, source if cleanup else None)))
+                self._post_event("done", (transcript, source if cleanup else None))
             except JobCancelled:
-                self.events.put(("job_cancelled", source if cleanup else None))
+                self._post_event("job_cancelled", source if cleanup else None)
             except Exception as exc:
-                self.events.put(("error", (exc, source if cleanup else None)))
+                self._post_event("error", (exc, source if cleanup else None))
 
-        threading.Thread(target=work, daemon=True, name="transcription-worker").start()
-        return True
+        return self._start_worker("transcription", work) is not None
 
     def _cancel_current(self) -> None:
         if self._busy:
@@ -2118,11 +2211,11 @@ class VoiceStudioApp(tk.Tk):
                     provider=provider,
                     model=model,
                 )
-                self.events.put(("cleanup_proposal", (transcript, proposal)))
+                self._post_event("cleanup_proposal", (transcript, proposal))
             except Exception as exc:
-                self.events.put(("cleanup_error", exc))
+                self._post_event("cleanup_error", exc)
 
-        threading.Thread(target=work, daemon=True, name="ai-cleanup").start()
+        self._start_worker("ai-cleanup", work)
 
     def _undo_ai_cleanup(self) -> None:
         if not self.current:
@@ -2925,15 +3018,15 @@ class VoiceStudioApp(tk.Tk):
                         offline_only=self.settings.offline_only,
                         timeout_seconds=self.settings.task_timeout_seconds,
                         cancelled=self._cancel_event.is_set,
-                        progress=lambda done, total: self.events.put(
-                            ("model_progress", (done, total))
+                        progress=lambda done, total: self._post_event(
+                            "model_progress", (done, total)
                         ),
                     )
-                    self.events.put(("model_done", entry))
+                    self._post_event("model_done", entry)
                 except Exception as exc:
-                    self.events.put(("model_error", exc))
+                    self._post_event("model_error", exc)
 
-            threading.Thread(target=work, daemon=True, name="model-download").start()
+            self._start_worker("model-download", work)
 
         def verify() -> None:
             model_id = selected_id()
@@ -2974,6 +3067,8 @@ class VoiceStudioApp(tk.Tk):
         refresh()
 
     def _backup_dialog(self) -> None:
+        # Maintenance workers are created as ``threading.Thread`` instances
+        # by the shared registry, and remain non-daemon until the operation ends.
         dialog = tk.Toplevel(self)
         dialog.title(self._t("backup"))
         dialog.transient(self)
@@ -2997,17 +3092,12 @@ class VoiceStudioApp(tk.Tk):
 
             def work() -> None:
                 try:
-                    self.events.put(("backup_done", (action, callback())))
+                    self._post_event("backup_done", (action, callback()))
                 except Exception as exc:
-                    self.events.put(("backup_error", (action, exc)))
+                    self._post_event("backup_error", (action, exc))
 
-            thread = threading.Thread(
-                target=work,
-                daemon=False,
-                name=f"backup-{action}",
-            )
+            thread = self._start_worker("maintenance", work, daemon=False)
             self._maintenance_thread = thread
-            thread.start()
 
         def create() -> None:
             destination = filedialog.asksaveasfilename(
@@ -3097,6 +3187,8 @@ class VoiceStudioApp(tk.Tk):
         self._start_hotkey()
 
     def _close(self) -> None:
+        if self.__dict__.get("_closing", False):
+            return
         maintenance = self.__dict__.get("_maintenance_thread")
         if maintenance is not None and maintenance.is_alive():
             messagebox.showwarning(
@@ -3107,30 +3199,86 @@ class VoiceStudioApp(tk.Tk):
             return
         if not self._confirm_editor_transition():
             return
-        if self.hotkey:
-            self.hotkey.stop()
+        self._closing = True
+        shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())
+        lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
+        with lock:
+            shutdown.set()
+        self._cancel_event.set()
+        residues: set[str] = set()
         writer_timeout_path: Path | None = None
         try:
-            self.recorder.cancel()
-        except Exception as exc:
-            if self._is_unresolved_writer_timeout(exc):
-                writer_timeout_path = self._retain_unresolved_recorder_path(
-                    self._active_recording_path
-                    or getattr(self.recorder, "destination", None)
-                )
-            self._report_recorder_error(exc)
-        self._active_recording_path = None
-        self._cancel_event.set()
-        self.job_controller.close()
-        for path in list(self.__dict__.get("_pending_microphone_files", set())):
-            if (
-                writer_timeout_path is not None
-                and self._safe_recording_path(path) == writer_timeout_path
-            ):
-                continue
-            self._cleanup_temp(path)
-        self._report_recording_residues()
-        self.destroy()
+            hotkey = self.__dict__.get("hotkey")
+            hotkey_stopped = True
+            if hotkey is not None:
+                try:
+                    hotkey_stopped = bool(hotkey.stop())
+                except Exception as exc:
+                    hotkey_stopped = False
+                    try:
+                        self.status.set(self._t("hotkey_unavailable", error=exc))
+                    except Exception:
+                        pass
+            if not hotkey_stopped:
+                residues.add("global-hotkey")
+
+            try:
+                self.recorder.cancel()
+            except Exception as exc:
+                if self._is_unresolved_writer_timeout(exc):
+                    writer_timeout_path = self._retain_unresolved_recorder_path(
+                        self._active_recording_path
+                        or getattr(self.recorder, "destination", None)
+                    )
+                try:
+                    self._report_recorder_error(exc)
+                except Exception:
+                    pass
+            self._active_recording_path = None
+
+            try:
+                self.job_controller.close()
+            except Exception as exc:
+                try:
+                    self.status.set(self._t("processing_error") + f": {exc}")
+                except Exception:
+                    pass
+            try:
+                residues.update(self._join_workers())
+            except Exception as exc:
+                try:
+                    self.status.set(self._t("processing_error") + f": {exc}")
+                except Exception:
+                    pass
+        finally:
+            self._shutdown_residue_threads = tuple(sorted(residues))
+            if self._shutdown_residue_threads:
+                try:
+                    self.status.set(
+                        self._t(
+                            "shutdown_residue",
+                            workers=", ".join(self._shutdown_residue_threads),
+                        )
+                    )
+                except Exception:
+                    pass
+            try:
+                for path in list(self.__dict__.get("_pending_microphone_files", set())):
+                    if (
+                        writer_timeout_path is not None
+                        and self._safe_recording_path(path) == writer_timeout_path
+                    ):
+                        continue
+                    try:
+                        self._cleanup_temp(path)
+                    except Exception:
+                        pass
+                try:
+                    self._report_recording_residues()
+                except Exception:
+                    pass
+            finally:
+                self.destroy()
 
 
 def main() -> None:
