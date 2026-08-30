@@ -56,6 +56,21 @@ def test_parser_rejects_control_characters_anywhere_in_lock_text(control):
         parse_locked_components(f"# comment{control}\nalpha==1\n")
 
 
+@pytest.mark.parametrize("separator", ["\u2028", "\u2029"])
+def test_parser_rejects_unicode_line_separators(separator):
+    with pytest.raises(ValueError):
+        parse_locked_components(f"# comment{separator}alpha==1\n")
+
+
+def test_sbom_rejects_application_dependency_bom_ref_collision():
+    with pytest.raises(ValueError, match="bom-ref"):
+        build_sbom(
+            "voice-studio==0.3.0rc1\n",
+            project_name="voice-studio",
+            project_version="0.3.0rc1",
+        )
+
+
 def test_parser_returns_sorted_frozen_components():
     components = parse_locked_components("Zeta_pkg==1\nalpha.pkg==2\n# comment\n")
     assert [(item.name, item.version) for item in components] == [

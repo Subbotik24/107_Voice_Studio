@@ -44,15 +44,20 @@ def parse_locked_components(text: str) -> list[LockedComponent]:
     """Parse comments/blanks and only exact ``name==version`` lock rows."""
     if not isinstance(text, str):
         raise TypeError("lock text must be a string")
+    normalized_text = text.replace("\r\n", "\n")
+    if "\r" in normalized_text:
+        raise ValueError("lock text contains an unsupported line separator")
     if any(
-        (ord(char) < 0x20 and char not in "\r\n") or 0x7F <= ord(char) <= 0x9F
-        for char in text
+        (ord(char) < 0x20 and char != "\n") or 0x7F <= ord(char) <= 0x9F
+        for char in normalized_text
     ):
         raise ValueError("lock text contains a control character")
+    if "\u2028" in normalized_text or "\u2029" in normalized_text:
+        raise ValueError("lock text contains an unsupported line separator")
 
     components: list[LockedComponent] = []
     seen: set[str] = set()
-    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+    for line_number, raw_line in enumerate(normalized_text.split("\n"), start=1):
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -161,6 +166,7 @@ def validate_sbom_document(document: object) -> None:
     expected_app_ref = _purl(LockedComponent(app_name, app_version))
     if app["bom-ref"] != expected_app_ref or app["purl"] != expected_app_ref:
         raise ValueError("metadata component purl or bom-ref is invalid")
+    seen_refs = {expected_app_ref}
 
     properties = metadata["properties"]
     if not isinstance(properties, list) or len(properties) != 3:
@@ -210,6 +216,9 @@ def validate_sbom_document(document: object) -> None:
         expected_ref = _purl(LockedComponent(name, version))
         if item["bom-ref"] != expected_ref or item["purl"] != expected_ref:
             raise ValueError(f"component {index} purl or bom-ref is invalid")
+        if expected_ref in seen_refs:
+            raise ValueError(f"duplicate bom-ref: {expected_ref}")
+        seen_refs.add(expected_ref)
         key = (name, version)
         if name in seen_names or key in seen:
             raise ValueError(f"duplicate component: {name}=={version}")
