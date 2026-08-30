@@ -54,6 +54,36 @@ def _settle_interrupted_restore() -> dict[str, Any]:
     return result
 
 
+_PASSPHRASE_REQUIRED_ERROR = "backup is encrypted; a passphrase is required"
+
+
+def _prompt_backup_passphrase(*, confirm: bool = False) -> str:
+    """Read a backup passphrase interactively; never echoed, never defaulted.
+
+    The passphrase exists only as a local variable, is passed straight into
+    the backup API, and is never printed, logged, stored or placed in argv,
+    the environment, Settings or LocalStore.
+    """
+
+    if sys.stdin is None or not sys.stdin.isatty():
+        raise ValueError(
+            "encrypted backup operations need an interactive terminal for "
+            "passphrase entry"
+        )
+    import getpass
+
+    try:
+        passphrase = getpass.getpass("Backup passphrase: ")
+        repeated = getpass.getpass("Repeat backup passphrase: ") if confirm else None
+    except EOFError as exc:
+        raise ValueError("backup passphrase entry was cancelled") from exc
+    if not passphrase:
+        raise ValueError("backup passphrase must not be empty")
+    if confirm and passphrase != repeated:
+        raise ValueError("backup passphrases do not match")
+    return passphrase
+
+
 def build_parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="voice-studio",
@@ -176,6 +206,11 @@ def build_parser() -> argparse.ArgumentParser:
     backup_create = backup_commands.add_parser("create", help="create a versioned backup")
     backup_create.add_argument("output", type=Path)
     backup_create.add_argument("--without-audio", action="store_true")
+    backup_create.add_argument(
+        "--encrypt",
+        action="store_true",
+        help="create an encrypted backup (prompts for a passphrase interactively)",
+    )
     backup_verify = backup_commands.add_parser("verify", help="verify a backup")
     backup_verify.add_argument("file", type=Path)
     backup_restore = backup_commands.add_parser("restore", help="restore a verified backup")
@@ -329,26 +364,78 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "backup":
             if args.backup_command == "verify":
-                _json(verify_backup(args.file))
+                try:
+                    result = verify_backup(args.file)
+                except ValueError as exc:
+                    if str(exc) != _PASSPHRASE_REQUIRED_ERROR:
+                        raise
+                    passphrase = _prompt_backup_passphrase()
+                    try:
+                        result = verify_backup(args.file, passphrase=passphrase)
+                    finally:
+                        del passphrase
+                _json(result)
                 return 0
             if args.backup_command == "restore":
                 recovered = _settle_interrupted_restore()
-                restored = restore_backup(
-                    args.file, data_dir(), settings_target=settings_path()
-                )
+                if recovered.get("status") != "PASS":
+                    return 2
+                if recovered.get("action") == "passphrase_required":
+                    # Settle the interrupted encrypted restore first; a wrong
+                    # passphrase or a cancel keeps the journal and sidecar and
+                    # the new restore below never starts.
+                    passphrase = _prompt_backup_passphrase()
+                    try:
+                        recovered = recover_interrupted_restore(
+                            data_dir(),
+                            settings_target=settings_path(),
+                            passphrase=passphrase,
+                        )
+                    finally:
+                        del passphrase
+                    print(
+                        "restore-journal: " + json.dumps(recovered, ensure_ascii=False),
+                        file=sys.stderr,
+                    )
+                    if recovered.get("status") != "PASS":
+                        return 2
+                try:
+                    restored = restore_backup(
+                        args.file, data_dir(), settings_target=settings_path()
+                    )
+                except ValueError as exc:
+                    if str(exc) != _PASSPHRASE_REQUIRED_ERROR:
+                        raise
+                    passphrase = _prompt_backup_passphrase()
+                    try:
+                        restored = restore_backup(
+                            args.file,
+                            data_dir(),
+                            settings_target=settings_path(),
+                            passphrase=passphrase,
+                        )
+                    finally:
+                        del passphrase
                 restored["recovered_interrupted_restore"] = recovered
                 _json(restored)
                 return 0
             _settle_interrupted_restore()
             store = LocalStore(data_dir())
-            _json(
-                create_backup(
-                    store,
-                    args.output,
-                    settings_file=settings_path(),
-                    include_audio=not args.without_audio,
+            passphrase = None
+            if args.encrypt:
+                passphrase = _prompt_backup_passphrase(confirm=True)
+            try:
+                _json(
+                    create_backup(
+                        store,
+                        args.output,
+                        settings_file=settings_path(),
+                        include_audio=not args.without_audio,
+                        passphrase=passphrase,
+                    )
                 )
-            )
+            finally:
+                del passphrase
             return 0
 
         if args.command == "storage" and args.storage_command == "audit":
