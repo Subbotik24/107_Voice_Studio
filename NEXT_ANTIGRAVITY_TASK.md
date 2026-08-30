@@ -32,11 +32,11 @@ Windows/macOS publication використовує atomic no-replace helper. SBO
   including one SBOM symlink test; junction/reparse coverage ran where
   available.
 
-**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W3-H1` — валідація і bounded detection
-`device`/`compute_type` для hardware/compute settings. W3-H1 має передувати
-R0.6 configurable VAD, R0.7 minimal subtitle consistency, R0.9 encrypted
-backup v2 та будь-якому W5 physical acceptance; release go/no-go залишається
-після code-complete R0.
+**W3-H1 ЗАВЕРШЕНО:** фінальні production/evidence commits — `2819ecc` і
+`39ab4b6`; точні перевірки записані в `docs/verification/R0_EXECUTION_LOG.md`.
+**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W3-V1` — configurable VAD зі збереженням
+поточного enabled default. Актуальний порядок і restart contract наведено в
+`docs/superpowers/plans/2026-08-30-r0-continuation-handoff.md`.
 
 ---
 
