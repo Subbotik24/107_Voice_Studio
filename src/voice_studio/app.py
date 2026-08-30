@@ -1663,9 +1663,21 @@ class VoiceStudioApp(tk.Tk):
                             else "hardware_detection_degraded"
                         )
                         info.set(self._t(key, detail=result.detail))
+                    device_values = tuple(
+                        item
+                        for item in dict.fromkeys(("auto", *result.device_capabilities))
+                        if item in SUPPORTED_DEVICES
+                    )
+                    compute_values = tuple(
+                        item
+                        for item in dict.fromkeys(
+                            ("default", "auto", *result.compute_types)
+                        )
+                        if item in SUPPORTED_COMPUTE_TYPES
+                    )
                     for combo, values in (
-                        (self._settings_hardware_device_combo, result.device_capabilities),
-                        (self._settings_hardware_compute_combo, result.compute_types),
+                        (self._settings_hardware_device_combo, device_values),
+                        (self._settings_hardware_compute_combo, compute_values),
                     ):
                         if combo is not None and combo.winfo_exists():
                             combo.configure(values=tuple(values))

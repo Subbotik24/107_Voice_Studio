@@ -773,8 +773,13 @@ def test_hardware_event_updates_advisory_choices_without_selecting_settings() ->
     VoiceStudioApp._poll_events(app)
 
     assert app._settings_info_var.values == ["detected"]
-    assert app._settings_hardware_device_combo.values == ["cpu", "cuda"]
-    assert app._settings_hardware_compute_combo.values == ["int8", "float16"]
+    assert app._settings_hardware_device_combo.values == ["auto", "cpu", "cuda"]
+    assert app._settings_hardware_compute_combo.values == [
+        "default",
+        "auto",
+        "int8",
+        "float16",
+    ]
 
 
 def test_hardware_detection_is_single_worker_and_probe_runs_off_tk_thread(monkeypatch):
