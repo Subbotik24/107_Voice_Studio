@@ -117,6 +117,27 @@ def test_release_manifest_rejects_external_sbom(tmp_path):
         )
 
 
+def test_release_manifest_rejects_lexical_external_sbom_traversal(tmp_path):
+    release = tmp_path / "release"
+    (release / "sub").mkdir(parents=True)
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    result = acceptance(tmp_path / "acceptance.json")
+    external_sbom = write_sbom(tmp_path / "outside.json")
+    traversal = release / "sub" / ".." / ".." / external_sbom.name
+
+    with pytest.raises(ValueError, match="lexical traversal") as error:
+        create_manifest(
+            release,
+            [artifact],
+            traversal,
+            release_label="0.2.0-test-rc1",
+            acceptance_result=result,
+            repository_root=tmp_path,
+        )
+    assert str(tmp_path) not in str(error.value)
+
+
 @pytest.mark.parametrize(
     "case, expected_exception, message",
     [
@@ -217,22 +238,26 @@ def test_release_manifest_rejects_sbom_path_swap_during_read(tmp_path, monkeypat
     replacement.write_text(
         json.dumps(
             build_sbom(
-                "beta-package==2.0\n",
+                "bravo==1\n",
                 project_name="voice-studio",
                 project_version="0.3.0rc1",
             )
         ),
         encoding="utf-8",
     )
-    original_open = os.open
+    original_lstat = os.lstat
+    target_lstat_calls = 0
 
-    def swap_after_open(path, flags, *args, **kwargs):
-        descriptor = original_open(path, flags, *args, **kwargs)
+    def swap_at_path_boundary(path):
+        nonlocal target_lstat_calls
         if Path(path) == sbom:
-            sbom.write_bytes(replacement.read_bytes())
-        return descriptor
+            target_lstat_calls += 1
+            if target_lstat_calls == 2:
+                os.replace(replacement, sbom)
+        info = original_lstat(path)
+        return info
 
-    monkeypatch.setattr(manifest_module.os, "open", swap_after_open)
+    monkeypatch.setattr(manifest_module.os, "lstat", swap_at_path_boundary)
     with pytest.raises(ValueError, match="changed") as error:
         create_manifest(
             release,
@@ -242,6 +267,7 @@ def test_release_manifest_rejects_sbom_path_swap_during_read(tmp_path, monkeypat
             acceptance_result=result,
             repository_root=tmp_path,
         )
+    assert target_lstat_calls == 2
     assert str(tmp_path) not in str(error.value)
 
 

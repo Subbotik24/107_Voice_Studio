@@ -112,7 +112,10 @@ def _sbom_stat(path: Path) -> os.stat_result:
 
 def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
     root = Path(release_directory).absolute()
-    target = Path(sbom).absolute()
+    raw_target = Path(sbom)
+    if ".." in raw_target.parts:
+        raise ValueError("release manifest SBOM path contains lexical traversal")
+    target = raw_target.absolute()
     try:
         relative = target.relative_to(root)
     except ValueError as exc:
@@ -137,6 +140,7 @@ def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    descriptor: int | None = None
     try:
         descriptor = os.open(target, flags)
     except FileNotFoundError as exc:
@@ -157,23 +161,29 @@ def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
                 content = stream.read()
         except OSError as exc:
             raise ValueError("release manifest SBOM could not be read safely") from exc
-        try:
-            after_path = os.lstat(target)
-        except OSError as exc:
-            raise ValueError("release manifest SBOM changed during read") from exc
         after_open = os.fstat(descriptor)
         if (
             _is_reparse_point(after_open)
             or not stat.S_ISREG(after_open.st_mode)
             or _file_fingerprint(after_open) != _file_fingerprint(opened)
-            or _is_reparse_point(after_path)
+        ):
+            raise ValueError("release manifest SBOM changed during read")
+        os.close(descriptor)
+        descriptor = None
+        try:
+            after_path = os.lstat(target)
+        except OSError as exc:
+            raise ValueError("release manifest SBOM changed during read") from exc
+        if (
+            _is_reparse_point(after_path)
             or not stat.S_ISREG(after_path.st_mode)
             or _file_identity(after_path) != _file_identity(opened)
         ):
             raise ValueError("release manifest SBOM changed during read")
         return content, relative.as_posix()
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def create_manifest(
