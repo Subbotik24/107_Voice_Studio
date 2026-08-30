@@ -806,7 +806,13 @@ def test_public_backup_signatures_are_pinned():
         ("include_audio", inspect.Parameter.KEYWORD_ONLY, True),
         ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
     ]
-    assert list(inspect.signature(verify_backup).parameters) == ["path"]
+    assert [
+        (name, parameter.kind, parameter.default)
+        for name, parameter in inspect.signature(verify_backup).parameters.items()
+    ] == [
+        ("path", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
+    ]
     assert [
         (name, parameter.kind)
         for name, parameter in inspect.signature(restore_backup).parameters.items()

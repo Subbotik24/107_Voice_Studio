@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import uuid
@@ -16,7 +17,12 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from . import backup_crypto
-from .archive import ZipBudget, inspect_zip, require_free_space
+from .archive import (
+    ZipBudget,
+    _portable_member_identity,
+    inspect_zip,
+    require_free_space,
+)
 from .models import Settings, Transcript
 from .storage import LocalStore
 
@@ -143,6 +149,43 @@ class _HashingWriter:
 
     def hexdigest(self) -> str:
         return self._digest.hexdigest()
+
+
+class _HashingReader:
+    """Counting SHA-256 reader around a bounded ZIP member stream."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+        self._digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise ValueError("unbounded reads are not supported for backup members")
+        data = self._stream.read(size)
+        self._digest.update(data)
+        self.size += len(data)
+        return data
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
+class _DiscardWriter:
+    """Bounded counting sink for authenticated plaintext during verify."""
+
+    def __init__(self) -> None:
+        self.size = 0
+
+    def write(self, data: bytes) -> int:
+        self.size += len(data)
+        return len(data)
+
+
+_V2_OPAQUE_NAME = re.compile(r"payload/[0-9]{8}\.enc")
+_V2_FIXED_LOGICAL_MEMBERS = frozenset(
+    {"transcripts.jsonl", "config/settings.json", "config/dictionary.json"}
+)
 
 
 def _read_bounded_payload(path: Path, limit: int, member: str) -> bytes:
@@ -424,19 +467,12 @@ def create_backup(
     }
 
 
-def verify_backup(path: Path) -> dict[str, Any]:
+def verify_backup(path: Path, *, passphrase: str | None = None) -> dict[str, Any]:
     path = path.expanduser()
     if not path.is_file():
         raise FileNotFoundError(path)
     inspection = inspect_zip(path, BACKUP_ZIP_BUDGET)
     member_sizes = {member.name: member.expanded_bytes for member in inspection.members}
-    for name, size in member_sizes.items():
-        if name in _FIXED_MEMBER_LIMITS and size > _FIXED_MEMBER_LIMITS[name]:
-            raise ValueError(
-                f"backup member exceeds its format limit: {name} ({size} bytes)"
-            )
-        if name not in _FIXED_MEMBER_LIMITS and not name.startswith("sources/"):
-            raise ValueError(f"unsupported backup member: {name}")
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         if len(names) != len(set(names)):
@@ -447,38 +483,80 @@ def verify_backup(path: Path) -> dict[str, Any]:
             member = Path(name)
             if member.is_absolute() or ".." in member.parts or "\\" in name:
                 raise ValueError(f"unsafe backup member: {name}")
+        manifest_size = member_sizes["manifest.json"]
+        manifest_limit = _FIXED_MEMBER_LIMITS["manifest.json"]
+        if manifest_size > manifest_limit:
+            raise ValueError(
+                "backup member exceeds its format limit: "
+                f"manifest.json ({manifest_size} bytes)"
+            )
         try:
             manifest = json.loads(archive.read("manifest.json"))
-        except (json.JSONDecodeError, KeyError) as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as exc:
             raise ValueError(f"invalid backup manifest: {exc}") from exc
-        if manifest.get("version") != BACKUP_VERSION:
-            raise ValueError(f"unsupported backup version: {manifest.get('version')}")
-        members = manifest.get("members")
-        if not isinstance(members, dict):
-            raise ValueError("backup manifest members must be an object")
-        if set(names) != {"manifest.json", *members}:
-            raise ValueError("backup member set does not match manifest")
-        for name, expected in members.items():
-            if not isinstance(expected, dict):
-                raise ValueError(f"backup manifest entry must be an object: {name}")
-            expected_size = expected.get("size")
-            expected_hash = expected.get("sha256")
-            if (
-                type(expected_size) is not int
-                or expected_size < 0
-                or expected_size != member_sizes.get(name)
-            ):
-                raise ValueError(f"backup member size metadata is invalid: {name}")
-            if (
-                not isinstance(expected_hash, str)
-                or len(expected_hash) != 64
-                or any(character not in "0123456789abcdef" for character in expected_hash)
-            ):
-                raise ValueError(f"backup member hash metadata is invalid: {name}")
-            with archive.open(name) as stream:
-                sha256, size = _stream_hash(stream)
-            if sha256 != expected_hash or size != expected_size:
-                raise ValueError(f"backup member integrity check failed: {name}")
+        if not isinstance(manifest, dict):
+            raise ValueError("backup manifest must contain a JSON object")
+        # Dispatch is keyed on the manifest version only: a v2 archive never
+        # falls back into the v1 parser, whatever the failure.
+        version = manifest.get("version")
+        if type(version) is not int:
+            raise ValueError(f"unsupported backup version: {version}")
+        if version == ENCRYPTED_BACKUP_VERSION:
+            return _verify_backup_v2(
+                path, archive, member_sizes, names, manifest, passphrase
+            )
+        if version == BACKUP_VERSION:
+            return _verify_backup_v1(
+                path, archive, inspection, member_sizes, names, manifest
+            )
+        raise ValueError(f"unsupported backup version: {version}")
+
+
+def _verify_backup_v1(
+    path: Path,
+    archive: zipfile.ZipFile,
+    inspection: Any,
+    member_sizes: dict[str, int],
+    names: list[str],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    for name, size in member_sizes.items():
+        if name in _FIXED_MEMBER_LIMITS and size > _FIXED_MEMBER_LIMITS[name]:
+            raise ValueError(
+                f"backup member exceeds its format limit: {name} ({size} bytes)"
+            )
+        if name not in _FIXED_MEMBER_LIMITS and not name.startswith("sources/"):
+            raise ValueError(f"unsupported backup member: {name}")
+    if type(manifest.get("version")) is not int or (
+        manifest.get("version") != BACKUP_VERSION
+    ):
+        raise ValueError(f"unsupported backup version: {manifest.get('version')}")
+    members = manifest.get("members")
+    if not isinstance(members, dict):
+        raise ValueError("backup manifest members must be an object")
+    if set(names) != {"manifest.json", *members}:
+        raise ValueError("backup member set does not match manifest")
+    for name, expected in members.items():
+        if not isinstance(expected, dict):
+            raise ValueError(f"backup manifest entry must be an object: {name}")
+        expected_size = expected.get("size")
+        expected_hash = expected.get("sha256")
+        if (
+            type(expected_size) is not int
+            or expected_size < 0
+            or expected_size != member_sizes.get(name)
+        ):
+            raise ValueError(f"backup member size metadata is invalid: {name}")
+        if (
+            not isinstance(expected_hash, str)
+            or len(expected_hash) != 64
+            or any(character not in "0123456789abcdef" for character in expected_hash)
+        ):
+            raise ValueError(f"backup member hash metadata is invalid: {name}")
+        with archive.open(name) as stream:
+            sha256, size = _stream_hash(stream)
+        if sha256 != expected_hash or size != expected_size:
+            raise ValueError(f"backup member integrity check failed: {name}")
     return {
         "status": "PASS",
         "path": str(path.resolve()),
@@ -486,6 +564,312 @@ def verify_backup(path: Path) -> dict[str, Any]:
         "records": manifest.get("records", 0),
         "members": len(manifest["members"]),
         "expanded_bytes": inspection.total_expanded_bytes,
+        "manifest": manifest,
+    }
+
+
+def _v2_member_metadata_error(name: str) -> ValueError:
+    return ValueError(f"encrypted backup member metadata is invalid: {name}")
+
+
+def _verify_v2_member_metadata(
+    name: str, expected: Any, member_sizes: dict[str, int]
+) -> None:
+    """Validate one manifest member entry against the authenticated contract."""
+
+    if not isinstance(expected, dict) or set(expected) != {
+        "sha256",
+        "size",
+        "plaintext_size",
+        "chunks",
+    }:
+        raise _v2_member_metadata_error(name)
+    expected_hash = expected["sha256"]
+    if (
+        not isinstance(expected_hash, str)
+        or len(expected_hash) != 64
+        or any(character not in "0123456789abcdef" for character in expected_hash)
+    ):
+        raise _v2_member_metadata_error(name)
+    size = expected["size"]
+    plaintext_size = expected["plaintext_size"]
+    chunks = expected["chunks"]
+    if (
+        type(size) is not int
+        or type(plaintext_size) is not int
+        or type(chunks) is not int
+        or size < backup_crypto.GCM_TAG_SIZE
+        or plaintext_size < 0
+        or chunks < 1
+        or size != plaintext_size + backup_crypto.GCM_TAG_SIZE * chunks
+        or chunks != max(1, -(-plaintext_size // backup_crypto.CHUNK_SIZE))
+    ):
+        raise _v2_member_metadata_error(name)
+    if member_sizes.get(name) != size:
+        raise ValueError(
+            f"encrypted backup member size does not match the archive: {name}"
+        )
+
+
+def _strict_base64(value: Any, field: str) -> bytes:
+    if not isinstance(value, str):
+        raise ValueError(f"encrypted backup {field} must be base64 text")
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError(f"encrypted backup {field} is not valid base64") from exc
+
+
+def _verify_backup_v2(
+    path: Path,
+    archive: zipfile.ZipFile,
+    member_sizes: dict[str, int],
+    names: list[str],
+    manifest: dict[str, Any],
+    passphrase: str | None,
+) -> dict[str, Any]:
+    """Fully authenticate an encrypted backup v2 archive.
+
+    Order: structural validation, KDF bounds and exact profile, manifest
+    HMAC, private index AEAD decryption and validation, then exactly one
+    streaming chunk-authenticated pass over every payload member. A PASS
+    is impossible after any partial check. No passphrase, key, private
+    index or mapping value is returned.
+    """
+
+    if passphrase is None:
+        raise ValueError("backup is encrypted; a passphrase is required")
+    if not isinstance(passphrase, str):
+        raise TypeError("passphrase must be a str or None")
+
+    # --- Structural validation: no KDF or decryption before this completes.
+    if set(manifest) != {"version", "encryption", "index_member", "members"}:
+        raise ValueError("encrypted backup manifest has unexpected fields")
+    if type(manifest["version"]) is not int or (
+        manifest["version"] != ENCRYPTED_BACKUP_VERSION
+    ):
+        raise ValueError(f"unsupported backup version: {manifest['version']}")
+    if manifest["index_member"] != "payload/00000000.enc":
+        raise ValueError("encrypted backup index member is invalid")
+    members = manifest["members"]
+    if not isinstance(members, dict) or not members:
+        raise ValueError("encrypted backup manifest members must be an object")
+    encryption = manifest["encryption"]
+    if not isinstance(encryption, dict) or set(encryption) != {
+        "algorithm",
+        "kdf",
+        "kdf_params",
+        "salt_base64",
+        "manifest_tag_base64",
+    }:
+        raise ValueError("encrypted backup encryption metadata is invalid")
+    if encryption["algorithm"] != "AES-256-GCM-CHUNKED":
+        raise ValueError(
+            f"unsupported backup encryption algorithm: {encryption['algorithm']}"
+        )
+    if encryption["kdf"] != "argon2id":
+        raise ValueError(f"unsupported backup KDF: {encryption['kdf']}")
+    salt = _strict_base64(encryption["salt_base64"], "salt")
+    if not 16 <= len(salt) <= 32:
+        raise ValueError("encrypted backup salt size is out of bounds")
+    tag = _strict_base64(encryption["manifest_tag_base64"], "manifest tag")
+    if len(tag) != backup_crypto.KEY_SIZE:
+        raise ValueError("encrypted backup manifest tag must be 32 bytes")
+    kdf_params = encryption["kdf_params"]
+    if not isinstance(kdf_params, dict) or set(kdf_params) != {
+        "iterations",
+        "memory_cost_kib",
+        "lanes",
+    }:
+        raise ValueError("encrypted backup KDF parameters are invalid")
+    iterations = kdf_params["iterations"]
+    memory_cost = kdf_params["memory_cost_kib"]
+    lanes = kdf_params["lanes"]
+    if (
+        type(iterations) is not int
+        or not 1 <= iterations <= 10
+        or type(memory_cost) is not int
+        or not 1024 <= memory_cost <= 262144
+        or type(lanes) is not int
+        or not 1 <= lanes <= 4
+    ):
+        raise ValueError("unsupported backup KDF parameters")
+    if (iterations, memory_cost, lanes) != (
+        backup_crypto.ARGON2_ITERATIONS,
+        backup_crypto.ARGON2_MEMORY_COST_KIB,
+        backup_crypto.ARGON2_LANES,
+    ) or len(salt) != backup_crypto.SALT_SIZE:
+        raise ValueError("unsupported backup KDF profile")
+    for name in members:
+        if _V2_OPAQUE_NAME.fullmatch(name) is None:
+            raise ValueError(f"encrypted backup member name is invalid: {name}")
+    if sorted(members) != [
+        f"payload/{position:08d}.enc" for position in range(len(members))
+    ]:
+        raise ValueError("encrypted backup members must be consecutive from zero")
+    if set(names) != {"manifest.json", *members}:
+        raise ValueError("backup member set does not match manifest")
+    for name in members:
+        if archive.getinfo(name).compress_type != zipfile.ZIP_STORED:
+            raise ValueError(f"encrypted backup member must be ZIP_STORED: {name}")
+    for name, expected in members.items():
+        _verify_v2_member_metadata(name, expected, member_sizes)
+    index_name = manifest["index_member"]
+    index_plaintext_size = members[index_name]["plaintext_size"]
+    if index_plaintext_size > _PRIVATE_INDEX_LIMIT_BYTES:
+        raise ValueError("encrypted backup private index exceeds its format limit")
+
+    # --- Manifest authentication: no private index byte is parsed before this.
+    master_key = backup_crypto.derive_master_key(passphrase, salt)
+    del passphrase
+    manifest_key = backup_crypto.derive_manifest_key(master_key)
+    unsigned = json.loads(json.dumps(manifest))
+    unsigned["encryption"]["manifest_tag_base64"] = ""
+    canonical = json.dumps(
+        unsigned, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    backup_crypto.verify_manifest_tag(manifest_key, canonical, tag)
+
+    # --- Private index: authenticate, decrypt once, then parse and validate.
+    index_metadata = members[index_name]
+    index_key = backup_crypto.derive_member_key(master_key, index_name)
+    with archive.open(index_name) as stream:
+        reader = _HashingReader(stream)
+        index_buffer = io.BytesIO()
+        backup_crypto.decrypt_member(
+            index_name,
+            index_key,
+            reader,
+            index_buffer,
+            plaintext_size=index_metadata["plaintext_size"],
+            chunk_count=index_metadata["chunks"],
+        )
+    if (
+        reader.hexdigest() != index_metadata["sha256"]
+        or reader.size != index_metadata["size"]
+    ):
+        raise ValueError(f"backup member integrity check failed: {index_name}")
+    try:
+        index = json.loads(index_buffer.getvalue())
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"encrypted backup private index is invalid: {exc}") from exc
+    index_error = ValueError("encrypted backup private index is invalid")
+    if not isinstance(index, dict) or set(index) != {
+        "version",
+        "created_at",
+        "records",
+        "include_audio",
+        "members",
+    }:
+        raise index_error
+    if type(index["version"]) is not int or (
+        index["version"] != ENCRYPTED_BACKUP_VERSION
+    ):
+        raise index_error
+    if not isinstance(index["created_at"], str) or not index["created_at"]:
+        raise index_error
+    if type(index["records"]) is not int or index["records"] < 0:
+        raise index_error
+    if type(index["include_audio"]) is not bool:
+        raise index_error
+    mapping = index["members"]
+    if not isinstance(mapping, dict) or not all(
+        isinstance(logical, str) and isinstance(opaque, str)
+        for logical, opaque in mapping.items()
+    ):
+        raise index_error
+    values = list(mapping.values())
+    if len(set(values)) != len(values) or index_name in values:
+        raise ValueError("encrypted backup private index mapping is not one-to-one")
+    if set(values) != set(members) - {index_name}:
+        raise ValueError(
+            "encrypted backup private index mapping does not match the manifest"
+        )
+    if "transcripts.jsonl" not in mapping:
+        raise ValueError(
+            "encrypted backup private index is missing transcripts.jsonl"
+        )
+    logical_identities: set[tuple[str, ...]] = set()
+    for logical in mapping:
+        try:
+            portable_identity = _portable_member_identity(logical, False)
+        except ValueError:
+            raise ValueError(
+                "encrypted backup private index has an unsafe member"
+            ) from None
+        if portable_identity in logical_identities:
+            raise ValueError(
+                "encrypted backup private index has a portable member alias"
+            )
+        logical_identities.add(portable_identity)
+        logical_path = Path(logical)
+        if (
+            logical_path.is_absolute()
+            or ".." in logical_path.parts
+            or "\\" in logical
+        ):
+            raise ValueError(
+                "encrypted backup private index has an unsafe member"
+            )
+        if logical in _V2_FIXED_LOGICAL_MEMBERS:
+            continue
+        if logical.startswith("sources/"):
+            filename = logical[len("sources/") :]
+            if (
+                not filename
+                or Path(filename).name != filename
+                or not index["include_audio"]
+            ):
+                raise ValueError(
+                    "encrypted backup private index has an unsafe member"
+                )
+            continue
+        raise ValueError(
+            "encrypted backup private index has an unsupported member"
+        )
+    if (
+        "config/dictionary.json" in mapping
+        and "config/settings.json" not in mapping
+    ):
+        raise ValueError(
+            "encrypted backup private index maps a dictionary without settings"
+        )
+    for logical, opaque in mapping.items():
+        limit = _FIXED_MEMBER_LIMITS.get(logical)
+        if limit is not None and members[opaque]["plaintext_size"] > limit:
+            raise ValueError(f"backup member exceeds its format limit: {logical}")
+
+    # --- Payload verification: each non-index member exactly once, streaming
+    # ciphertext through a bounded hashing reader into a discard sink.
+    expanded_bytes = 0
+    for opaque in mapping.values():
+        metadata = members[opaque]
+        member_key = backup_crypto.derive_member_key(master_key, opaque)
+        with archive.open(opaque) as stream:
+            reader = _HashingReader(stream)
+            sink = _DiscardWriter()
+            backup_crypto.decrypt_member(
+                opaque,
+                member_key,
+                reader,
+                sink,
+                plaintext_size=metadata["plaintext_size"],
+                chunk_count=metadata["chunks"],
+            )
+        if (
+            reader.hexdigest() != metadata["sha256"]
+            or reader.size != metadata["size"]
+            or sink.size != metadata["plaintext_size"]
+        ):
+            raise ValueError(f"backup member integrity check failed: {opaque}")
+        expanded_bytes += metadata["plaintext_size"]
+    return {
+        "status": "PASS",
+        "path": str(path.resolve()),
+        "version": ENCRYPTED_BACKUP_VERSION,
+        "records": index["records"],
+        "members": len(mapping),
+        "expanded_bytes": expanded_bytes,
         "manifest": manifest,
     }
 
