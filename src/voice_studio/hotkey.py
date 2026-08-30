@@ -105,12 +105,20 @@ class GlobalHotkey:
         if was_active and not self._active:
             self.on_release()
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         listener = self._listener
-        self._listener = None
         self._hotkey = None
         self._active = False
-        if listener:
-            listener.stop()
-            if listener.is_alive():
-                listener.join(timeout=1)
+        if listener is None:
+            return True
+
+        listener.stop()
+        if listener.is_alive():
+            listener.join(timeout=1)
+
+        if listener.is_alive():
+            self._listener = listener
+            return False
+
+        self._listener = None
+        return True
