@@ -1213,8 +1213,15 @@ class VoiceStudioApp(tk.Tk):
         self.cancel_button.configure(state="normal" if value else "disabled")
 
     def _start_hotkey(self) -> None:
-        if self.hotkey:
-            self.hotkey.stop()
+        if self.hotkey is not None:
+            if not self.hotkey.stop():
+                self.status.set(
+                    self._t(
+                        "hotkey_unavailable",
+                        error="listener did not stop within 1 second; retrying",
+                    )
+                )
+                return
             self.hotkey = None
         try:
             self.hotkey = GlobalHotkey(
@@ -2419,8 +2426,7 @@ class VoiceStudioApp(tk.Tk):
     def _settings_dialog(self) -> None:
         # Do not let the currently configured global shortcut start a recording
         # while the user is choosing a new shortcut in this modal dialog.
-        if self.hotkey:
-            self.hotkey.stop()
+        if self.hotkey is not None and self.hotkey.stop():
             self.hotkey = None
         dialog = tk.Toplevel(self)
         dialog.title(self._t("settings_title"))

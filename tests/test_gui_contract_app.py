@@ -147,6 +147,99 @@ def test_settings_dialog_destroys_tk_window_before_restarting_global_hotkey() ->
     assert scheduled == [app._start_hotkey], "the real hotkey starter must be the deferred call"
 
 
+class _FakeHotkey:
+    def __init__(self, stop_outcomes: list[bool]) -> None:
+        self.stop_outcomes = stop_outcomes
+        self.stop_calls = 0
+        self.start_calls = 0
+
+    def stop(self) -> bool:
+        self.stop_calls += 1
+        return self.stop_outcomes.pop(0)
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+
+def _hotkey_app_stub(hotkey: object) -> tuple[VoiceStudioApp, list[str]]:
+    app = object.__new__(VoiceStudioApp)
+    statuses: list[str] = []
+    app.hotkey = hotkey
+    app.settings = SimpleNamespace(hotkey="<f13>")
+    app.status = SimpleNamespace(set=statuses.append)
+    app._t = lambda key, **values: f"{key}:{values.get('error', '')}"
+    return app, statuses
+
+
+def test_start_hotkey_retains_stubborn_listener_without_double_registering(monkeypatch) -> None:
+    existing = _FakeHotkey([False, True])
+    app, statuses = _hotkey_app_stub(existing)
+    constructed: list[_FakeHotkey] = []
+
+    def construct(*_args: object, **_kwargs: object) -> _FakeHotkey:
+        replacement = _FakeHotkey([])
+        constructed.append(replacement)
+        return replacement
+
+    monkeypatch.setattr(app_module, "GlobalHotkey", construct)
+
+    VoiceStudioApp._start_hotkey(app)
+
+    assert app.hotkey is existing
+    assert existing.stop_calls == 1
+    assert constructed == []
+    assert statuses == [
+        "hotkey_unavailable:listener did not stop within 1 second; retrying"
+    ]
+
+    VoiceStudioApp._start_hotkey(app)
+
+    assert existing.stop_calls == 2
+    assert len(constructed) == 1
+    assert app.hotkey is constructed[0]
+    assert constructed[0].start_calls == 1
+
+
+def test_settings_dialog_retains_stubborn_listener_before_building_dialog(monkeypatch) -> None:
+    existing = _FakeHotkey([False])
+    app, _statuses = _hotkey_app_stub(existing)
+
+    class DialogBuildStarted(Exception):
+        pass
+
+    monkeypatch.setattr(
+        app_module.tk,
+        "Toplevel",
+        lambda _app: (_ for _ in ()).throw(DialogBuildStarted()),
+    )
+
+    with pytest.raises(DialogBuildStarted):
+        VoiceStudioApp._settings_dialog(app)
+
+    assert existing.stop_calls == 1
+    assert app.hotkey is existing
+
+
+def test_settings_dialog_clears_stopped_listener_before_building_dialog(monkeypatch) -> None:
+    existing = _FakeHotkey([True])
+    app, _statuses = _hotkey_app_stub(existing)
+
+    class DialogBuildStarted(Exception):
+        pass
+
+    def build_dialog(_app: VoiceStudioApp) -> object:
+        assert app.hotkey is None
+        raise DialogBuildStarted()
+
+    monkeypatch.setattr(app_module.tk, "Toplevel", build_dialog)
+
+    with pytest.raises(DialogBuildStarted):
+        VoiceStudioApp._settings_dialog(app)
+
+    assert existing.stop_calls == 1
+    assert app.hotkey is None
+
+
 def test_startup_does_not_schedule_a_first_run_model_prompt() -> None:
     source = inspect.getsource(VoiceStudioApp.__init__)
 
