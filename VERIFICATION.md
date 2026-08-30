@@ -3,6 +3,59 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-S1 coordinated worker shutdown — process/queue half — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, implementation base
+`c2bfcc9` on local `main`. This record closes only the transcription and model-
+download process/queue half. The app, recorder, hotkey and maintenance-thread
+lifecycle remains open; full W2-S1 and broader R0 completion are not claimed.
+
+The ownership and shutdown contract is:
+
+- `TranscriptionJobController` owns one immutable spawn-generation snapshot at a
+  time: the worker process, request queue, result queue and monotonic token. A
+  lifecycle `RLock` protects generation attach/detach; a run `Lock` serializes
+  public `run()` calls. A close increments the lifecycle epoch and detaches the
+  snapshot before cleanup, so blocked prepare/loading checkpoints cannot allocate
+  a process or either queue after close. `close()` is reusable: a later `run()`
+  creates a fresh generation.
+- A normal close first best-effort enqueues the `None` sentinel, then allows at
+  most `join(timeout=3)` for graceful exit. The shared stop helper then performs
+  `terminate()` followed by `join(timeout=5)`, and, if still alive, `kill()`
+  followed by `join(timeout=2)`. It checks liveness after each bounded join and
+  never performs an unbounded process join.
+- Each owned multiprocessing queue is disposed by `cancel_join_thread()` then
+  `close()`, with an idempotence marker/fallback identity set. Repeated cleanup
+  does not repeat either lifecycle call, and `join_thread()` is never invoked.
+- `ModelCatalog.install()` owns its spawn child, one result queue and its unique
+  `.downloads/{model}-{uuid}` staging directory. The worker is polled with
+  `join(timeout=0.25)` and its result is read with `get(timeout=2)`; every exit,
+  cancellation and timeout reaches the same terminate/kill and queue-disposal
+  `finally` path before removing only that staging directory.
+
+The focused regressions cover one-generation startup under two synchronized
+threads; exactly-once disposal under repeated close; close during slow work,
+prepare and the final pre-start checkpoint; run-after-close recreation; two
+serialized concurrent runs retaining both results; stopped-worker disposal before
+the existing concrete error; and a successful subprocess close with no
+`resource_tracker` or leaked-semaphore stderr. Model-download regressions cover
+cancel and timeout escalation, queue disposal, start/worker failure cleanup and
+staging cleanup while preserving the original source.
+
+| Check | Result |
+| --- | --- |
+| `$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_jobs_app.py -k "concurrent_worker or close_during or run_after_close or concurrent_run or disposes or resource_tracker or no_queues"` | PASS, 7 passed, 14 deselected |
+| `$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_jobs_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_recording_lifecycle_app.py` | PASS, 86 passed |
+| `$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_jobs_app.py tests/test_model_catalog_app.py` | PASS, 48 passed / 1 skipped (Windows symlink privilege boundary) |
+| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compileall, Ruff, Help validation, 452 passed / 3 skipped (Windows symlink privilege boundaries), CLI version `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w2-s1-process-wheel` | PASS; `build\\w2-s1-process-wheel\\voice_studio-0.3.0rc1-py3-none-any.whl`, 689,296 bytes, SHA-256 `4CA44964FCB54074E07180D3618F5A8E0AB9E79327949CC287C2FA634A4BD5E3` |
+| `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` | PASS; no whitespace errors |
+
+The supported source gate ran on Windows x64 only. No physical macOS or Windows
+device matrix, packaged executable shutdown run, real power-loss/forced-
+termination run, or native app/recorder/hotkey acceptance is included here.
+
 ## W2-C1 restore preserves machine-local state — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, base code commit

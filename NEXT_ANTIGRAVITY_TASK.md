@@ -362,3 +362,36 @@ KNOWN ISSUES
 
 Якщо якийсь пункт SCOPE виконати не вдалося — прямо написати який і чому,
 замість того щоб мовчки звузити обсяг.
+
+---
+
+## W2-S1 coordinated worker shutdown — process/queue half
+
+**TASK_ID:** W2-S1-process-queue-half
+
+**СТАТУС:** `PASS` лише для process/queue half. Повний W2-S1 залишається
+`IN PROGRESS`, доки не завершено app/recorder/hotkey/maintenance thread
+lifecycle та native acceptance. Цей запис не закриває R0.
+
+**BASELINE:** `c2bfcc9` (`main`) для Task 1–2 worker implementation.
+
+**ПІДТВЕРДЖЕНО:** `TranscriptionJobController` має один захищений immutable
+worker generation (spawn process, request queue, result queue, token), run calls
+serialized by `_run_lock`, and a monotonic close epoch. Close detaches before
+cleanup, sends a best-effort sentinel, permits `join(3)` for graceful exit, then
+uses `terminate`/`join(5)` and `kill`/`join(2)` when necessary. Every owned queue
+gets idempotent `cancel_join_thread()` plus `close()` without `join_thread()`.
+Model downloads use the same bounded process cleanup, dispose their result queue,
+and remove only their unique staging directory.
+
+Task 2 lifecycle/concurrency tests, model-download escalation tests and the
+resource-tracker subprocess regression passed. Complete Windows `.venv` source
+verification, wheel build and `pip check` evidence are recorded in
+`VERIFICATION.md`; the detailed handoff is
+`.superpowers/sdd/2026-08-30-worker-process-queue-shutdown/task-3-report.md`.
+
+**НАСТУПНИЙ ІНКРЕМЕНТ:** implement the separate app/recorder/hotkey/maintenance
+thread lifecycle plan in
+`docs/superpowers/plans/2026-08-30-app-thread-lifecycle-shutdown.md`. Keep the
+process/queue PASS above intact, and do not promote this record to full W2-S1
+until those thread ownership, bounded join and native acceptance checks pass.
