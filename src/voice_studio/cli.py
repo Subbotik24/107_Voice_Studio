@@ -319,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "storage" and args.storage_command == "audit":
-            _json(LocalStore.open_read_only(data_dir()).audit())
+            _json(LocalStore.audit_existing(data_dir()))
             return 0
 
         _settle_interrupted_restore()

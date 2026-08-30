@@ -78,6 +78,26 @@ def test_storage_audit_read_only_cli_refuses_missing_root_without_bootstrap(
     assert not (tmp_path / "missing-cache").exists()
 
 
+def test_storage_audit_read_only_cli_refuses_missing_database_without_bootstrap(
+    tmp_path, capsys, monkeypatch
+):
+    data = tmp_path / "data-without-db"
+    data.mkdir()
+    marker = data / "marker.txt"
+    marker.write_bytes(b"preserve")
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "missing-config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "missing-cache"))
+    before = _recursive_snapshot(tmp_path)
+
+    assert main(["storage", "audit"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "storage database does not exist" in captured.err
+    assert _recursive_snapshot(tmp_path) == before
+
+
 def test_storage_audit_read_only_cli_preserves_store_and_restore_journal(
     tmp_path, capsys, monkeypatch
 ):

@@ -58,17 +58,30 @@ def test_store_connection_context_releases_sqlite_handle(tmp_path):
         connection.execute("SELECT 1")
 
 
-def test_read_only_store_audit_reads_current_wal_without_journal_mode_write(
+def _recursive_storage_snapshot(root: Path):
+    snapshot = {}
+    for path in sorted(root.rglob("*")):
+        info = path.lstat()
+        snapshot[path.relative_to(root).as_posix()] = (
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+            path.read_bytes() if path.is_file() else None,
+        )
+    return snapshot
+
+
+def test_audit_existing_reads_current_wal_from_temp_without_mutating_live_tree(
     tmp_path, monkeypatch
 ):
     store = LocalStore(tmp_path / "data")
     anchor = sqlite3.connect(store.db_path)
-    statements = []
+    opened_databases = []
     real_connect = sqlite3.connect
 
     def traced_connect(*args, **kwargs):
+        opened_databases.append(args[0])
         connection = real_connect(*args, **kwargs)
-        connection.set_trace_callback(statements.append)
         return connection
 
     try:
@@ -96,28 +109,77 @@ def test_read_only_store_audit_reads_current_wal_without_journal_mode_write(
         )
         anchor.commit()
         assert store.db_path.with_name(f"{store.db_path.name}-wal").is_file()
+        before = _recursive_storage_snapshot(store.root)
         monkeypatch.setattr(storage_module.sqlite3, "connect", traced_connect)
 
-        result = LocalStore.open_read_only(store.root).audit()
+        result = LocalStore.audit_existing(store.root)
 
         assert result["records"] == 1
         assert result["status"] == "PASS"
-        assert not any("journal_mode" in statement.lower() for statement in statements)
+        assert _recursive_storage_snapshot(store.root) == before
+        assert opened_databases
+        assert all(
+            Path(database).resolve() != store.db_path.resolve()
+            for database in opened_databases
+        )
+        assert all(not Path(database).exists() for database in opened_databases)
     finally:
         anchor.close()
 
 
-def test_read_only_store_refuses_incomplete_wal_sidecars_without_creating_peer(tmp_path):
+@pytest.mark.parametrize("change", ["appearing", "disappearing"])
+def test_audit_existing_retries_sidecar_state_churn_without_mutating_live_tree(
+    tmp_path, monkeypatch, change
+):
     store = LocalStore(tmp_path / "data")
-    wal_path = store.db_path.with_name(f"{store.db_path.name}-wal")
-    shm_path = store.db_path.with_name(f"{store.db_path.name}-shm")
-    wal_path.write_bytes(b"incomplete WAL fixture")
+    before = _recursive_storage_snapshot(store.root)
+    real_capture = storage_module._capture_audit_database_state
+    calls = 0
 
-    with pytest.raises(RuntimeError, match="WAL sidecars are incomplete"):
-        LocalStore.open_read_only(store.root)
+    def one_sidecar_appearance(db_path):
+        nonlocal calls
+        calls += 1
+        state = real_capture(db_path)
+        changed_call = 2 if change == "appearing" else 1
+        if calls == changed_call:
+            return (state[0], state[1], ("appeared", 1, 1, 1))
+        return state
 
-    assert wal_path.read_bytes() == b"incomplete WAL fixture"
-    assert not shm_path.exists()
+    monkeypatch.setattr(
+        storage_module, "_capture_audit_database_state", one_sidecar_appearance
+    )
+
+    assert LocalStore.audit_existing(store.root)["status"] == "PASS"
+
+    assert calls == 4
+    assert _recursive_storage_snapshot(store.root) == before
+
+
+def test_audit_existing_refuses_persistent_sidecar_churn_without_mutation(
+    tmp_path, monkeypatch
+):
+    store = LocalStore(tmp_path / "data")
+    before = _recursive_storage_snapshot(store.root)
+    real_capture = storage_module._capture_audit_database_state
+    calls = 0
+
+    def persistent_sidecar_churn(db_path):
+        nonlocal calls
+        calls += 1
+        state = real_capture(db_path)
+        if calls % 2 == 0:
+            return (state[0], state[1], ("appeared", 1, 1, 1))
+        return state
+
+    monkeypatch.setattr(
+        storage_module, "_capture_audit_database_state", persistent_sidecar_churn
+    )
+
+    with pytest.raises(RuntimeError, match="stable storage snapshot"):
+        LocalStore.audit_existing(store.root)
+
+    assert calls == storage_module.AUDIT_SNAPSHOT_ATTEMPTS * 2
+    assert _recursive_storage_snapshot(store.root) == before
 
 
 def test_legacy_payload_defaults_engine():

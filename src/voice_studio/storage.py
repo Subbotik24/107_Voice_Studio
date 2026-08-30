@@ -6,6 +6,7 @@ import os
 import sqlite3
 import stat
 import string
+import tempfile
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,6 +32,18 @@ MAX_MANAGED_TARGET_ATTEMPTS = 16
 _UUID_ALPHABET = string.ascii_letters + string.digits + "!#$%&'()+,-.;=@[]^_{}~`"
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _SUPPORTED_EXPORT_SUFFIXES = {".txt", ".md", ".json", ".srt", ".vtt"}
+AUDIT_SNAPSHOT_ATTEMPTS = 3
+
+_AuditFileFingerprint = tuple[int, int, int, int]
+_AuditDatabaseState = tuple[
+    _AuditFileFingerprint,
+    _AuditFileFingerprint | None,
+    _AuditFileFingerprint | None,
+]
+
+
+class _AuditSnapshotChanged(RuntimeError):
+    pass
 
 
 def _compact_uuid(value: uuid.UUID) -> str:
@@ -58,6 +71,77 @@ def _is_reparse_point(info: os.stat_result) -> bool:
     )
 
 
+def _audit_file_fingerprint(info: os.stat_result) -> _AuditFileFingerprint:
+    return (
+        getattr(info, "st_dev", 0),
+        getattr(info, "st_ino", 0),
+        info.st_size,
+        getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
+    )
+
+
+def _audit_regular_file_state(
+    path: Path, *, required: bool
+) -> _AuditFileFingerprint | None:
+    try:
+        info = path.lstat()
+    except FileNotFoundError as exc:
+        if required:
+            raise FileNotFoundError(f"storage database does not exist: {path}") from exc
+        return None
+    except OSError as exc:
+        raise ValueError(f"storage database entry could not be inspected: {path}") from exc
+    if _is_reparse_point(info) or not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"storage database entry is not a real file: {path}")
+    return _audit_file_fingerprint(info)
+
+
+def _capture_audit_database_state(db_path: Path) -> _AuditDatabaseState:
+    database = _audit_regular_file_state(db_path, required=True)
+    assert database is not None
+    wal = _audit_regular_file_state(
+        db_path.with_name(f"{db_path.name}-wal"), required=False
+    )
+    shm = _audit_regular_file_state(
+        db_path.with_name(f"{db_path.name}-shm"), required=False
+    )
+    return database, wal, shm
+
+
+def _copy_audit_file(
+    source: Path,
+    destination: Path,
+    expected: _AuditFileFingerprint,
+) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(source, flags)
+    except (FileNotFoundError, OSError) as exc:
+        raise _AuditSnapshotChanged(f"storage database changed while opening {source}") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            _is_reparse_point(opened)
+            or not stat.S_ISREG(opened.st_mode)
+            or _audit_file_fingerprint(opened) != expected
+        ):
+            raise _AuditSnapshotChanged(
+                f"storage database changed before snapshot copy: {source}"
+            )
+        with os.fdopen(descriptor, "rb", closefd=False) as input_stream:
+            with destination.open("xb") as output_stream:
+                for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                    output_stream.write(block)
+        if _audit_file_fingerprint(os.fstat(descriptor)) != expected:
+            raise _AuditSnapshotChanged(
+                f"storage database changed during snapshot copy: {source}"
+            )
+    finally:
+        os.close(descriptor)
+
+
 class LocalStore:
     def __init__(self, root: Path):
         self.root = root.expanduser()
@@ -65,14 +149,13 @@ class LocalStore:
         self.exports = self.root / "exports"
         self.models = self.root / "models"
         self.db_path = self.root / "history.sqlite3"
-        self._read_only = False
         for path in (self.root, self.sources, self.exports, self.models):
             path.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     @classmethod
-    def open_read_only(cls, root: Path) -> LocalStore:
-        """Open an existing store without bootstrap, migration, or filesystem writes."""
+    def audit_existing(cls, root: Path) -> dict[str, object]:
+        """Audit an existing store through a stable temporary SQLite snapshot."""
 
         expanded = root.expanduser()
         try:
@@ -82,55 +165,75 @@ class LocalStore:
         if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
             raise ValueError(f"storage root is not a real directory: {expanded}")
         db_path = expanded / "history.sqlite3"
-        try:
-            db_info = db_path.lstat()
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(f"storage database does not exist: {db_path}") from exc
-        if _is_reparse_point(db_info) or not stat.S_ISREG(db_info.st_mode):
-            raise ValueError(f"storage database is not a real file: {db_path}")
+        root_identity = (
+            getattr(root_info, "st_dev", 0),
+            getattr(root_info, "st_ino", 0),
+        )
+        _audit_regular_file_state(db_path, required=True)
+        _audit_regular_file_state(
+            db_path.with_name(f"{db_path.name}-wal"), required=False
+        )
+        _audit_regular_file_state(
+            db_path.with_name(f"{db_path.name}-shm"), required=False
+        )
 
-        sidecar_paths = [
-            db_path.with_name(f"{db_path.name}-wal"),
-            db_path.with_name(f"{db_path.name}-shm"),
-        ]
-        sidecar_info: list[os.stat_result | None] = []
-        for path in sidecar_paths:
+        with tempfile.TemporaryDirectory(prefix="voice-studio-audit-") as temporary:
+            temporary_root = Path(temporary).resolve(strict=True)
+            live_root = expanded.resolve(strict=True)
             try:
-                info = path.lstat()
-            except FileNotFoundError:
-                sidecar_info.append(None)
-                continue
-            if _is_reparse_point(info) or not stat.S_ISREG(info.st_mode):
-                raise ValueError(f"storage database sidecar is not a real file: {path}")
-            sidecar_info.append(info)
-        if (sidecar_info[0] is None) != (sidecar_info[1] is None):
-            raise RuntimeError(
-                "storage WAL sidecars are incomplete; read-only audit was refused"
-            )
-        store = cls.__new__(cls)
-        store.root = expanded
-        store.sources = expanded / "sources"
-        store.exports = expanded / "exports"
-        store.models = expanded / "models"
-        store.db_path = db_path
-        store._read_only = True
-        store._read_only_immutable = sidecar_info[0] is None
-        return store
+                temporary_root.relative_to(live_root)
+            except ValueError:
+                pass
+            else:
+                raise RuntimeError("storage audit temporary directory is inside live data")
+
+            for attempt in range(AUDIT_SNAPSHOT_ATTEMPTS):
+                attempt_root = temporary_root / f"attempt-{attempt + 1}"
+                attempt_root.mkdir()
+                snapshot_db = attempt_root / db_path.name
+                try:
+                    before = _capture_audit_database_state(db_path)
+                    _copy_audit_file(db_path, snapshot_db, before[0])
+                    if before[1] is not None:
+                        _copy_audit_file(
+                            db_path.with_name(f"{db_path.name}-wal"),
+                            snapshot_db.with_name(f"{snapshot_db.name}-wal"),
+                            before[1],
+                        )
+                    after = _capture_audit_database_state(db_path)
+                    current_root = expanded.lstat()
+                except (_AuditSnapshotChanged, FileNotFoundError, OSError):
+                    continue
+                if (
+                    _is_reparse_point(current_root)
+                    or not stat.S_ISDIR(current_root.st_mode)
+                    or root_identity
+                    != (
+                        getattr(current_root, "st_dev", 0),
+                        getattr(current_root, "st_ino", 0),
+                    )
+                    or before != after
+                ):
+                    continue
+
+                store = cls.__new__(cls)
+                store.root = expanded
+                store.sources = expanded / "sources"
+                store.exports = expanded / "exports"
+                store.models = expanded / "models"
+                store.db_path = snapshot_db
+                return store.audit()
+        raise RuntimeError(
+            "could not capture a stable storage snapshot; close active writers and retry"
+        )
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        if self._read_only:
-            uri = self.db_path.resolve(strict=True).as_uri() + "?mode=ro"
-            if self._read_only_immutable:
-                uri += "&immutable=1"
-            connection = sqlite3.connect(uri, timeout=30, uri=True)
-        else:
-            connection = sqlite3.connect(self.db_path, timeout=30)
+        connection = sqlite3.connect(self.db_path, timeout=30)
         try:
             connection.row_factory = sqlite3.Row
-            if not self._read_only:
-                connection.execute("PRAGMA foreign_keys = ON")
-                connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
             with connection:
                 yield connection
         finally:
