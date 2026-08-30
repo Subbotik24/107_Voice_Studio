@@ -85,6 +85,22 @@ def test_storage_repair_missing_cli_requires_confirmation(tmp_path, capsys, monk
     assert original.read_bytes() == b"user-owned-original"
 
 
+def test_storage_repair_missing_cli_reports_unknown_id_without_mutation(
+    tmp_path, capsys, monkeypatch
+):
+    store, item, original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
+
+    assert main(["storage", "repair-missing", "unknown", "--yes"]) == 3
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == "transcript not found: unknown"
+    persisted = store.get(item.id)
+    assert persisted.source_path == str(managed)
+    assert persisted.audio_retained is True
+    assert original.read_bytes() == b"user-owned-original"
+
+
 def test_storage_repair_missing_cli_refuses_wrong_expected_path_without_mutation(
     tmp_path, capsys, monkeypatch
 ):

@@ -362,13 +362,16 @@ def main(argv: list[str] | None = None) -> int:
                 _json(store.audit())
                 return 0
             if args.storage_command == "repair-missing":
-                _json(
-                    store.repair_missing_source(
+                try:
+                    repaired = store.repair_missing_source(
                         args.transcript_id,
                         confirmed=args.yes,
                         expected_path=args.expected_path,
                     )
-                )
+                except KeyError as exc:
+                    print(exc.args[0], file=sys.stderr)
+                    return 3
+                _json(repaired)
                 return 0
             if args.storage_command == "cleanup-orphans":
                 _json(store.cleanup_orphans(confirmed=args.yes))
