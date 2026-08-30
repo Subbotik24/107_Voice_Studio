@@ -21,6 +21,7 @@ from .model_release import (
     registry_url,
     unpack_verified_archive,
 )
+from .process_lifecycle import _dispose_queue, _stop_process
 from .storage import sha256_file
 
 CATALOG_VERSION = 1
@@ -627,12 +628,8 @@ class ModelCatalog:
         try:
             while process.is_alive():
                 if cancelled and cancelled():
-                    process.terminate()
-                    process.join(timeout=5)
                     raise RuntimeError(f"model download cancelled: {value}")
                 if time.monotonic() - started > timeout_seconds:
-                    process.terminate()
-                    process.join(timeout=5)
                     raise TimeoutError(
                         f"model download timed out after {timeout_seconds} seconds: {value}"
                     )
@@ -656,9 +653,8 @@ class ModelCatalog:
                 revision=revision,
             )
         finally:
-            if process.is_alive():
-                process.terminate()
-                process.join(timeout=5)
+            _stop_process(process)
+            _dispose_queue(result_queue)
             if temporary.exists():
                 shutil.rmtree(temporary)
 

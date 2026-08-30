@@ -9,7 +9,58 @@ from voice_studio.dictionary import TerminologyDictionary
 from voice_studio.engines.base import EngineResult
 from voice_studio.jobs import JobCancelled, TranscriptionJobController
 from voice_studio.models import Segment, Settings
+from voice_studio.process_lifecycle import _dispose_queue, _stop_process
 from voice_studio.storage import LocalStore
+
+
+class StubbornProcess:
+    def __init__(self):
+        self.events = []
+        self.alive = True
+
+    def is_alive(self):
+        return self.alive
+
+    def terminate(self):
+        self.events.append("terminate")
+
+    def join(self, timeout=None):
+        self.events.append(("join", timeout))
+
+    def kill(self):
+        self.events.append("kill")
+        self.alive = False
+
+
+class RecordingQueue:
+    def __init__(self):
+        self.cancel_calls = 0
+        self.close_calls = 0
+
+    def cancel_join_thread(self):
+        self.cancel_calls += 1
+
+    def close(self):
+        self.close_calls += 1
+
+
+def test_stop_process_escalates_with_bounded_joins():
+    process = StubbornProcess()
+
+    _stop_process(process)
+
+    assert process.events == ["terminate", ("join", 5), "kill", ("join", 2)]
+    assert not process.is_alive()
+
+
+def test_dispose_queue_is_idempotent_and_never_joins_feeder():
+    queue_object = RecordingQueue()
+
+    _dispose_queue(queue_object)
+    _dispose_queue(queue_object)
+
+    assert queue_object.cancel_calls == 1
+    assert queue_object.close_calls == 1
 
 
 def fixture_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:

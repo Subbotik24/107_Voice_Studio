@@ -80,6 +80,78 @@ def test_offline_mode_blocks_download_without_starting_worker(tmp_path):
         catalog.install("tiny", offline_only=True)
 
 
+def test_cancelled_download_bounds_stubborn_process_and_disposes_queue(
+    tmp_path, monkeypatch
+):
+    class RecordingQueue:
+        def __init__(self):
+            self.events = []
+
+        def cancel_join_thread(self):
+            self.events.append("cancel_join_thread")
+
+        def close(self):
+            self.events.append("close")
+
+    class StubbornProcess:
+        def __init__(self):
+            self.events = []
+            self.alive = True
+            self.exitcode = None
+
+        def start(self):
+            self.events.append("start")
+
+        def is_alive(self):
+            return self.alive
+
+        def terminate(self):
+            self.events.append("terminate")
+
+        def join(self, timeout=None):
+            self.events.append(("join", timeout))
+
+        def kill(self):
+            self.events.append("kill")
+            self.alive = False
+
+    class SpawnContext:
+        def __init__(self):
+            self.result_queue = RecordingQueue()
+            self.process = StubbornProcess()
+
+        def Queue(self):
+            return self.result_queue
+
+        def Process(self, *, args, **_kwargs):
+            assert args[3] is self.result_queue
+            return self.process
+
+    context = SpawnContext()
+    original = tmp_path / "original.wav"
+    original.write_bytes(b"original")
+    catalog = ModelCatalog(tmp_path / "managed")
+    monkeypatch.setattr(model_catalog_module, "registry_url", lambda: None)
+    monkeypatch.setattr(
+        model_catalog_module.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": 10**15})(),
+    )
+    monkeypatch.setattr(
+        model_catalog_module.multiprocessing,
+        "get_context",
+        lambda _name: context,
+    )
+
+    with pytest.raises(RuntimeError, match="model download cancelled: tiny"):
+        catalog.install("tiny", cancelled=lambda: True)
+
+    assert context.process.events == ["start", "terminate", ("join", 5), "kill", ("join", 2)]
+    assert context.result_queue.events == ["cancel_join_thread", "close"]
+    assert list(catalog.downloads.iterdir()) == []
+    assert original.read_bytes() == b"original"
+
+
 def test_uninstalled_model_has_actionable_error(tmp_path):
     catalog = ModelCatalog(tmp_path / "managed")
     with pytest.raises(FileNotFoundError, match="models install tiny"):
