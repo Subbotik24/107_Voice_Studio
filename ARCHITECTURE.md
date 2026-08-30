@@ -92,6 +92,13 @@ SQLite використовує `PRAGMA user_version`. `.voice-backup` міст�
 JSONL records, SHA‑256 inventory та опційні managed copies. Restore зберігає попереднє
 сховище в recovery directory.
 
+Підміна сховища під час restore — дві операції rename. Перед першою на диск
+атомарно пишеться restore journal (`.<data_root>.restore-journal.json`) зі
+шляхами, лічильником записів і міткою етапу; секретів і тексту транскриптів він
+не містить. `recover_interrupted_restore()` викликається до першого відкриття
+`LocalStore` у GUI та CLI і детерміновано або доводить підміну до кінця, або
+відкочує її. Recovery directory не видаляється автоматично ніколи.
+
 ## 6. Межі поточної версії
 
 - hard cancellation виконується на process boundary, не всередині model kernels;

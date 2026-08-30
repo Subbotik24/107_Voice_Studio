@@ -10,7 +10,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
-from .backup import create_backup, restore_backup, verify_backup
+from .backup import (
+    create_backup,
+    recover_interrupted_restore,
+    restore_backup,
+    verify_backup,
+)
 from .cloud_cleanup import list_ollama_models, propose_cleanup
 from .cloud_secrets import (
     delete_openai_api_key,
@@ -154,6 +159,10 @@ class VoiceStudioApp(tk.Tk):
             self.settings = Settings()
             settings_error = str(exc)
         self._configure_theme()
+        # A restore interrupted by a process death must be settled before the
+        # store is opened, otherwise an empty LocalStore would be created beside
+        # the two directories that hold the real data.
+        self._restore_recovery = self._settle_interrupted_restore()
         self.store = LocalStore(data_dir())
         self.job_controller = TranscriptionJobController(self.store, cache_dir())
         self.recorder = AudioRecorder()
@@ -182,6 +191,7 @@ class VoiceStudioApp(tk.Tk):
         self._settings_ollama_combo: ttk.Combobox | None = None
         self._settings_info_var: tk.StringVar | None = None
         self._build_ui()
+        self._report_restore_recovery()
         self._refresh_history()
         self.after(100, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._close)
@@ -195,6 +205,39 @@ class VoiceStudioApp(tk.Tk):
                     self._t("settings_file_error", error=settings_error),
                 ),
             )
+
+    def _settle_interrupted_restore(self) -> dict[str, Any]:
+        """Finish or undo an interrupted restore. Never blocks application start."""
+
+        try:
+            return recover_interrupted_restore(
+                data_dir(), settings_target=settings_path()
+            )
+        except Exception as exc:  # startup must survive any journal defect
+            return {"status": "FAIL", "action": "none", "error": str(exc)}
+
+    def _report_restore_recovery(self) -> None:
+        result = self._restore_recovery
+        action = result.get("action", "none")
+        if result.get("status") != "PASS":
+            message = self._t(
+                "restore_recovery_failed", error=result.get("error", "unknown")
+            )
+            self.status.set(message)
+            self.after(
+                250, lambda: messagebox.showwarning(self._t("backup"), message)
+            )
+            return
+        key = {
+            "completed": "restore_recovered",
+            "settings_completed": "restore_recovered",
+            "rolled_back": "restore_rolled_back",
+            "staging_discarded": "restore_staging_discarded",
+        }.get(action)
+        if key is None:
+            return
+        values = {"records": result.get("records") or 0} if key == "restore_recovered" else {}
+        self.status.set(self._t(key, **values))
 
     def _install_window_icon(self) -> None:
         icon = tk.PhotoImage(master=self, width=32, height=32)

@@ -58,3 +58,13 @@ voice-studio diagnostics --export report.json
 
 Do not attach private audio, transcript text, API keys, a database, a backup,
 or complete local paths.
+
+## Restore was interrupted and history looks empty
+
+If backup restore was interrupted and `*.restore-*` and `*.recovery-*`
+directories are present beside storage, launch VOICE Studio again. The app uses
+the restore journal to deterministically complete or roll back the operation
+and reports the result in the status bar. If a journal warning appears, do not
+delete anything manually; create a redacted diagnostics report. A
+`*.recovery-*` directory is never removed automatically and should be deleted
+only after history has been checked.

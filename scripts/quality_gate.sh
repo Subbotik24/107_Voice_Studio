@@ -26,5 +26,6 @@ fi
 
 "$PYTHON_BIN" -m compileall -q src tests scripts packaging
 "$PYTHON_BIN" -m ruff check src tests scripts packaging
+PYTHONPATH=src "$PYTHON_BIN" scripts/check_help.py
 PYTHONPATH=src "$PYTHON_BIN" -m pytest -q
 PYTHONPATH=src "$PYTHON_BIN" -m voice_studio.cli --version >/dev/null

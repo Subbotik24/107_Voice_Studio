@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from voice_studio.i18n import UI_LANGUAGE_CHOICES, translate
+from voice_studio.i18n import _CATALOGS, UI_LANGUAGE_CHOICES, translate
 from voice_studio.models import Settings
 
 
@@ -76,3 +76,19 @@ def test_transcript_language_can_be_formatted_without_conflicting_with_locale() 
     assert translate(
         "en", "transcription_done", language="uk", segments=3, rtf=""
     ) == "Done — uk, 3 segment(s)"
+
+
+def test_every_catalog_carries_exactly_the_same_keys() -> None:
+    """The import-time contract raises; this pins the invariant it protects."""
+
+    uk, cs, en = (set(_CATALOGS[code]) for code, _label in UI_LANGUAGE_CHOICES)
+
+    assert uk == cs == en
+
+
+def test_interrupted_restore_outcomes_are_localized_everywhere() -> None:
+    for code, _label in UI_LANGUAGE_CHOICES:
+        assert translate(code, "restore_recovered", records=2)
+        assert translate(code, "restore_rolled_back")
+        assert translate(code, "restore_staging_discarded")
+        assert translate(code, "restore_recovery_failed", error="boom")

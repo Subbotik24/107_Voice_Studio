@@ -63,3 +63,7 @@ is never changed. OpenAI text cleanup requires separate consent.
   file is never deleted.
 - **Backup** creates, verifies, or restores `.voice-backup`. Ollama/Whisper
   models and external originals are not included.
+
+If a restore is interrupted by power loss or forced process termination, VOICE
+Studio completes it or rolls it back on the next launch and reports the result
+in the status bar. The recovery directory remains on disk in either case.

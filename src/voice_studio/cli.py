@@ -8,7 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
-from .backup import create_backup, restore_backup, verify_backup
+from .backup import (
+    create_backup,
+    recover_interrupted_restore,
+    restore_backup,
+    verify_backup,
+)
 from .cloud_cleanup import list_ollama_models, propose_cleanup
 from .cloud_secrets import (
     delete_openai_api_key,
@@ -30,6 +35,22 @@ from .storage import LocalStore
 
 def _json(payload: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _settle_interrupted_restore() -> dict[str, Any]:
+    """Settle a half-applied restore before any store is opened.
+
+    A non-trivial outcome is always reported on stderr, so a command that only
+    prints its own JSON payload never hides the fact that stored data moved.
+    """
+
+    result = recover_interrupted_restore(data_dir(), settings_target=settings_path())
+    if result.get("status") != "PASS" or result.get("action") != "none":
+        print(
+            "restore-journal: " + json.dumps(result, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    return result
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -270,8 +291,14 @@ def main(argv: list[str] | None = None) -> int:
                 _json(verify_backup(args.file))
                 return 0
             if args.backup_command == "restore":
-                _json(restore_backup(args.file, data_dir(), settings_target=settings_path()))
+                recovered = _settle_interrupted_restore()
+                restored = restore_backup(
+                    args.file, data_dir(), settings_target=settings_path()
+                )
+                restored["recovered_interrupted_restore"] = recovered
+                _json(restored)
                 return 0
+            _settle_interrupted_restore()
             store = LocalStore(data_dir())
             _json(
                 create_backup(
@@ -283,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        _settle_interrupted_restore()
         store = LocalStore(data_dir())
 
         if args.command == "models":

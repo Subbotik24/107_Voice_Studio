@@ -56,3 +56,7 @@ potvrďte. Funkce **Vrátit AI úpravu** obnoví předchozí opravený text. Nem
   uživatele nikdy nemaže.
 - **Záloha** vytváří, ověřuje a obnovuje `.voice-backup`. Ollama/Whisper modely
   a externí originály se do archivu nevkládají.
+
+Pokud obnovení přeruší výpadek napájení nebo nucené ukončení procesu, VOICE
+Studio je při příštím spuštění dokončí nebo vrátí zpět a výsledek zobrazí ve
+stavovém řádku. Adresář recovery zůstane v obou případech na disku.

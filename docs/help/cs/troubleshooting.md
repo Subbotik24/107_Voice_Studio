@@ -57,3 +57,12 @@ voice-studio diagnostics --export report.json
 
 Nepřikládejte soukromý zvuk, přepis, API keys, databázi, backup ani úplné místní
 cesty.
+
+## Obnovení bylo přerušeno a historie vypadá prázdná
+
+Pokud bylo obnovení zálohy přerušeno a vedle úložiště jsou adresáře
+`*.restore-*` a `*.recovery-*`, spusťte VOICE Studio znovu. Program použije
+journal obnovení, operaci deterministicky dokončí nebo vrátí zpět a výsledek
+zobrazí ve stavovém řádku. Při varování o journalu nic ručně nemažte a vytvořte
+redacted diagnostics report. Adresář `*.recovery-*` se automaticky nemaže;
+odstraňte jej až po kontrole historie.
