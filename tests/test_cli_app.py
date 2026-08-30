@@ -44,6 +44,46 @@ def test_model_catalog_hook_is_limited_to_models_commands(tmp_path, capsys, monk
     assert "model-catalog:" in capsys.readouterr().err
 
 
+def test_models_reconcile_reports_failure_and_reuses_single_result(
+    tmp_path, capsys, monkeypatch
+):
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+    reconciliation = {
+        "status": "FAIL",
+        "action": "attention",
+        "adopted": [],
+        "dropped": [],
+        "blocked": [],
+        "staging_removed": [],
+        "staging_kept": [],
+        "residue_removed": [],
+        "catalog_quarantined": None,
+        "error": "cannot scan model catalog",
+    }
+    calls = 0
+
+    class FailingCatalog:
+        def __init__(self, _root):
+            pass
+
+        def reconcile(self):
+            nonlocal calls
+            calls += 1
+            return reconciliation
+
+    monkeypatch.setattr(cli, "ModelCatalog", FailingCatalog)
+
+    assert main(["models", "reconcile"]) == 2
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == reconciliation
+    assert captured.err.startswith("model-catalog:")
+    assert json.loads(captured.err.removeprefix("model-catalog:")) == reconciliation
+    assert calls == 1
+
+
 def test_transcribe_cli_selects_local_ollama_profile(monkeypatch):
     monkeypatch.setattr(cli, "load_settings", Settings)
     args = cli.build_parser().parse_args(
