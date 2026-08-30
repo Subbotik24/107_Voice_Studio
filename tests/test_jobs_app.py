@@ -291,6 +291,103 @@ def test_close_during_prepare_cancels_before_worker_creation(tmp_path, make_wav,
     assert source.exists()
 
 
+def test_close_between_loading_checkpoint_and_worker_creation_cancels_run(
+    tmp_path,
+    make_wav,
+    monkeypatch,
+):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(store, tmp_path / "cache")
+    context = ControllerContext()
+    context.first_start_release.set()
+    controller._context = context
+    ensure_started = threading.Event()
+    release_ensure = threading.Event()
+    original_ensure = controller._ensure_worker
+
+    def paused_ensure(expected_epoch=None):
+        ensure_started.set()
+        assert release_ensure.wait(timeout=5)
+        if expected_epoch is None:
+            return original_ensure()
+        return original_ensure(expected_epoch=expected_epoch)
+
+    monkeypatch.setattr(controller, "_ensure_worker", paused_ensure)
+    outcome = []
+
+    def run_job():
+        try:
+            controller.run(source, Settings(model="fixture"), TerminologyDictionary())
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=run_job)
+    thread.start()
+    assert ensure_started.wait(timeout=10)
+    assert controller._generation is None
+    controller.close()
+    release_ensure.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], JobCancelled)
+    assert context.processes == []
+    assert controller._generation is None
+    assert list(store.sources.iterdir()) == []
+    assert source.exists()
+
+
+def test_close_immediately_after_generation_creation_detaches_safely(
+    tmp_path,
+    make_wav,
+    monkeypatch,
+):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(store, tmp_path / "cache")
+    context = ControllerContext()
+    context.first_start_release.set()
+    controller._context = context
+    generation_created = threading.Event()
+    release_ensure = threading.Event()
+    original_ensure = controller._ensure_worker
+
+    def paused_ensure(expected_epoch=None):
+        generation = original_ensure(expected_epoch=expected_epoch)
+        generation_created.set()
+        assert release_ensure.wait(timeout=5)
+        return generation
+
+    monkeypatch.setattr(controller, "_ensure_worker", paused_ensure)
+    outcome = []
+
+    def run_job():
+        try:
+            controller.run(source, Settings(model="fixture"), TerminologyDictionary())
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=run_job)
+    thread.start()
+    assert generation_created.wait(timeout=10)
+    assert controller._generation is not None
+    controller.close()
+    release_ensure.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], JobCancelled)
+    assert controller._generation is None
+    assert context.processes[0].alive is False
+    assert all(queue_object.cancel_calls == 1 for queue_object in context.queues)
+    assert all(queue_object.close_calls == 1 for queue_object in context.queues)
+    assert list(store.sources.iterdir()) == []
+    assert source.exists()
+
+
 def test_run_after_close_starts_a_new_generation(tmp_path, make_wav):
     source = make_wav(tmp_path / "original.wav")
     controller = TranscriptionJobController(

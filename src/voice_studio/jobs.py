@@ -142,12 +142,17 @@ class TranscriptionJobController:
                 return True
         return cancelled() if cancelled is not None else False
 
-    def _ensure_worker(self) -> _WorkerGeneration:
+    def _ensure_worker(self, *, expected_epoch: int | None = None) -> _WorkerGeneration:
         stale: _WorkerGeneration | None = None
         failed: _WorkerGeneration | None = None
         generation: _WorkerGeneration | None = None
         startup_error: BaseException | None = None
         with self._lifecycle_lock:
+            if (
+                expected_epoch is not None
+                and self._lifecycle_epoch != expected_epoch
+            ):
+                raise JobCancelled("transcription worker was closed")
             current = self._generation
             if current is not None:
                 try:
@@ -355,7 +360,7 @@ class TranscriptionJobController:
             budget.checkpoint("prepare")
             job_id = uuid.uuid4().hex
             budget.checkpoint("loading")
-            generation = self._ensure_worker()
+            generation = self._ensure_worker(expected_epoch=epoch)
             report("loading")
             budget.checkpoint("loading")
             self._submit(

@@ -28,11 +28,11 @@ passed (`84 passed`).
 
 ## VERIFIED
 
-- `.venv\Scripts\python.exe -m pytest -q tests/test_jobs_app.py`: `19 passed`
-- `.venv\Scripts\python.exe -m pytest -q tests/test_jobs_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_recording_lifecycle_app.py`: `84 passed`
+- `.venv\Scripts\python.exe -m pytest -q tests/test_jobs_app.py`: `21 passed`
+- `.venv\Scripts\python.exe -m pytest -q tests/test_jobs_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_recording_lifecycle_app.py`: `86 passed`
 - Ruff over `src tests scripts packaging`: PASS
 - `compileall` over `src tests scripts packaging`: PASS
-- `scripts\quality_gate.ps1` with repository `.venv` Python 3.12: `450 passed,
+- `scripts\quality_gate.ps1` with repository `.venv` Python 3.12: `452 passed,
   3 skipped` (Windows symlink privilege boundaries)
 - `git diff --check`: PASS
 
@@ -46,8 +46,20 @@ passed (`84 passed`).
   original source.
 - The subprocess smoke now performs a successful fixture worker request/result
   before close, exercising both queue feeder paths.
-- Review-round focused tests: `7 passed`; full quality gate rerun: `450 passed,
+- Review-round focused tests: `7 passed`; full quality gate rerun: `452 passed,
   3 skipped`.
+
+## REVIEW ROUND 2
+
+- `_ensure_worker(expected_epoch=...)` validates the captured run epoch under
+  `_lifecycle_lock` before creating queues or a process; direct/restart callers
+  retain the explicit no-epoch path.
+- Added a deterministic checkpoint-to-ensure regression proving close prevents
+  all queue/process allocation after the final pre-start checkpoint.
+- Added an immediate-post-generation close regression proving detachment,
+  bounded stop, and exactly-once queue disposal remain safe.
+- Focused lifecycle selector: `7 passed, 14 deselected`; integration suite:
+  `86 passed`; full quality gate: `452 passed, 3 skipped`.
 
 ## KNOWN ISSUES
 
