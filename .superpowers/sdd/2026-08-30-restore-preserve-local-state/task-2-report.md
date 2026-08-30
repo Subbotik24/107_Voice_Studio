@@ -59,3 +59,20 @@ The local-state copy remains best-effort no-follow validation. A malicious
 same-account actor can still replace a path between filesystem syscalls; this
 is outside the documented local/private threat boundary. Recovery after an
 actual power loss on physical Windows/macOS remains pending native acceptance.
+
+## Fix round 1 — ordinary copy failure coverage
+
+Added `test_local_state_copy_error_cleans_staging_and_keeps_live_root`. The
+copy seam copies `exports/` into staging and raises
+`OSError("simulated local-state copy failure")`; unlike the process-death test,
+staging cleanup is not disabled. The test proves the concrete error propagates,
+both live local-state trees retain exact bytes, `finally` removes temporary
+staging, the `swap_started` journal remains, no recovery directory is created,
+and `recover_interrupted_restore()` returns `PASS` / `staging_discarded` while
+clearing the journal. No production defect was found in this round.
+
+```text
+focused ordinary-copy-failure test: 1 passed
+```
+
+Commit: `test(backup): cover local-state copy failure cleanup`

@@ -552,6 +552,42 @@ def test_interrupted_local_state_copy_keeps_live_root(tmp_path, make_wav, monkey
     assert not _recovery_directories(data)
 
 
+def test_local_state_copy_error_cleans_staging_and_keeps_live_root(
+    tmp_path, make_wav, monkeypatch
+):
+    archive_path = _seed_backup(tmp_path, make_wav)
+    data = tmp_path / "data"
+    LocalStore(data).save(transcript("current", "c" * 64, ""))
+    (data / "models").mkdir(parents=True, exist_ok=True)
+    (data / "models" / "sentinel.bin").write_bytes(b"live-model")
+    (data / "exports").mkdir(parents=True, exist_ok=True)
+    (data / "exports" / "sentinel.txt").write_bytes(b"live-export")
+    original_copy_tree = backup_module._copy_local_restore_tree
+
+    def failing_copy(data_root, staging):
+        original_copy_tree(data_root / "exports", staging / "exports")
+        raise OSError("simulated local-state copy failure")
+
+    monkeypatch.setattr(backup_module, "_copy_local_restore_state", failing_copy)
+    with pytest.raises(OSError, match="local-state copy failure"):
+        restore_backup(archive_path, data)
+
+    assert data.is_dir()
+    assert (data / "models" / "sentinel.bin").read_bytes() == b"live-model"
+    assert (data / "exports" / "sentinel.txt").read_bytes() == b"live-export"
+    assert not _staging_directories(data)
+    assert _journal(data).is_file()
+    assert not _recovery_directories(data)
+
+    monkeypatch.undo()
+    result = backup_module.recover_interrupted_restore(data)
+
+    assert result["status"] == "PASS"
+    assert result["action"] == "staging_discarded"
+    assert not _journal(data).exists()
+    assert not _recovery_directories(data)
+
+
 def test_interrupted_swap_rolls_back_when_staging_is_gone(tmp_path, make_wav, monkeypatch):
     archive_path = _seed_backup(tmp_path, make_wav)
     data = tmp_path / "data"
