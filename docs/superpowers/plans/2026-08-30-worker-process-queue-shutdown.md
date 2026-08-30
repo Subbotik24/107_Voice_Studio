@@ -179,4 +179,3 @@ git diff dba3407..HEAD --check
 ```
 
 Confirm no model weights, private paths, secrets, or unbounded `join()` calls entered the scoped files and local `main` remains unpushed.
-
