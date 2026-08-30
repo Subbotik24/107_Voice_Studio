@@ -316,8 +316,9 @@ class VoiceStudioApp(tk.Tk):
                     "ollama_models", {"models": [], "error": str(exc)[:500]}
                 )
 
-        self._ollama_discovery_thread = self._start_worker(
-            "ollama-model-discovery", discover
+        thread = self._start_worker("ollama-model-discovery", discover)
+        self._assign_worker_alias(
+            "ollama-model-discovery", thread, "_ollama_discovery_thread"
         )
 
     def _start_worker(
@@ -381,6 +382,22 @@ class VoiceStudioApp(tk.Tk):
                 return False
             self.events.put((event, value))
         return True
+
+    def _assign_worker_alias(
+        self,
+        role: str,
+        thread: threading.Thread | None,
+        attribute: str,
+    ) -> None:
+        """Publish a compatibility handle only while its registry entry owns it."""
+
+        lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
+        workers = self.__dict__.setdefault("_worker_threads", {})
+        with lock:
+            if thread is not None and workers.get(role) is thread:
+                setattr(self, attribute, thread)
+            elif self.__dict__.get(attribute) is thread:
+                setattr(self, attribute, None)
 
     def _join_workers(self, timeout_seconds: float = 3.0) -> tuple[str, ...]:
         """Join daemon workers using one monotonic shutdown budget."""
@@ -3097,7 +3114,7 @@ class VoiceStudioApp(tk.Tk):
                     self._post_event("backup_error", (action, exc))
 
             thread = self._start_worker("maintenance", work, daemon=False)
-            self._maintenance_thread = thread
+            self._assign_worker_alias("maintenance", thread, "_maintenance_thread")
 
         def create() -> None:
             destination = filedialog.asksaveasfilename(

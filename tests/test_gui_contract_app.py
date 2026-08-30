@@ -456,6 +456,7 @@ def _worker_registry_stub() -> VoiceStudioApp:
     app._worker_threads = {}
     app._shutdown_residue_threads = ()
     app._cancel_event = threading.Event()
+    app.events = queue.Queue()
     return app
 
 
@@ -486,6 +487,92 @@ def test_worker_registry_rejects_new_work_after_shutdown() -> None:
 
     assert VoiceStudioApp._start_worker(app, "late", lambda: None) is None
     assert app._worker_threads == {}
+
+
+def test_immediate_discovery_worker_cannot_leave_a_dead_alias(monkeypatch) -> None:
+    app = _worker_registry_stub()
+    app._ollama_discovery_thread = None
+
+    class ImmediateThread:
+        def __init__(self, *, target, daemon, name) -> None:
+            self._target = target
+            self.daemon = daemon
+            self.name = name
+            self._alive = False
+
+        def start(self) -> None:
+            self._alive = True
+            self._target()
+            self._alive = False
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+    monkeypatch.setattr(app_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(app_module, "discover_ollama_audio_models", lambda: [])
+
+    VoiceStudioApp._start_ollama_model_discovery(app)
+
+    assert app._ollama_discovery_thread is None
+    assert app._worker_threads == {}
+
+
+def test_immediate_maintenance_worker_cannot_leave_a_dead_alias() -> None:
+    app = _worker_registry_stub()
+    app._maintenance_thread = None
+
+    class ImmediateThread:
+        def __init__(self, *, target, daemon, name) -> None:
+            self._target = target
+            self.daemon = daemon
+            self.name = name
+            self._alive = False
+
+        def start(self) -> None:
+            self._alive = True
+            self._target()
+            self._alive = False
+
+        def is_alive(self) -> bool:
+            return self._alive
+
+    original_thread = app_module.threading.Thread
+    app_module.threading.Thread = ImmediateThread
+    try:
+        thread = VoiceStudioApp._start_worker(app, "maintenance", lambda: None, daemon=False)
+        VoiceStudioApp._assign_worker_alias(app, "maintenance", thread, "_maintenance_thread")
+    finally:
+        app_module.threading.Thread = original_thread
+
+    assert app._maintenance_thread is None
+    assert app._worker_threads == {}
+
+
+@pytest.mark.parametrize(
+    ("role", "attribute"),
+    [
+        ("maintenance", "_maintenance_thread"),
+        ("ollama-model-discovery", "_ollama_discovery_thread"),
+    ],
+)
+def test_live_worker_alias_is_assigned_and_cleared_by_identity(role: str, attribute: str) -> None:
+    app = _worker_registry_stub()
+    setattr(app, attribute, None)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def work() -> None:
+        entered.set()
+        assert release.wait(1)
+
+    thread = VoiceStudioApp._start_worker(app, role, work, daemon=role != "maintenance")
+    VoiceStudioApp._assign_worker_alias(app, role, thread, attribute)
+
+    assert entered.wait(1)
+    assert getattr(app, attribute) is thread
+    release.set()
+    thread.join(1)
+    assert getattr(app, attribute) is None
 
 
 def test_post_event_drops_events_after_shutdown() -> None:
