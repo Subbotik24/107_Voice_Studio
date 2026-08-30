@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -15,6 +16,20 @@ def local_model(path: Path) -> Path:
     (path / "config.json").write_text('{"model_type":"Whisper"}', encoding="utf-8")
     (path / "tokenizer.json").write_text("{}", encoding="utf-8")
     return path
+
+
+def make_junction(link: Path, target: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junctions are unavailable")
+    try:
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        pytest.skip(f"directory junctions are unavailable: {exc}")
 
 
 def test_local_model_import_verify_resolve_and_remove(tmp_path):
@@ -141,6 +156,93 @@ def test_reconcile_blocks_orphan_model_symlink(tmp_path):
     ]
     assert set(result["blocked"][0]) == {"id", "path", "reason"}
     assert symlink.is_symlink()
+
+
+def test_reconcile_blocks_windows_junction_without_touching_target(tmp_path):
+    target = local_model(tmp_path / "outside")
+    catalog = ModelCatalog(tmp_path / "managed")
+    junction = catalog.root / "linked-model"
+    make_junction(junction, target)
+
+    result = catalog.reconcile()
+
+    assert result["blocked"] == [
+        {
+            "id": "linked-model",
+            "path": str(junction),
+            "reason": "model path is a reparse point",
+        }
+    ]
+    assert junction.is_dir()
+    assert target.is_dir()
+    assert (target / "model.bin").read_bytes() == b"fixture model"
+    assert catalog.list() == []
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_remove_rejects_windows_junction_without_touching_target(tmp_path, managed):
+    catalog = ModelCatalog(tmp_path / "managed")
+    target = local_model(catalog.root / "outside")
+    junction = catalog.root / "linked-model"
+    make_junction(junction, target)
+    if managed:
+        catalog._save(
+            {"version": 1, "models": [{"id": "linked-model", "path": "linked-model"}]}
+        )
+
+    with pytest.raises(ValueError, match="reparse"):
+        catalog.remove("linked-model", confirmed=True)
+    assert junction.is_dir()
+    assert target.is_dir()
+    assert (target / "model.bin").read_bytes() == b"fixture model"
+
+
+def test_reconcile_keeps_staging_with_descendant_junction(tmp_path, monkeypatch):
+    target = local_model(tmp_path / "outside")
+    catalog = ModelCatalog(tmp_path / "managed")
+    staging = catalog.downloads / ("tiny-" + "c" * 32)
+    staging.mkdir()
+    (staging / "partial").write_bytes(b"x")
+    make_junction(staging / "payload", target)
+    now = time.time() + 3 * 24 * 60 * 60
+    monkeypatch.setattr(model_catalog_module.time, "time", lambda: now)
+
+    result = catalog.reconcile()
+
+    assert staging.name in result["staging_kept"]
+    assert staging.exists()
+    assert target.is_dir()
+    assert (target / "model.bin").read_bytes() == b"fixture model"
+
+
+def test_reconcile_keeps_old_staging_root_with_fresh_nested_file(tmp_path):
+    catalog = ModelCatalog(tmp_path / "managed")
+    staging = catalog.downloads / ("tiny-" + "d" * 32)
+    staging.mkdir()
+    fresh_file = staging / "partial"
+    fresh_file.write_bytes(b"x")
+    old = time.time() - 3 * 24 * 60 * 60
+    os.utime(staging, (old, old))
+
+    result = catalog.reconcile()
+
+    assert staging.name in result["staging_kept"]
+    assert staging.exists()
+    assert fresh_file.exists()
+
+
+def test_unmanaged_remove_preserves_existing_manifest_bytes_and_mtime(tmp_path):
+    catalog = ModelCatalog(tmp_path / "managed")
+    catalog._save({"version": 1, "models": []})
+    before_bytes = catalog.catalog_path.read_bytes()
+    before_mtime = catalog.catalog_path.stat().st_mtime_ns
+    local_model(catalog.root / "stray")
+
+    result = catalog.remove("stray", confirmed=True)
+
+    assert result == {"removed": True, "id": "stray", "unmanaged": True}
+    assert catalog.catalog_path.read_bytes() == before_bytes
+    assert catalog.catalog_path.stat().st_mtime_ns == before_mtime
 
 
 @pytest.mark.parametrize("payload", [b"{not-json", b'{"version":999,"models":[]}'])

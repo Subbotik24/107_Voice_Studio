@@ -43,6 +43,7 @@ TRANSIENT_MODEL_SUFFIXES = {".incomplete", ".lock", ".metadata", ".tmp"}
 CATALOG_RESIDUE_MAX_AGE_SECONDS = 300
 STAGING_MAX_AGE_SECONDS = 172_800
 STAGING_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$")
+FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 
 
 def _reconcile_result() -> dict[str, Any]:
@@ -124,13 +125,25 @@ class ModelCatalog:
         return sorted(self._load()["models"], key=lambda item: item["id"])
 
     @staticmethod
+    def _is_reparse_point(
+        path: Path, path_stat: os.stat_result | None = None
+    ) -> bool:
+        if path_stat is None:
+            path_stat = path.lstat()
+        return stat.S_ISLNK(path_stat.st_mode) or bool(
+            getattr(path_stat, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT
+        )
+
+    @staticmethod
     def _newest_mtime(directory: Path) -> float | None:
         """Return the newest non-following mtime in a staging tree."""
         try:
             root_stat = directory.lstat()
         except OSError:
             return None
-        if not stat.S_ISDIR(root_stat.st_mode):
+        if not stat.S_ISDIR(root_stat.st_mode) or ModelCatalog._is_reparse_point(
+            directory, root_stat
+        ):
             return None
         newest = root_stat.st_mtime
         pending = [directory]
@@ -142,6 +155,8 @@ class ModelCatalog:
                 for entry in entries:
                     entry_stat = entry.stat(follow_symlinks=False)
                     newest = max(newest, entry_stat.st_mtime)
+                    if ModelCatalog._is_reparse_point(Path(entry.path), entry_stat):
+                        return None
                     if stat.S_ISDIR(entry_stat.st_mode):
                         pending.append(Path(entry.path))
         except OSError:
@@ -174,7 +189,9 @@ class ModelCatalog:
             downloads_stat = self.downloads.lstat()
         except OSError:
             return
-        if not stat.S_ISDIR(downloads_stat.st_mode):
+        if not stat.S_ISDIR(downloads_stat.st_mode) or self._is_reparse_point(
+            self.downloads, downloads_stat
+        ):
             return
         try:
             with os.scandir(self.downloads) as iterator:
@@ -190,7 +207,11 @@ class ModelCatalog:
             except OSError:
                 result["staging_kept"].append(entry.name)
                 continue
-            if not stat.S_ISDIR(entry_stat.st_mode) or not STAGING_PATTERN.fullmatch(entry.name):
+            if (
+                self._is_reparse_point(path, entry_stat)
+                or not stat.S_ISDIR(entry_stat.st_mode)
+                or not STAGING_PATTERN.fullmatch(entry.name)
+            ):
                 result["staging_kept"].append(entry.name)
                 continue
             newest = self._newest_mtime(path)
@@ -199,7 +220,7 @@ class ModelCatalog:
                 continue
             try:
                 # Re-check the directory entry without following links before removal.
-                if not stat.S_ISDIR(path.lstat().st_mode):
+                if not stat.S_ISDIR(path.lstat().st_mode) or self._is_reparse_point(path):
                     result["staging_kept"].append(entry.name)
                     continue
                 shutil.rmtree(path)
@@ -324,7 +345,19 @@ class ModelCatalog:
                 )
                 retained_models.append(item)
             else:
-                if not stat.S_ISDIR(target_stat.st_mode):
+                if self._is_reparse_point(target, target_stat):
+                    result["blocked"].append(
+                        {
+                            "id": model_id,
+                            "path": str(target),
+                            "reason": (
+                                "model path is a symlink"
+                                if stat.S_ISLNK(target_stat.st_mode)
+                                else "model path is a reparse point"
+                            ),
+                        }
+                    )
+                elif not stat.S_ISDIR(target_stat.st_mode):
                     result["blocked"].append(
                         {
                             "id": model_id,
@@ -350,6 +383,20 @@ class ModelCatalog:
                             "id": entry.name,
                             "path": str(self.root / entry.name),
                             "reason": "model path could not be inspected safely",
+                        }
+                    )
+                continue
+            if self._is_reparse_point(self.root / entry.name, entry_stat):
+                if MODEL_ID_PATTERN.fullmatch(entry.name) and entry.name not in catalogued_ids:
+                    result["blocked"].append(
+                        {
+                            "id": entry.name,
+                            "path": str(self.root / entry.name),
+                            "reason": (
+                                "model path is a symlink"
+                                if stat.S_ISLNK(entry_stat.st_mode)
+                                else "model path is a reparse point"
+                            ),
                         }
                     )
                 continue
@@ -677,8 +724,8 @@ class ModelCatalog:
                 raise FileNotFoundError(f"model is not installed: {value}") from exc
             except OSError as exc:
                 raise ValueError("cannot inspect unmanaged model safely") from exc
-            if stat.S_ISLNK(target_stat.st_mode):
-                raise ValueError("refusing to remove an unmanaged model symlink")
+            if self._is_reparse_point(target, target_stat):
+                raise ValueError("refusing to remove an unmanaged model reparse point")
             if not stat.S_ISDIR(target_stat.st_mode):
                 raise ValueError("refusing to remove an unmanaged model that is not a directory")
             shutil.rmtree(target)
@@ -694,8 +741,8 @@ class ModelCatalog:
             target_stat = None
         except OSError as exc:
             raise ValueError("cannot inspect model safely") from exc
-        if target_stat is not None and stat.S_ISLNK(target_stat.st_mode):
-            raise ValueError("refusing to remove a model symlink")
+        if target_stat is not None and self._is_reparse_point(target, target_stat):
+            raise ValueError("refusing to remove a managed model reparse point")
         if target_stat is not None and not stat.S_ISDIR(target_stat.st_mode):
             raise ValueError("refusing to remove a model that is not a directory")
         if target_stat is not None:
