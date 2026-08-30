@@ -1218,7 +1218,7 @@ class VoiceStudioApp(tk.Tk):
                 self.status.set(
                     self._t(
                         "hotkey_unavailable",
-                        error="listener did not stop within 1 second; retrying",
+                        error=self._t("hotkey_stop_retry"),
                     )
                 )
                 return

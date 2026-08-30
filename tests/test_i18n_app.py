@@ -52,6 +52,21 @@ def test_help_intro_describes_the_current_localized_manual() -> None:
     assert "canonical docs/help" in translate("en", "help_intro")
 
 
+@pytest.mark.parametrize(
+    ("language", "expected_detail"),
+    [
+        ("uk", "не зупинився"),
+        ("cs", "nezastavil"),
+        ("en", "did not stop"),
+    ],
+)
+def test_hotkey_stop_retry_detail_is_localized(language: str, expected_detail: str) -> None:
+    detail = translate(language, "hotkey_stop_retry")
+
+    assert expected_detail in detail
+    assert detail in translate(language, "hotkey_unavailable", error=detail)
+
+
 @pytest.mark.parametrize("language", ["uk", "cs", "en"])
 def test_profile_cards_are_localized_for_every_interface_language(language: str) -> None:
     for key in (

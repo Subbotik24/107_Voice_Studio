@@ -188,9 +188,7 @@ def test_start_hotkey_retains_stubborn_listener_without_double_registering(monke
     assert app.hotkey is existing
     assert existing.stop_calls == 1
     assert constructed == []
-    assert statuses == [
-        "hotkey_unavailable:listener did not stop within 1 second; retrying"
-    ]
+    assert statuses == ["hotkey_unavailable:hotkey_stop_retry:"]
 
     VoiceStudioApp._start_hotkey(app)
 
@@ -198,6 +196,32 @@ def test_start_hotkey_retains_stubborn_listener_without_double_registering(monke
     assert len(constructed) == 1
     assert app.hotkey is constructed[0]
     assert constructed[0].start_calls == 1
+
+
+@pytest.mark.parametrize(
+    ("language", "expected_detail"),
+    [
+        ("uk", "не зупинився"),
+        ("cs", "nezastavil"),
+        ("en", "did not stop"),
+    ],
+)
+def test_start_hotkey_reports_localized_stubborn_listener_detail(
+    language: str, expected_detail: str
+) -> None:
+    existing = _FakeHotkey([False])
+    app = object.__new__(VoiceStudioApp)
+    statuses: list[str] = []
+    app.hotkey = existing
+    app.settings = SimpleNamespace(hotkey="<f13>", ui_language=language)
+    app.status = SimpleNamespace(set=statuses.append)
+    app._t = lambda key, **values: app_module.translate(language, key, **values)
+
+    VoiceStudioApp._start_hotkey(app)
+
+    assert statuses
+    assert expected_detail in statuses[0]
+    assert app_module.translate(language, "hotkey_stop_retry") in statuses[0]
 
 
 def test_settings_dialog_retains_stubborn_listener_before_building_dialog(monkeypatch) -> None:
