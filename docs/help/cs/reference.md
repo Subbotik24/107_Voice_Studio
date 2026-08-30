@@ -67,6 +67,36 @@ blokovaná položka má `id`, `path` a `reason`), `staging_removed`,
 Při selhání přidá také `error`. Běžné příkazy `models` oznámí netriviální výsledek na
 stderr s prefixem `model-catalog:`; zdravý nezměněný katalog zůstane tichý.
 
+## Audit úložiště a výslovná oprava
+
+Spusťte kontrolu úložiště pouze pro čtení:
+
+```text
+voice-studio storage audit
+```
+
+Příkaz nikdy nesjednocuje katalog modelů a nemění databázi ani souborový systém.
+Hlavní `status` nadále popisuje stav SQLite a spravovaných zdrojů.
+`missing_records` označuje záznamy přepisů s chybějícím spravovaným zdrojem.
+Vnořený objekt `model_catalog` hlásí manifest, chybějící, osiřelé a blokované
+modely, staging a zbytky. Vnořený objekt `exports` uvádí běžné `files`,
+konzervativní kandidáty `canonical_stale`, soubory `unmanaged` a nebezpečné nebo
+nesouborové položky `blocked`. Kandidáti exportu jsou pouze hlášení a nikdy se
+automaticky nemažou.
+
+Změna katalogu modelů vyžaduje samostatnou výslovnou akci `models reconcile`.
+Pokud záznam přepisu odkazuje na spravovaný zdroj, jehož chybění je
+prokázáno, odpojte pouze tento zastaralý odkaz:
+
+```text
+voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
+```
+
+`--expected-path` chrání před opravou záznamu, který se od auditu změnil;
+použijte přesnou cestu z `missing_records`. Oprava vymaže pouze uložený odkaz na
+zdroj a příznak uchování. Nikdy nemaže ani znovu nevytváří zvuk, nemění text
+přepisu a nedotkne se původního mediálního souboru uživatele.
+
 ## Záloha a místní stav
 
 Obnova nahradí ze zálohy přepisy, nastavení a uložené zdroje. Aktuální místní

@@ -52,6 +52,28 @@ unmanaged directory. A corrupt `catalog.json` is quarantined under a timestamped
 is never deleted automatically. The `blocked` entries in the JSON identify the
 path and reason requiring attention.
 
+## A managed recording is reported as missing
+
+Run `voice-studio storage audit` again and find the transcript ID and exact path
+in `missing_records`. The audit is read-only: model and export drift is reported
+in the nested `model_catalog` and `exports` objects but is not repaired or
+deleted. A `canonical_stale` export is only a conservative candidate and is
+never removed automatically.
+
+First verify outside VOICE Studio that the managed copy is truly absent. If the
+row should remain in history without retained audio, explicitly detach only the
+missing reference:
+
+```text
+voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
+```
+
+If the expected path does not match, the file has reappeared, or the path is
+unsafe, the command refuses to change the row. A successful repair does not
+delete or recreate audio and does not alter transcript text or the user's
+original file. Model drift is repaired separately, when appropriate, with
+`voice-studio models reconcile`.
+
 ## The media file cannot be opened
 
 Check the supported extension, audio stream, local playback, and the 2 GiB / two

@@ -30,6 +30,7 @@ in the supported flow.
 | W2-R1 journaled restore recovery | PASS headless | restore writes an atomic journal before the swap; `recover_interrupted_restore()` runs before the first `LocalStore` in GUI and CLI and completes, rolls back, or discards staging deterministically; a `*.recovery-*` directory is never deleted; the journal carries no transcript text and no key material |
 | W2-C1 restore preserves machine-local state (2026-08-30) | PASS source/headless | restore replaces backed-up transcripts, settings and sources while copying the current `models/` and `exports/` into staging before the first live-root rename; both trees remain outside `.voice-backup`; unsafe links/reparse points abort with `local restore state contains an unsafe path: ...` before the live root changes; focused restore coverage passed 10 tests with 2 Windows symlink-privilege skips and the full `.venv` gate passed 435 tests with 3 skips |
 | W2-C2 model-catalog self-healing | PASS source/headless | `models reconcile` adopts complete orphan directories, drops only provably absent entries, retains incomplete or unsafe paths as blocked, quarantines corrupt manifests, cleans only bounded stale residue, and runs automatically at model-command and GUI-startup boundaries; 426 tests passed with one Windows symlink-privilege skip; source GUI smoke and complete evidence are recorded in `VERIFICATION.md` |
+| W2-C3 storage audit and confirmed repair (2026-08-30) | PASS source/headless | read-only `storage audit` additively reports missing transcript rows plus nested model/export drift while preserving the core top-level status used by restore; `storage repair-missing ID --expected-path PATH --yes` transactionally detaches only a proven missing managed reference and never unlinks or recreates audio; export candidates are never auto-deleted; focused coverage passed 141 tests with 8 Windows symlink-privilege skips and the full `.venv` gate passed 524 tests with the same 8 skips |
 | W2-S1 coordinated worker shutdown (process/queue half, 2026-08-30) | PASS source/headless | transcription and model-download process generations have bounded terminate/kill cleanup, exactly-once queue disposal, reusable close, epoch/concurrency protection and resource-tracker regression evidence; the app/recorder/hotkey thread half remains open, so full W2-S1 is still IN PROGRESS |
 | W2-S1 coordinated worker shutdown (app/recorder/hotkey/maintenance thread half, 2026-08-30) | PASS source/headless | GUI worker registry, one-budget bounded joins, late-event gating, recorder residue retention, bounded hotkey stop and maintenance refusal are covered by regression tests and a clean-profile source GUI close smoke; native physical and packaged acceptance remain open, so full W2-S1 is still IN PROGRESS |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
@@ -62,6 +63,9 @@ in the supported flow.
   handling on physical filesystems under antivirus or removable-media
   conditions, were not run; the source suite covers simulated interruptions and
   Windows junction/reparse cases, while symlink creation was privilege-skipped.
+- W2-C3 audit/repair was not exercised against physical removable media,
+  antivirus races or a packaged executable; Windows junction/reparse tests ran,
+  while eight symlink cases were privilege-skipped in this environment.
 
 These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
@@ -71,7 +75,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 - W2-S1 native physical and packaged acceptance (the process/queue and
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);
-- SQLite/filesystem reconciliation beyond the completed W2-C2 model-catalog self-healing scope;
 - all W3 VAD/timestamp/hardware/editor work;
 - W4 SBOM, signed/notarized installers and updater;
 - W5 physical 50-task acceptance per OS;

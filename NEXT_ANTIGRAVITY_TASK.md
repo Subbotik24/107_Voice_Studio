@@ -1,5 +1,48 @@
 # ЗАВДАННЯ ДЛЯ ANTIGRAVITY — COMPLETION AUDIT RECORDS
 
+## W2-C3 storage audit and confirmed repair — COMPLETE
+
+**TASK_ID:** W2-C3-storage-audit-and-repair
+**СТАТУС:** `COMPLETE` лише для source/headless acceptance. Цей запис закриває
+W2-C3, але не ширший R0, native, packaged, clean-machine, signed або фізичний
+acceptance.
+**ГІЛКА РОБОТИ:** локальна `main`; нових гілок або worktree не створено, push не
+виконувався.
+**BASELINE:** `82364f0` (`main`) — останній кодовий commit W2-C3 перед
+документуванням.
+**Останній перевірений зелений стан:** Windows x64, CPython 3.12 у `.venv`:
+quality gate — `524 passed`, `8 skipped` через відсутній привілей створення
+symlink; Ruff, Help validation, wheel і `pip check` — PASS. Фокусний набір
+storage/model/backup/CLI — `141 passed`, `8 skipped`. Точні команди, wheel hash
+та обмеження наведені у `VERIFICATION.md`. Completion commit має повідомлення
+`docs: record storage audit verification`.
+**Джерело завдання:**
+`docs/superpowers/plans/2026-08-30-storage-audit-and-repair.md` і R0.4 у
+`docs/superpowers/specs/2026-08-30-voice-studio-r0-completion-design.md`.
+
+### W2-C3 acceptance summary
+
+- `storage audit` працює лише для читання, зберігає верхній core `status` для
+  сумісності backup/restore і додає `missing_records`, вкладений
+  `model_catalog` та консервативний inventory `exports`.
+- Аудит не викликає `models reconcile`, не змінює модельний каталог і не
+  видаляє export candidates; `canonical_stale` ніколи не видаляються
+  автоматично.
+- `storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes` під
+  транзакцією від'єднує лише доведено відсутнє кероване посилання. Команда не
+  видаляє й не створює аудіо заново, не змінює текст і не торкається user
+  original.
+- Windows junction/reparse coverage виконано. Вісім symlink-кейсів пропущено
+  через `WinError 1314`; packaged, antivirus/removable-media та фізичний
+  Windows/macOS acceptance не виконувалися й не заявляються.
+
+**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W4-B1` — відтворюваний SBOM із закріпленого
+Windows lock-файла, з перевіркою формату, без абсолютних приватних шляхів і з
+включенням у release manifest/package directory. W2-C3 не розширювати
+автоматичним видаленням exports без окремого provenance contract.
+
+---
+
 ## W2-C1 restore-preserve-local-state — COMPLETE
 
 **TASK_ID:** W2-C1-restore-preserve-local-state

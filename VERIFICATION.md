@@ -3,6 +3,47 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-C3 storage audit and confirmed repair — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, source tree on local
+`main`, implementation base `82364f0`. This record closes W2-C3 at
+source/headless level only. It does not claim packaged, physical-device,
+clean-machine, signed-release or broader R0 acceptance.
+
+The additive `LocalStore.audit()` contract remains read-only: regression tests
+snapshot database/filesystem state, model-catalog bytes and mtimes, and verify
+that audit does not call reconciliation. Its existing top-level `status` still
+represents only SQLite and managed-source health, so preserved model/export
+drift does not reject backup restore staging. Nested `model_catalog` and
+`exports` sections report drift independently; `canonical_stale` exports are
+conservative inventory candidates and are never auto-deleted.
+
+`storage repair-missing` requires `--yes`, optionally pins the audited path with
+`--expected-path`, re-reads the row under `BEGIN IMMEDIATE`, and refuses outside,
+reparse, reappeared or otherwise unsafe paths. Success changes only
+`source_path=None` and `audio_retained=False`; regression tests preserve
+`raw_text`, corrected text, segments, hash, source name and an external user
+original. The repair path contains no unlink or audio recreation. Existing
+confirmed orphan cleanup also rechecks database references inside its write
+transaction before removing a direct regular managed child.
+
+| Check | Result |
+| --- | --- |
+| `.\scripts\quality_gate.ps1` with resolved `.venv\Scripts\python.exe` | PASS; compileall, Ruff, Help validation (13 Markdown files), 524 passed / 8 skipped, CLI `0.3.0rc1` |
+| `.\.venv\Scripts\python.exe -m pytest -q tests\test_storage_app.py tests\test_model_catalog_app.py tests\test_backup_app.py tests\test_cli_app.py` | PASS; 141 passed / 8 skipped |
+| `.\.venv\Scripts\python.exe -m build --wheel --no-isolation --outdir build\w2-c3-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 698,821 bytes, SHA-256 `10877B1165273174D0B8826B96B9A85B012DAA2712807AE6270D91276E5634E0` |
+| `.\.venv\Scripts\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` | PASS; no whitespace errors |
+
+All eight skips are Windows symlink-creation cases denied with `WinError 1314`.
+The suite did execute Windows junction/reparse coverage for model inspection,
+export roots/entries, missing-source repair and cleanup boundaries. Not run for
+this increment: a packaged executable, physical removable media, antivirus
+races, clean-machine Windows/macOS acceptance, or real concurrent external
+processes beyond the source/headless regression harness. No private paths,
+secrets, model weights or generated wheel were added to Git, and local `main`
+remained unpushed during this increment.
+
 ## W2-S1 coordinated worker shutdown — app/recorder/hotkey/maintenance thread half — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, source tree on

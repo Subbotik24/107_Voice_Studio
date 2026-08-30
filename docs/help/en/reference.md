@@ -69,6 +69,36 @@ blocked item has `id`, `path`, and `reason`), `staging_removed`,
 Normal `models` commands report a non-trivial recovery result on stderr with
 the `model-catalog:` prefix; healthy, unchanged catalogs stay quiet.
 
+## Storage audit and explicit repair
+
+Run the read-only storage inspection with:
+
+```text
+voice-studio storage audit
+```
+
+The command never reconciles the model catalog and never changes the database
+or filesystem. Its top-level `status` continues to describe SQLite and managed
+source health. `missing_records` identifies transcript rows with a missing
+managed source. The nested `model_catalog` object reports manifest, missing,
+orphan, blocked, staging, and residue drift. The nested `exports` object lists
+regular `files`, conservative `canonical_stale` candidates, `unmanaged` files,
+and unsafe or non-regular `blocked` entries. Export candidates are a report
+only and are never deleted automatically.
+
+Model-catalog changes require the separate explicit `models reconcile` action.
+If a transcript points to a managed source that is proven
+missing, detach only that stale reference with:
+
+```text
+voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
+```
+
+`--expected-path` guards against repairing a row that changed since the audit;
+use the exact path from `missing_records`. The repair clears only the stored
+source reference and retention flag. It never deletes or recreates audio, never
+changes transcript text, and never touches the user's original media file.
+
 ## Backup and local state
 
 Restore replaces the backed-up transcripts, settings, and saved sources. The

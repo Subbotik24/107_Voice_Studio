@@ -50,6 +50,28 @@ do karantény s časovým názvem `catalog.json.corrupt-*` a katalog se obnoví;
 poškozený manifest zůstává zachován a automaticky se nikdy nemaže. Položky
 `blocked` v JSON uvádějí cestu a důvod vyžadující pozornost.
 
+## Spravovaná nahrávka je hlášena jako chybějící
+
+Znovu spusťte `voice-studio storage audit` a v `missing_records` najděte ID
+přepisu a přesnou cestu. Audit je pouze pro čtení: odchylky modelů a exportů
+jsou uvedeny ve vnořených objektech `model_catalog` a `exports`, nic se však
+neopravuje ani nemaže. Export `canonical_stale` je pouze konzervativní kandidát
+a automaticky se nikdy neodstraní.
+
+Nejprve mimo VOICE Studio ověřte, že spravovaná kopie skutečně chybí. Pokud má
+záznam zůstat v historii bez uchovaného zvuku, výslovně odpojte pouze chybějící
+odkaz:
+
+```text
+voice-studio storage repair-missing TRANSCRIPT_ID --expected-path PATH --yes
+```
+
+Pokud očekávaná cesta nesouhlasí, soubor se znovu objevil nebo cesta není
+bezpečná, příkaz změnu záznamu odmítne. Úspěšná oprava zvuk nemaže ani znovu
+nevytváří, nemění text přepisu ani původní soubor uživatele. Odchylky katalogu
+modelů se podle potřeby opravují samostatně příkazem
+`voice-studio models reconcile`.
+
 ## Soubor nelze otevřít
 
 Zkontrolujte podporovanou příponu, zvukovou stopu, místní přehrání a limit
