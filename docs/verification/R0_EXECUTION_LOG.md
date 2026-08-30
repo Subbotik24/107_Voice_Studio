@@ -1,0 +1,46 @@
+# R0 execution and verification log
+
+This is the controller's cumulative ledger for R0 implementation. It prevents
+repeating an already-green verification run when no relevant tracked files have
+changed. Product-facing status remains in `IMPLEMENTATION_STATUS.md`; detailed
+release evidence remains in `VERIFICATION.md`.
+
+## Re-run policy
+
+- Every entry records the verified Git commit, command/scope, result and known
+  limitations.
+- A focused result may be reused only while the files covered by that scope are
+  unchanged after the recorded commit.
+- A full quality gate runs once at each completed increment, after a fix that
+  changes production code outside the previously verified scope, and before the
+  integrated release conclusion.
+- Documentation-only corrections use Help validation and diff checks unless
+  they change a documented executable contract or package contents.
+- Native, packaged, physical-device and signing checks are never inferred from
+  source/headless results.
+
+## Completed verification checkpoints
+
+| Increment | Verified commit | Evidence | Result | Re-run trigger |
+| --- | --- | --- | --- | --- |
+| W2-C2 model catalog | `e379b42` | full quality gate | 426 passed, 1 Windows symlink-privilege skip | model catalog, CLI model dispatch, GUI startup or catalog tests change |
+| W2-C1 restore preservation | `94ff8f1` | full quality gate, restore scope, wheel/pip/help | 435 passed, 3 Windows symlink-privilege skips; artifacts PASS | backup/restore, storage layout or archive safety changes |
+| W2-S1 process/queue shutdown | `0d43e77` | full quality gate and process lifecycle scope | 452 passed, 3 Windows symlink-privilege skips | controller, multiprocessing queue or model-download lifecycle changes |
+| W2-S1 thread/application shutdown | `12def08` | full quality gate and controlled GUI close | 483 passed, 3 Windows symlink-privilege skips; source GUI PID exited 0 in 1924 ms | app close, recorder, hotkey or maintenance worker lifecycle changes |
+| W2-C3 storage audit/repair before read-only CLI correction | `bb3abee` | full quality gate, focused storage/model/backup/CLI, wheel, pip | 524 passed, 8 Windows symlink-privilege skips; wheel SHA-256 `10877B1165273174D0B8826B96B9A85B012DAA2712807AE6270D91276E5634E0` | storage/audit/CLI code changed at `69edd9f`, so the full result is superseded below |
+| W2-C3 read-only CLI correction | `69edd9f` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 528 passed, 8 Windows symlink-privilege skips; focused 145 passed, 8 skipped | superseded by the stable-snapshot corrections below |
+| W2-C3 stable audit snapshot | `7e7f8e0` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 531 passed, 8 Windows symlink-privilege skips; focused 148 passed, 8 skipped | root replacement and temp containment changed at `b7ba7fd` |
+| W2-C3 final read-only audit | `b7ba7fd` | full pytest, focused storage/model/backup/CLI, focused independent review, compile, Ruff, diff check | 533 passed, 8 Windows symlink-privilege skips; related 150 passed, 8 skipped; final review CLEAN | storage/audit/CLI production code or corresponding tests change |
+| W2-C3 final docs/artifact | `1c0f471` | Help validation, wheel rebuild, pip check, diff check | 13 Help files PASS; wheel 700,821 bytes, SHA-256 `33441D2FB1932501241DA09E205C566EB6BD7DB392666ECAD29AFD0FEADBFCC8`; dependencies PASS | Help/package inputs or release metadata change |
+
+## Current checkpoint
+
+- Verified production HEAD: `b7ba7fd`.
+- Documentation and rebuilt wheel checkpoint: `1c0f471`; independent documentation
+  re-review CLEAN.
+- Do not repeat the 533-test full suite unless production code changes again.
+  Run Help validation and `git diff --check`; repeat focused/full tests only if
+  the review requires another production-code change.
+- W2-C3 native/packaged/removable-media/antivirus/clean-machine acceptance remains
+  `NOT_RUN`. The eight source-suite skips are Windows symlink-creation cases
+  denied by `WinError 1314`; junction/reparse coverage did execute.
