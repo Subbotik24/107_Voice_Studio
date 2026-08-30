@@ -522,7 +522,11 @@ class LocalStore:
         source_root = self.sources.resolve()
         for row in rows:
             transcript = Transcript.from_dict(json.loads(row["payload_json"]))
-            transcript_ids.add(transcript.id)
+            try:
+                transcript_id = str(uuid.UUID(transcript.id))
+            except (ValueError, AttributeError):
+                transcript_id = transcript.id
+            transcript_ids.add(transcript_id)
             if not transcript.source_path:
                 continue
             target = Path(transcript.source_path).expanduser()
@@ -553,13 +557,43 @@ class LocalStore:
             "blocked": [],
         }
         try:
-            with os.scandir(self.exports) as iterator:
-                export_entries = sorted(iterator, key=lambda entry: entry.name)
+            exports_stat = self.exports.lstat()
+        except FileNotFoundError:
+            exports["blocked"].append({"name": ".", "reason": "export directory is missing"})
+            export_entries = []
         except OSError as exc:
             exports["blocked"].append(
                 {"name": ".", "reason": f"export directory could not be inspected safely: {exc}"}
             )
             export_entries = []
+        else:
+            if _is_reparse_point(exports_stat):
+                reason = (
+                    "export directory is a symlink"
+                    if stat.S_ISLNK(exports_stat.st_mode)
+                    else "export directory is a reparse point"
+                )
+                exports["blocked"].append(
+                    {"name": ".", "reason": reason}
+                )
+                export_entries = []
+            elif not stat.S_ISDIR(exports_stat.st_mode):
+                exports["blocked"].append(
+                    {"name": ".", "reason": "export directory is not a real directory"}
+                )
+                export_entries = []
+            else:
+                try:
+                    with os.scandir(self.exports) as iterator:
+                        export_entries = sorted(iterator, key=lambda entry: entry.name)
+                except OSError as exc:
+                    exports["blocked"].append(
+                        {
+                            "name": ".",
+                            "reason": f"export directory could not be inspected safely: {exc}",
+                        }
+                    )
+                    export_entries = []
         for entry in export_entries:
             name = entry.name
             path = self.exports / name
@@ -582,13 +616,13 @@ class LocalStore:
                 )
                 continue
             exports["files"].append(name)
-            if path.suffix in _SUPPORTED_EXPORT_SUFFIXES:
+            if path.suffix.lower() in _SUPPORTED_EXPORT_SUFFIXES:
                 try:
-                    uuid.UUID(path.stem)
+                    candidate_id = str(uuid.UUID(path.stem))
                 except (ValueError, AttributeError):
                     pass
                 else:
-                    if path.stem not in transcript_ids:
+                    if candidate_id not in transcript_ids:
                         exports["canonical_stale"].append(name)
                         continue
             exports["unmanaged"].append(name)

@@ -3,6 +3,7 @@ import hashlib
 import io
 import os
 import sqlite3
+import subprocess
 import threading
 import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from voice_studio import storage as storage_module
 from voice_studio.models import Transcript
 from voice_studio.storage import LocalStore, _compact_uuid
 
@@ -824,3 +826,185 @@ def test_storage_audit_reports_model_and_export_drift_without_writing(tmp_path):
         if path.is_file()
     }
     assert after == before
+
+
+def _make_storage_junction(link: Path, target: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junctions are unavailable")
+    try:
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        pytest.skip(f"directory junction creation unavailable: {exc}")
+
+
+@pytest.mark.parametrize("root_kind", ["missing", "file"])
+def test_storage_audit_blocks_export_root_without_scanning(tmp_path, root_kind):
+    store = LocalStore(tmp_path / "data")
+    store.exports.rmdir()
+    if root_kind == "file":
+        store.exports.write_bytes(b"not a directory")
+
+    result = store.audit()
+
+    assert result["status"] == "PASS"
+    assert result["exports"]["files"] == []
+    expected_reason = (
+        "export directory is missing"
+        if root_kind == "missing"
+        else "export directory is not a real directory"
+    )
+    assert result["exports"]["blocked"] == [{"name": ".", "reason": expected_reason}]
+    assert result["exports"]["blocked"][0]["reason"]
+
+
+def test_storage_audit_blocks_export_root_lstat_error(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    original_lstat = Path.lstat
+
+    def lstat(path):
+        if path == store.exports:
+            raise OSError("simulated root lstat failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", lstat)
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"][0]["name"] == "."
+    assert "could not be inspected safely" in result["exports"]["blocked"][0]["reason"]
+
+
+def test_storage_audit_blocks_export_root_symlink_without_following(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    target = tmp_path / "outside"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    store.exports.rmdir()
+    try:
+        store.exports.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+    before = (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir()))
+
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"][0]["name"] == "."
+    assert "symlink" in result["exports"]["blocked"][0]["reason"]
+    assert (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir())) == before
+
+
+def test_storage_audit_blocks_export_child_symlink_without_following(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    target = tmp_path / "outside.txt"
+    target.write_bytes(b"external")
+    link = store.exports / "linked.txt"
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+    before = (target.read_bytes(), target.stat().st_mtime_ns)
+
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"] == [
+        {"name": "linked.txt", "reason": "export entry is a symlink"}
+    ]
+    assert (target.read_bytes(), target.stat().st_mtime_ns) == before
+
+
+def test_storage_audit_blocks_export_root_junction_without_following(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    target = tmp_path / "outside"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    store.exports.rmdir()
+    _make_storage_junction(store.exports, target)
+    before = (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir()))
+
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"][0]["name"] == "."
+    assert "reparse" in result["exports"]["blocked"][0]["reason"]
+    assert (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir())) == before
+
+
+def test_storage_audit_blocks_export_child_junction_without_following(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    target = tmp_path / "outside"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    link = store.exports / "linked"
+    _make_storage_junction(link, target)
+    before = (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir()))
+
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"][0]["name"] == "linked"
+    assert "reparse" in result["exports"]["blocked"][0]["reason"]
+    assert (sentinel.read_bytes(), sentinel.stat().st_mtime_ns, sorted(target.iterdir())) == before
+
+
+def test_storage_audit_reports_export_stat_error_as_blocked(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    original_scandir = storage_module.os.scandir
+
+    class BrokenEntry:
+        name = "broken.txt"
+
+        def stat(self, *, follow_symlinks=False):
+            raise OSError("simulated stat failure")
+
+    class BrokenScan:
+        def __enter__(self):
+            return iter([BrokenEntry()])
+
+        def __exit__(self, *_args):
+            return False
+
+    def scandir(path):
+        if Path(path) == store.exports:
+            return BrokenScan()
+        return original_scandir(path)
+
+    monkeypatch.setattr(storage_module.os, "scandir", scandir)
+    result = store.audit()
+
+    assert result["exports"]["files"] == []
+    assert result["exports"]["blocked"] == [
+        {"name": "broken.txt", "reason": "export entry could not be inspected safely"}
+    ]
+
+
+def test_storage_audit_normalizes_uppercase_export_uuid_and_suffix(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    existing_id = "12345678-1234-5678-1234-567812345678"
+    stale_id = "abcdefab-cdef-abcd-efab-cdefabcdefab"
+    existing = transcript()
+    existing.id = existing_id
+    store.save(existing)
+    existing_name = f"{existing_id.upper()}.TXT"
+    stale_name = f"{stale_id.upper()}.SRT"
+    (store.exports / existing_name).write_bytes(b"existing")
+    (store.exports / stale_name).write_bytes(b"stale")
+
+    result = store.audit()
+
+    assert result["exports"]["files"] == [existing_name, stale_name]
+    assert result["exports"]["canonical_stale"] == [stale_name]
+    assert result["exports"]["unmanaged"] == [existing_name]
