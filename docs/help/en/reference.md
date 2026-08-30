@@ -35,6 +35,13 @@
 | **Engine** | Current engine selected by the profile. |
 | **Transcription language** | `auto`, `uk`, `cs`, `en`; independent of UI language. |
 | **Model / Device / Compute type** | Saved Faster Whisper details. |
+
+For Local Whisper, **Device** is limited to `auto`, `cpu`, or `cuda`, and
+**Compute type** uses the supported CTranslate2 vocabulary. **Detect hardware**
+performs a bounded local advisory check in a background worker; it does not
+load a model or change saved settings. If detection is unavailable, keep the
+safe `auto/default` selection. Explicit combinations are checked against the
+installed runtime before the Whisper model loads.
 | **OpenAI STT model** | Used only by the cloud profile. |
 | **Dictionary JSON** | Deterministic replacements after recognition. |
 | **Local Ollama model** | Installed model that reports `audio` capability. |

@@ -28,6 +28,37 @@ release evidence remains in `VERIFICATION.md`.
 | W2-S1 process/queue shutdown | `0d43e77` | full quality gate and process lifecycle scope | 452 passed, 3 Windows symlink-privilege skips | controller, multiprocessing queue or model-download lifecycle changes |
 | W2-S1 thread/application shutdown | `12def08` | full quality gate and controlled GUI close | 483 passed, 3 Windows symlink-privilege skips; source GUI PID exited 0 in 1924 ms | app close, recorder, hotkey or maintenance worker lifecycle changes |
 | W2-C3 storage audit/repair before read-only CLI correction | `bb3abee` | full quality gate, focused storage/model/backup/CLI, wheel, pip | 524 passed, 8 Windows symlink-privilege skips; wheel SHA-256 `10877B1165273174D0B8826B96B9A85B012DAA2712807AE6270D91276E5634E0` | storage/audit/CLI code changed at `69edd9f`, so the full result is superseded below |
+
+## W3-H1 hardware settings validation and advisory detection — 2026-08-30
+
+| Increment | Verified commit | Evidence | Result | Re-run trigger |
+| --- | --- | --- | --- | --- |
+| W3-H1 hardware settings and advisory detection | `8e81f2c` (docs: `39f47d2`) | focused config/engine/hardware/CLI/GUI/runtime-boundary/i18n tests; one final source gate; frozen console-probe round-trip | Focused `148 passed`; final compileall + pytest `603 passed, 9 skipped`; frozen probe returned bounded degraded `auto/default` fallback | Any production change to hardware validation/detection, faster-whisper preflight, CLI hardware dispatch, GUI settings worker/event handling, i18n catalogs, or packaging launcher/spec; docs-only edits require Help validation and `git diff --check` |
+
+Exact focused command:
+
+```powershell
+$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_config_app.py tests/test_faster_whisper_app.py tests/test_hardware_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_runtime_boundaries_app.py tests/test_i18n_app.py
+```
+
+Exact final source gate (run once after the final production-code change):
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m compileall -q src tests
+$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q
+```
+
+Frozen probe command (separate from the source gate):
+
+```powershell
+.\\.venv\\Scripts\\python.exe -m PyInstaller --noconfirm --clean --distpath build\\w3-h1-probe-dist --workpath build\\w3-h1-probe-work packaging\\_w3_h1_probe.spec
+```
+
+Rerun the focused command for changes within the verified scope; rerun the
+single full source gate after any production-code change outside this scope or
+after a verified regression fix. Rerun the frozen probe after packaging
+launcher/spec changes or when a fresh packaged runtime is available. Do not
+repeat the full gate for documentation-only edits.
 | W2-C3 read-only CLI correction | `69edd9f` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 528 passed, 8 Windows symlink-privilege skips; focused 145 passed, 8 skipped | superseded by the stable-snapshot corrections below |
 | W2-C3 stable audit snapshot | `7e7f8e0` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 531 passed, 8 Windows symlink-privilege skips; focused 148 passed, 8 skipped | root replacement and temp containment changed at `b7ba7fd` |
 | W2-C3 final read-only audit | `b7ba7fd` | full pytest, focused storage/model/backup/CLI, focused independent review, compile, Ruff, diff check | 533 passed, 8 Windows symlink-privilege skips; related 150 passed, 8 skipped; final review CLEAN | storage/audit/CLI production code or corresponding tests change |

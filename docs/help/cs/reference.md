@@ -35,6 +35,13 @@
 | **Modul** | Aktuální engine určený profilem. |
 | **Jazyk přepisu** | `auto`, `uk`, `cs`, `en`; nezávisí na jazyku UI. |
 | **Model / Zařízení / Typ výpočtu** | Uložené hodnoty Faster Whisper. |
+
+V profilu Lokální Whisper je **Zařízení** omezeno na `auto`, `cpu` nebo
+`cuda` a **Typ výpočtu** používá podporovaný slovník CTranslate2. **Zjistit
+hardware** provede omezenou místní kontrolu na pozadí; nenačte model ani
+nezmění uložené nastavení. Pokud kontrola není dostupná, ponechte bezpečné
+`auto/default`. Zvolené kombinace se před načtením modelu ověří proti místnímu
+runtime.
 | **Model OpenAI STT** | Používá jen cloudový profil. |
 | **Slovník JSON** | Deterministické nahrazení po rozpoznání. |
 | **Lokální model Ollama** | Instalovaný model s capability `audio`. |
