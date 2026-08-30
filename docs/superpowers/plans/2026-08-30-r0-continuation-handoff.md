@@ -6,10 +6,10 @@ the remaining increments in the current session.
 ## Verified restart point
 
 - Local branch: `main`.
-- W3-H1 final production commit: `2819ecc`.
-- W3-H1 final evidence commit: `39ab4b6`.
-- Final W3-H1 focused scope: 151 passed.
-- Final post-production source gate: compileall PASS; 605 passed, 9 Windows
+- W3-H1 final production commit: `04c26a6`.
+- W3-H1 final evidence commit: `c3c95fd`.
+- Final W3-H1 focused scope: 154 passed in 3.73s.
+- Final post-production source gate: compileall PASS; 609 passed in 41.75s, 9 Windows
   symlink-privilege skips.
 - Fresh frozen console probe: cold spawned child completed with status `ok`
   under the bounded 5-second detector deadline.
