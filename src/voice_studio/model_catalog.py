@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import queue
 import re
 import shutil
+import stat
 import time
 import uuid
 from collections.abc import Callable
@@ -38,6 +40,23 @@ MODEL_DOWNLOAD_ESTIMATES = {
 }
 TRANSIENT_MODEL_DIRECTORIES = {".cache", ".locks"}
 TRANSIENT_MODEL_SUFFIXES = {".incomplete", ".lock", ".metadata", ".tmp"}
+CATALOG_RESIDUE_MAX_AGE_SECONDS = 300
+STAGING_MAX_AGE_SECONDS = 172_800
+STAGING_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$")
+
+
+def _reconcile_result() -> dict[str, Any]:
+    return {
+        "status": "PASS",
+        "action": "none",
+        "adopted": [],
+        "dropped": [],
+        "blocked": [],
+        "staging_removed": [],
+        "staging_kept": [],
+        "residue_removed": [],
+        "catalog_quarantined": None,
+    }
 
 
 def _download_worker(
@@ -82,7 +101,11 @@ class ModelCatalog:
             payload = json.loads(self.catalog_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"cannot read model catalog {self.catalog_path}: {exc}") from exc
-        if payload.get("version") != CATALOG_VERSION or not isinstance(payload.get("models"), list):
+        if (
+            not isinstance(payload, dict)
+            or payload.get("version") != CATALOG_VERSION
+            or not isinstance(payload.get("models"), list)
+        ):
             raise ValueError("unsupported or invalid model catalog")
         return payload
 
@@ -96,6 +119,208 @@ class ModelCatalog:
 
     def list(self) -> list[dict[str, Any]]:
         return sorted(self._load()["models"], key=lambda item: item["id"])
+
+    def reconcile(self) -> dict[str, Any]:
+        result = _reconcile_result()
+        quarantined = False
+        try:
+            payload = self._load()
+        except ValueError:
+            quarantine = self.catalog_path.with_name(
+                f"catalog.json.corrupt-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+                f"-{uuid.uuid4().hex[:8]}"
+            )
+            try:
+                self.catalog_path.replace(quarantine)
+            except OSError as quarantine_exc:
+                result.update(
+                    status="FAIL",
+                    action="attention",
+                    error=f"cannot quarantine model catalog: {quarantine_exc}",
+                )
+                return result
+            payload = {"version": CATALOG_VERSION, "models": []}
+            result["catalog_quarantined"] = str(quarantine)
+            quarantined = True
+
+        try:
+            with os.scandir(self.root) as iterator:
+                root_entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as exc:
+            result.update(
+                status="FAIL",
+                action="attention",
+                error=f"cannot scan model catalog: {exc}",
+            )
+            return result
+
+        models = payload["models"]
+        catalogued_ids: set[str] = set()
+        manifest_changed = quarantined
+        retained_models: list[Any] = []
+        for item in models:
+            if not isinstance(item, dict):
+                result["blocked"].append(
+                    {
+                        "id": "<invalid>",
+                        "path": str(self.catalog_path),
+                        "reason": "invalid manifest entry",
+                    }
+                )
+                retained_models.append(item)
+                continue
+            model_id = item.get("id")
+            relative_path = item.get("path")
+            if not isinstance(model_id, str) or not MODEL_ID_PATTERN.fullmatch(model_id):
+                result["blocked"].append(
+                    {
+                        "id": str(model_id),
+                        "path": str(self.catalog_path),
+                        "reason": "manifest entry has an invalid model id",
+                    }
+                )
+                retained_models.append(item)
+                continue
+            catalogued_ids.add(model_id)
+            if not isinstance(relative_path, str) or not relative_path:
+                result["blocked"].append(
+                    {
+                        "id": model_id,
+                        "path": str(self.root / str(relative_path)),
+                        "reason": "manifest entry has an invalid model path",
+                    }
+                )
+                retained_models.append(item)
+                continue
+            target = self.root / relative_path
+            try:
+                resolved_target = target.resolve()
+                resolved_root = self.root.resolve()
+            except OSError:
+                result["blocked"].append(
+                    {
+                        "id": model_id,
+                        "path": str(target),
+                        "reason": "model path could not be inspected safely",
+                    }
+                )
+                retained_models.append(item)
+                continue
+            try:
+                resolved_target.relative_to(resolved_root)
+            except ValueError:
+                result["blocked"].append(
+                    {
+                        "id": model_id,
+                        "path": str(target),
+                        "reason": "manifest model path is outside the managed catalog",
+                    }
+                )
+                retained_models.append(item)
+                continue
+            try:
+                target_stat = target.lstat()
+            except FileNotFoundError:
+                result["dropped"].append(model_id)
+                manifest_changed = True
+            except OSError:
+                result["blocked"].append(
+                    {
+                        "id": model_id,
+                        "path": str(target),
+                        "reason": "model path could not be inspected safely",
+                    }
+                )
+                retained_models.append(item)
+            else:
+                if not stat.S_ISDIR(target_stat.st_mode):
+                    result["blocked"].append(
+                        {
+                            "id": model_id,
+                            "path": str(target),
+                            "reason": "model path is not a real directory",
+                        }
+                    )
+                retained_models.append(item)
+
+        payload["models"] = retained_models
+        models = payload["models"]
+        for entry in root_entries:
+            if entry.name in {self.downloads.name, self.catalog_path.name}:
+                continue
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                if MODEL_ID_PATTERN.fullmatch(entry.name) and entry.name not in catalogued_ids:
+                    result["blocked"].append(
+                        {
+                            "id": entry.name,
+                            "path": str(self.root / entry.name),
+                            "reason": "model path could not be inspected safely",
+                        }
+                    )
+                continue
+            if not stat.S_ISDIR(entry_stat.st_mode):
+                continue
+            if not MODEL_ID_PATTERN.fullmatch(entry.name) or entry.name in catalogued_ids:
+                continue
+            directory = self.root / entry.name
+            try:
+                files, size = self._inventory(directory)
+            except ValueError:
+                result["blocked"].append(
+                    {
+                        "id": entry.name,
+                        "path": str(directory),
+                        "reason": (
+                            "model directory is incomplete; model.bin and config.json are required"
+                        ),
+                    }
+                )
+                continue
+            except OSError:
+                result["blocked"].append(
+                    {
+                        "id": entry.name,
+                        "path": str(directory),
+                        "reason": "model directory could not be inventoried safely",
+                    }
+                )
+                continue
+            installed_at = datetime.fromtimestamp(entry_stat.st_mtime, UTC).isoformat()
+            models.append(
+                {
+                    "id": entry.name,
+                    "path": entry.name,
+                    "source": "reconciled",
+                    "revision": None,
+                    "installed_at": installed_at,
+                    "size": size,
+                    "files": files,
+                    "reconciled": True,
+                    "reconciled_at": datetime.now(UTC).isoformat(),
+                }
+            )
+            result["adopted"].append(entry.name)
+            manifest_changed = True
+
+        if manifest_changed:
+            try:
+                self._save(payload)
+            except OSError as exc:
+                result.update(
+                    status="FAIL",
+                    action="attention",
+                    error=f"cannot save repaired model catalog: {exc}",
+                )
+                return result
+        if result["blocked"]:
+            result["action"] = "attention"
+        elif result["adopted"] or result["dropped"] or quarantined:
+            result["action"] = "repaired"
+        return result
 
     def get(self, model_id: str) -> dict[str, Any] | None:
         value = self._validate_model_id(model_id)
