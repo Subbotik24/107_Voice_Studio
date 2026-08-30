@@ -171,7 +171,7 @@ def _cleanup(
 
 def detect_hardware(
     *,
-    timeout_seconds: float = 2.0,
+    timeout_seconds: float = 5.0,
     context: Any | None = None,
     worker_target: Callable[[Any], None] | None = None,
 ) -> HardwareDetectionResult:

@@ -151,6 +151,51 @@ def test_timeout_terminates_overdue_child_with_bounded_cleanup(monkeypatch):
     assert all(item.closed and item.cancelled for item in context.queues)
 
 
+def test_default_deadline_allows_a_measured_cold_start_response(monkeypatch):
+    context = _FakeContext(run_target=False)
+    clock = [0.0]
+
+    class DelayedQueue(_FakeQueue):
+        def get(self, timeout=None):
+            del timeout
+            if self.items and clock[0] == 0.0:
+                clock[0] = 3.0
+                raise queue.Empty
+            return super().get(timeout=0)
+
+    delayed = DelayedQueue()
+    delayed.items.append({"ok": True, "cuda_devices": 0, "compute_types": ["int8"]})
+    context.Queue = lambda: (context.queues.append(delayed), delayed)[1]
+    monkeypatch.setattr(hardware.multiprocessing, "get_context", lambda _name: context)
+    monkeypatch.setattr(hardware.time, "monotonic", lambda: clock[0])
+
+    result = hardware.detect_hardware()
+
+    assert result.status == "ok"
+
+
+def test_response_beyond_default_deadline_degrades_and_cleans_up(monkeypatch):
+    context = _FakeContext(run_target=False)
+    clock = [0.0]
+
+    class NeverReadyQueue(_FakeQueue):
+        def get(self, timeout=None):
+            del timeout
+            clock[0] = 6.0
+            raise queue.Empty
+
+    never_ready = NeverReadyQueue()
+    context.Queue = lambda: (context.queues.append(never_ready), never_ready)[1]
+    monkeypatch.setattr(hardware.multiprocessing, "get_context", lambda _name: context)
+    monkeypatch.setattr(hardware.time, "monotonic", lambda: clock[0])
+
+    result = hardware.detect_hardware()
+
+    assert result.status == "degraded"
+    assert context.processes[0].terminate_calls == 1
+    assert all(item.closed and item.cancelled for item in context.queues)
+
+
 def test_child_start_failure_is_non_fatal_and_disposes_queue(monkeypatch):
     context = _FakeContext(start_error=OSError("process denied"))
     monkeypatch.setattr(hardware.multiprocessing, "get_context", lambda _name: context)
