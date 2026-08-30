@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
+import stat
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +17,7 @@ else:
     from generate_sbom import validate_sbom_document
 
 _PROJECT_VERSION = "0.3.0rc1"
+_FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
 def _hash_file(path: Path) -> tuple[str, int]:
@@ -76,6 +79,98 @@ def artifact_info(root: Path, path: Path) -> dict[str, Any]:
     }
 
 
+def _is_reparse_point(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _file_fingerprint(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        getattr(info, "st_dev", 0),
+        getattr(info, "st_ino", 0),
+        stat.S_IFMT(info.st_mode),
+        info.st_size,
+        getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
+        getattr(info, "st_ctime_ns", int(info.st_ctime * 1_000_000_000)),
+        getattr(info, "st_file_attributes", 0),
+    )
+
+
+def _sbom_stat(path: Path) -> os.stat_result:
+    try:
+        return os.lstat(path)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("release manifest SBOM does not exist") from exc
+    except OSError as exc:
+        raise ValueError("release manifest SBOM could not be inspected safely") from exc
+
+
+def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
+    root = Path(release_directory).absolute()
+    target = Path(sbom).absolute()
+    try:
+        relative = target.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("release manifest SBOM must be inside release directory") from exc
+    if not relative.parts:
+        raise ValueError("release manifest SBOM must be a regular file")
+
+    root_info = _sbom_stat(root)
+    if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
+        raise ValueError("release manifest directory is not a safe directory")
+    current = root
+    for index, component in enumerate(relative.parts):
+        current /= component
+        info = _sbom_stat(current)
+        if _is_reparse_point(info):
+            raise ValueError("release manifest SBOM path contains a symlink or reparse point")
+        if index < len(relative.parts) - 1 and not stat.S_ISDIR(info.st_mode):
+            raise ValueError("release manifest SBOM path contains a non-directory")
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("release manifest SBOM must be a regular file")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(target, flags)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError("release manifest SBOM does not exist") from exc
+    except OSError as exc:
+        raise ValueError("release manifest SBOM could not be opened safely") from exc
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            _is_reparse_point(opened)
+            or not stat.S_ISREG(opened.st_mode)
+            or _file_fingerprint(opened) != _file_fingerprint(info)
+        ):
+            raise ValueError("release manifest SBOM changed while opening")
+        try:
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                content = stream.read()
+        except OSError as exc:
+            raise ValueError("release manifest SBOM could not be read safely") from exc
+        try:
+            after_path = os.lstat(target)
+        except OSError as exc:
+            raise ValueError("release manifest SBOM changed during read") from exc
+        after_open = os.fstat(descriptor)
+        if (
+            _is_reparse_point(after_open)
+            or not stat.S_ISREG(after_open.st_mode)
+            or _file_fingerprint(after_open) != _file_fingerprint(opened)
+            or _is_reparse_point(after_path)
+            or not stat.S_ISREG(after_path.st_mode)
+            or _file_fingerprint(after_path) != _file_fingerprint(opened)
+        ):
+            raise ValueError("release manifest SBOM changed during read")
+        return content, relative.as_posix()
+    finally:
+        os.close(descriptor)
+
+
 def create_manifest(
     release_directory: Path,
     artifacts: list[Path],
@@ -89,10 +184,11 @@ def create_manifest(
     acceptance = json.loads(acceptance_result.read_text(encoding="utf-8"))
     if acceptance.get("status") != "PASS" or acceptance.get("tasks", 0) < 50:
         raise ValueError("release manifest requires a passing 50-task acceptance result")
-    sbom_inventory = artifact_info(release_directory, sbom)
-    if sbom_inventory["kind"] != "file":
-        raise ValueError("release manifest SBOM must be a regular file")
-    sbom_document = json.loads(sbom.read_text(encoding="utf-8"))
+    sbom_bytes, sbom_path = _read_sbom_bytes(release_directory, sbom)
+    try:
+        sbom_document = json.loads(sbom_bytes.decode("utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("release manifest SBOM must be valid UTF-8 JSON") from exc
     validate_sbom_document(sbom_document)
     sbom_component = sbom_document["metadata"]["component"]
     if sbom_component["version"] != _PROJECT_VERSION:
@@ -117,9 +213,9 @@ def create_manifest(
         "sbom": {
             "format": sbom_document["bomFormat"],
             "spec_version": sbom_document["specVersion"],
-            "path": sbom_inventory["path"],
-            "sha256": sbom_inventory["sha256"],
-            "size": sbom_inventory["size"],
+            "path": sbom_path,
+            "sha256": hashlib.sha256(sbom_bytes).hexdigest(),
+            "size": len(sbom_bytes),
         },
         "acceptance": {
             "file": "acceptance-result.json",

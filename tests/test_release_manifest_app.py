@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
+import scripts.create_release_manifest as manifest_module
 from scripts.create_release_manifest import create_manifest
 from scripts.generate_sbom import build_sbom
 
@@ -165,3 +168,104 @@ def test_release_manifest_cli_exposes_required_sbom_option():
 
     assert result.returncode == 0
     assert "--sbom SBOM" in result.stdout
+
+
+def test_release_manifest_hashes_exact_validated_sbom_bytes(tmp_path, monkeypatch):
+    release = tmp_path / "release"
+    release.mkdir()
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    result = acceptance(tmp_path / "acceptance.json")
+    sbom = write_sbom(release / "voice-studio-sbom.cdx.json")
+    replacement = json.dumps(
+        build_sbom(
+            "beta-package==2.0\n",
+            project_name="voice-studio",
+            project_version="0.3.0rc1",
+        )
+    ).encode("utf-8")
+    original_read_text = type(sbom).read_text
+
+    def replace_before_reopen(path, *args, **kwargs):
+        if path == sbom:
+            sbom.write_bytes(replacement)
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(type(sbom), "read_text", replace_before_reopen)
+    manifest = create_manifest(
+        release,
+        [artifact],
+        sbom,
+        release_label="0.2.0-test-rc1",
+        acceptance_result=result,
+        repository_root=tmp_path,
+    )
+
+    validated_bytes = sbom.read_bytes()
+    assert manifest["sbom"]["sha256"] == hashlib.sha256(validated_bytes).hexdigest()
+    assert manifest["sbom"]["size"] == len(validated_bytes)
+
+
+def test_release_manifest_rejects_sbom_path_swap_during_read(tmp_path, monkeypatch):
+    release = tmp_path / "release"
+    release.mkdir()
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    result = acceptance(tmp_path / "acceptance.json")
+    sbom = write_sbom(release / "voice-studio-sbom.cdx.json")
+    replacement = release / "replacement.json"
+    replacement.write_text(
+        json.dumps(
+            build_sbom(
+                "beta-package==2.0\n",
+                project_name="voice-studio",
+                project_version="0.3.0rc1",
+            )
+        ),
+        encoding="utf-8",
+    )
+    original_open = os.open
+
+    def swap_after_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if Path(path) == sbom:
+            sbom.write_bytes(replacement.read_bytes())
+        return descriptor
+
+    monkeypatch.setattr(manifest_module.os, "open", swap_after_open)
+    with pytest.raises(ValueError, match="changed") as error:
+        create_manifest(
+            release,
+            [artifact],
+            sbom,
+            release_label="0.2.0-test-rc1",
+            acceptance_result=result,
+            repository_root=tmp_path,
+        )
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_release_manifest_rejects_sbom_symlink_without_private_path(tmp_path):
+    release = tmp_path / "release"
+    release.mkdir()
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    result = acceptance(tmp_path / "acceptance.json")
+    target = release / "actual-sbom.json"
+    write_sbom(target)
+    sbom = release / "voice-studio-sbom.cdx.json"
+    try:
+        sbom.symlink_to(target.name)
+    except OSError as error:
+        pytest.skip(f"symlink creation unavailable: {error}")
+
+    with pytest.raises(ValueError, match="symlink|reparse") as error:
+        create_manifest(
+            release,
+            [artifact],
+            sbom,
+            release_label="0.2.0-test-rc1",
+            acceptance_result=result,
+            repository_root=tmp_path,
+        )
+    assert str(tmp_path) not in str(error.value)
