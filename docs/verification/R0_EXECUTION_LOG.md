@@ -32,19 +32,23 @@ release evidence remains in `VERIFICATION.md`.
 | W2-C3 stable audit snapshot | `7e7f8e0` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 531 passed, 8 Windows symlink-privilege skips; focused 148 passed, 8 skipped | root replacement and temp containment changed at `b7ba7fd` |
 | W2-C3 final read-only audit | `b7ba7fd` | full pytest, focused storage/model/backup/CLI, focused independent review, compile, Ruff, diff check | 533 passed, 8 Windows symlink-privilege skips; related 150 passed, 8 skipped; final review CLEAN | storage/audit/CLI production code or corresponding tests change |
 | W2-C3 final docs/artifact | `1c0f471` | Help validation, wheel rebuild, pip check, diff check | 13 Help files PASS; wheel 700,821 bytes, SHA-256 `33441D2FB1932501241DA09E205C566EB6BD7DB392666ECAD29AFD0FEADBFCC8`; dependencies PASS | Help/package inputs or release metadata change |
-| W4-B1 reproducible SBOM | `686d9406d5ee8d246d410e41e07d184355acdaca` | two lock-root generators, one post-code full quality gate, wheel, pip check | SBOM 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`; 58 components; 573 passed, 9 Windows symlink-privilege skips; wheel 700,821 bytes, SHA-256 `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8` | production generator/manifest/staging code or corresponding tests change |
+| W4-B1 reproducible SBOM final fix | `3e85aaf1ab6e8505925ef12a5a822181d6b0a4df` | RED/GREEN release boundary regressions, two lock-root generators, one post-fix full quality gate, wheel, pip check | SBOM 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`; 58 components; focused 60 passed / 1 skipped; full 583 passed / 9 Windows symlink-privilege skips; wheel 701,107 bytes, SHA-256 `dadf53304aca7a31d297cc31c031f62b37cb53cf3e85d02b43e8d1c072a31a7a` | production generator/manifest/release-filesystem/staging code or corresponding tests change |
 
 ## W4-B1 current checkpoint
 
-- Verified production code commit: `686d9406d5ee8d246d410e41e07d184355acdaca`.
+- Verified final-fix production code commit: `3e85aaf1ab6e8505925ef12a5a822181d6b0a4df`.
 - Canonical artifact comparison passed: outputs from two temporary lock roots
   were byte-identical; the retained relative artifact has 58 components, no
   absolute/private paths, 11,159 bytes and SHA-256
   `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`.
-- Exactly one post-code full quality gate ran: 573 passed, 9 Windows
+- Exactly one post-final-fix full quality gate ran: 583 passed, 9 Windows
   symlink-privilege skips; wheel and `pip check` passed. It was not rerun after
-  documentation-only edits. The wheel was 700,821 bytes with SHA-256
-  `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8`.
+  documentation-only edits. The wheel was 701,107 bytes with SHA-256
+  `dadf53304aca7a31d297cc31c031f62b37cb53cf3e85d02b43e8d1c072a31a7a`.
+- Focused RED captured eight failures in the reviewed boundary; focused GREEN
+  passed 60 tests with one symlink-privilege skip. Windows junction swaps and
+  atomic no-replace publication executed; macOS received source/syntax checks
+  only and no physical Test RC build claim.
 - The SBOM is lock-only provenance for the pinned Windows release environment,
   not necessarily frozen-runtime contents, and is not license/vulnerability/
   signature evidence. Source/contract/syntax checks passed; physical Windows or

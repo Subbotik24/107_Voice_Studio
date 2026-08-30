@@ -8,15 +8,20 @@
 підпис, native, clean-machine або фізичний Windows/macOS acceptance.
 **ГІЛКА РОБОТИ:** локальна `main`; нових гілок або worktree не створено,
 push не виконувався.
-**ВЕРИФІКОВАНИЙ CODE COMMIT:** `686d9406d5ee8d246d410e41e07d184355acdaca`.
+**ВЕРИФІКОВАНИЙ CODE COMMIT:** `3e85aaf1ab6e8505925ef12a5a822181d6b0a4df`.
 **Доказ:** дві генерації з копій `requirements-windows.lock` у різних
 тимчасових коренях byte-identical; 58 components; artifact
 `build/w4-b1-sbom/voice-studio-sbom.cdx.json`, 11,159 bytes, SHA-256
 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`.
-Один post-code quality gate: `573 passed`, `9 skipped` через Windows
-symlink privilege; wheel і `pip check` — PASS. SBOM є інвентарем pinned
-Windows release environment, не frozen-runtime contents, і не є доказом
-ліцензій, вразливостей або підпису.
+Один post-final-fix quality gate: `583 passed`, `9 skipped` через Windows
+symlink privilege; focused release suite — `60 passed`, `1 skipped`; wheel
+701,107 bytes, SHA-256
+`dadf53304aca7a31d297cc31c031f62b37cb53cf3e85d02b43e8d1c072a31a7a`,
+і `pip check` — PASS. Raw-byte lock parsing відхиляє bare CR; manifest повторно
+перевіряє SBOM через pinned handle/descriptor-relative no-reparse boundary;
+Windows/macOS publication використовує atomic no-replace helper. SBOM є
+інвентарем pinned Windows release environment, не frozen-runtime contents, і
+не є доказом ліцензій, вразливостей або підпису.
 
 ### W4-B1 acceptance limits
 

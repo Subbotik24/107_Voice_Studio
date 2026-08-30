@@ -6,8 +6,8 @@ stand in for a packaged Windows executable check.
 ## W4-B1 reproducible SBOM — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.
-The production-code commit verified before documentation edits was
-`686d9406d5ee8d246d410e41e07d184355acdaca`.
+The final-fix production-code commit verified before documentation edits was
+`3e85aaf1ab6e8505925ef12a5a822181d6b0a4df`.
 
 The generator was run twice against copies of `requirements-windows.lock` in
 different temporary roots. The resulting bytes were compared directly, the
@@ -19,20 +19,30 @@ material, and the first output was retained as
 | --- | --- |
 | Canonical artifact comparison | PASS; byte-identical outputs, 58 components, path scan PASS |
 | SBOM artifact | `build/w4-b1-sbom/voice-studio-sbom.cdx.json`, 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377` |
-| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compileall, Ruff, Help validation, 573 passed / 9 skipped, CLI `0.3.0rc1` |
-| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w4-b1-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 700,821 bytes, SHA-256 `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8` |
+| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compileall, Ruff, Help validation, 583 passed / 9 skipped, CLI `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w4-b1-final-fix-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 701,107 bytes, SHA-256 `dadf53304aca7a31d297cc31c031f62b37cb53cf3e85d02b43e8d1c072a31a7a` |
 | `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
 | `git diff --check` before documentation edits | PASS; no whitespace errors |
 
-The full quality gate above was run exactly once after the W4-B1 production
+The final fix added regression coverage for bare-CR lock input, deterministic
+in-place content mutation after descriptor close, release-root and nested
+ancestor junction swaps that retained final-file identity, destination
+creation after the publication precheck, exact staged `--output` binding and
+Windows no-nesting publication. The focused release/SBOM/packaging set passed
+60 tests with one final-symlink privilege skip. Windows junction and native
+promotion coverage executed. Bash syntax, PowerShell AST parsing, focused
+Ruff, compileall and diff checks passed before the code commit.
+
+The full quality gate above was run exactly once after the final-fix production
 code was complete and was not rerun after these documentation-only edits. The
-source/contract/syntax checks passed, but no physical Windows or macOS Test RC
-build, clean-machine install, signing/notarization, or physical-device
-acceptance was run for W4-B1. The SBOM is a lock-only inventory of the pinned
-Windows x64 release environment, not necessarily frozen-runtime contents. It
-does not establish license coverage, vulnerability status, or a publisher
-signature. The Test RC artifacts remain unsigned and native/physical gates are
-`NOT_RUN`.
+earlier W4-B1 gate is superseded by this post-fix result. No physical Windows
+or macOS Test RC build, clean-machine install, signing/notarization, or
+physical-device acceptance was run for W4-B1. The macOS descriptor boundary
+and `renameatx_np(RENAME_EXCL)` path received source/syntax verification, not a
+native execution claim. The SBOM is a lock-only inventory of the pinned Windows
+x64 release environment, not necessarily frozen-runtime contents. It does not
+establish license coverage, vulnerability status, or a publisher signature.
+The Test RC artifacts remain unsigned and native/physical gates are `NOT_RUN`.
 
 The filename associated with the Test RC release artifacts is
 `voice-studio-sbom.cdx.json`; release manifests use a relative path and record

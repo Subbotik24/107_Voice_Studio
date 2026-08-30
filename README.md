@@ -141,6 +141,11 @@ not license evidence, vulnerability evidence, or a publisher signature; the
 Test RC remains unsigned, and native Windows/macOS and physical-device gates
 remain **NOT RUN** for this increment.
 
+Release-manifest ingestion opens the SBOM through a pinned, no-reparse
+filesystem boundary and refuses root, ancestor, pathname or content changes.
+Both release builders promote a completed staging directory with the host OS
+atomic no-replace primitive and fail if the final destination already exists.
+
 ## Development and checks
 
 ```bash

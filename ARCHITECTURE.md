@@ -119,6 +119,15 @@ store its path relative to the release directory and record its byte size and
 SHA-256; the Windows and macOS staging flows include the same filename in
 their checksum inputs.
 
+Manifest intake walks every filesystem component from a pinned volume/root
+handle: Windows uses handle-relative native opens, while macOS/POSIX uses
+descriptor-relative `openat` semantics with no-follow flags. The validated
+file is reopened through the same boundary and its exact bytes, directory
+identities and file fingerprint must remain stable before the manifest hash is
+accepted. Release publication uses one cross-platform helper: Windows
+`MoveFileExW` without replacement and macOS `renameatx_np(RENAME_EXCL)`.
+Existing final destinations are never nested into or overwritten.
+
 This SBOM inventories the pinned Windows x64 release environment and does not
 necessarily describe frozen-runtime contents. The lock-only inventory is not
 license evidence, vulnerability evidence, or a publisher signature. Signing,
