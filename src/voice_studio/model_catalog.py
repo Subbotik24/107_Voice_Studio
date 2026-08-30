@@ -8,6 +8,7 @@ import re
 import shutil
 import stat
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -312,6 +313,7 @@ class ModelCatalog:
             return result
 
         catalogued_ids: set[str] = set()
+        catalogued_root_names: set[str] = set()
         if payload is not None:
             for item in payload["models"]:
                 if not isinstance(item, dict):
@@ -327,21 +329,38 @@ class ModelCatalog:
                     )
                     continue
                 catalogued_ids.add(model_id)
-                relative = Path(relative_path) if isinstance(relative_path, str) else None
+                if not isinstance(relative_path, str) or any(
+                    unicodedata.category(character) in {"Cc", "Cs"}
+                    for character in relative_path
+                ):
+                    blocked(
+                        model_id,
+                        catalog_path,
+                        "manifest entry has an invalid model path",
+                    )
+                    continue
+                try:
+                    relative = Path(relative_path)
+                except (TypeError, ValueError):
+                    blocked(
+                        model_id,
+                        catalog_path,
+                        "manifest entry has an invalid model path",
+                    )
+                    continue
                 if (
-                    relative is None
-                    or not relative_path
+                    not relative_path
                     or relative.is_absolute()
                     or bool(relative.anchor)
                     or any(part in {"", ".", ".."} for part in relative.parts)
                 ):
-                    target = root / str(relative_path)
                     blocked(
                         model_id,
-                        target,
+                        catalog_path,
                         "manifest entry has an invalid model path",
                     )
                     continue
+                catalogued_root_names.add(relative.parts[0])
                 target = root.joinpath(*relative.parts)
                 parent = root
                 unsafe_parent = False
@@ -351,7 +370,7 @@ class ModelCatalog:
                         parent_stat = parent.lstat()
                     except FileNotFoundError:
                         break
-                    except OSError:
+                    except (OSError, UnicodeError, ValueError):
                         blocked(
                             model_id,
                             parent,
@@ -386,7 +405,7 @@ class ModelCatalog:
                         }
                     )
                     continue
-                except OSError:
+                except (OSError, ValueError):
                     blocked(
                         model_id,
                         target,
@@ -426,6 +445,8 @@ class ModelCatalog:
                 blocked(entry.name, path, "model path could not be inspected safely")
                 continue
             if cls._is_reparse_point(path, entry_stat):
+                if entry.name in catalogued_root_names:
+                    continue
                 blocked(
                     entry.name,
                     path,
@@ -434,7 +455,11 @@ class ModelCatalog:
                     else "model path is a reparse point",
                 )
                 continue
-            if not stat.S_ISDIR(entry_stat.st_mode) or entry.name in catalogued_ids:
+            if (
+                not stat.S_ISDIR(entry_stat.st_mode)
+                or entry.name in catalogued_ids
+                or entry.name in catalogued_root_names
+            ):
                 continue
             result["orphans"].append(
                 {

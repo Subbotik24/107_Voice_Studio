@@ -240,6 +240,102 @@ def test_inspect_blocks_model_symlink_without_following_or_writing(tmp_path):
     assert target.joinpath("model.bin").read_bytes() == b"fixture model"
 
 
+def test_inspect_rejects_nul_in_catalog_path_without_crashing_or_writing(tmp_path):
+    root = tmp_path / "managed"
+    root.mkdir()
+    (root / "catalog.json").write_text(
+        '{"version": 1, "models": [{"id": "bad", "path": "bad\\u0000model"}]}',
+        encoding="utf-8",
+    )
+    before = snapshot_tree(root)
+
+    result = ModelCatalog.inspect(root)
+
+    assert result == {
+        "status": "ATTENTION",
+        "manifest": "valid",
+        "missing": [],
+        "orphans": [],
+        "blocked": [
+            {
+                "id": "bad",
+                "path": str(root / "catalog.json"),
+                "reason": "manifest entry has an invalid model path",
+            }
+        ],
+        "staging": [],
+        "residue": [],
+    }
+    assert snapshot_tree(root) == before
+
+
+def test_inspect_blocks_root_junction_without_following_or_writing(tmp_path):
+    outside = local_model(tmp_path / "outside")
+    root = tmp_path / "managed"
+    make_junction(root, outside)
+    before = snapshot_tree(outside)
+
+    result = ModelCatalog.inspect(root)
+
+    assert result == {
+        "status": "ATTENTION",
+        "manifest": "absent",
+        "missing": [],
+        "orphans": [],
+        "blocked": [
+            {
+                "id": "<root>",
+                "path": str(root),
+                "reason": "model root is a reparse point",
+            }
+        ],
+        "staging": [],
+        "residue": [],
+    }
+    assert snapshot_tree(outside) == before
+    assert (outside / "model.bin").read_bytes() == b"fixture model"
+
+
+@pytest.mark.parametrize("ancestor", [False, True])
+def test_inspect_blocks_catalogued_junction_without_following_or_writing(
+    tmp_path, ancestor
+):
+    outside = local_model(tmp_path / "outside")
+    root = tmp_path / "managed"
+    root.mkdir()
+    if ancestor:
+        junction = root / "ancestor"
+        make_junction(junction, outside)
+        relative_path = "ancestor/model"
+    else:
+        junction = root / "linked-model"
+        make_junction(junction, outside)
+        relative_path = "linked-model"
+    (root / "catalog.json").write_text(
+        '{"version": 1, "models": [{"id": "tiny", "path": "'
+        + relative_path
+        + '"}]}',
+        encoding="utf-8",
+    )
+    before = snapshot_tree(outside)
+
+    result = ModelCatalog.inspect(root)
+
+    expected_path = junction
+    expected_block = {
+        "id": "tiny",
+        "path": str(expected_path),
+        "reason": "model path is a reparse point",
+    }
+    assert result["status"] == "ATTENTION"
+    assert result["manifest"] == "valid"
+    assert expected_block in result["blocked"]
+    if not ancestor:
+        assert result["blocked"] == [expected_block]
+    assert snapshot_tree(outside) == before
+    assert (outside / "model.bin").read_bytes() == b"fixture model"
+
+
 def make_junction(link: Path, target: Path) -> None:
     if os.name != "nt":
         pytest.skip("Windows junctions are unavailable")
