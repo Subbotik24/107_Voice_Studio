@@ -134,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     models = sub.add_parser("models", help="manage local faster-whisper models")
     model_commands = models.add_subparsers(dest="models_command", required=True)
     model_commands.add_parser("list", help="list installed models")
+    model_commands.add_parser("reconcile", help="repair local model catalog state")
     install_model = model_commands.add_parser("install", help="install a model explicitly")
     install_model.add_argument("model_id")
     install_model.add_argument("--from-directory", type=Path)
@@ -315,6 +316,15 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "models":
             catalog = ModelCatalog(store.models)
+            reconciliation = catalog.reconcile()
+            if reconciliation["status"] != "PASS" or reconciliation["action"] != "none":
+                print(
+                    "model-catalog:" + json.dumps(reconciliation, ensure_ascii=False),
+                    file=sys.stderr,
+                )
+            if args.models_command == "reconcile":
+                _json(reconciliation)
+                return 0 if reconciliation["status"] == "PASS" else 2
             if args.models_command == "list":
                 _json(catalog.list())
                 return 0

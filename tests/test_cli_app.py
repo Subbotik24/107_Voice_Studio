@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from voice_studio import backup as backup_module
 from voice_studio import cli
@@ -7,6 +8,40 @@ from voice_studio.models import Settings, Transcript
 from voice_studio.storage import LocalStore
 
 main = cli.main
+
+
+def _write_model(path: Path) -> Path:
+    path.mkdir(parents=True)
+    (path / "model.bin").write_bytes(b"fixture model")
+    (path / "config.json").write_text('{"model_type":"Whisper"}', encoding="utf-8")
+    return path
+
+
+def test_models_reconcile_outputs_json_and_models_list_reports_repair(
+    tmp_path, capsys, monkeypatch
+):
+    data = tmp_path / "data"
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+    _write_model(data / "models" / "orphan")
+
+    assert main(["models", "reconcile"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["adopted"] == ["orphan"]
+
+
+def test_model_catalog_hook_is_limited_to_models_commands(tmp_path, capsys, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+    _write_model(data / "models" / "orphan")
+
+    assert main(["history"]) == 0
+    assert "model-catalog:" not in capsys.readouterr().err
+    assert main(["models", "list"]) == 0
+    assert "model-catalog:" in capsys.readouterr().err
 
 
 def test_transcribe_cli_selects_local_ollama_profile(monkeypatch):
