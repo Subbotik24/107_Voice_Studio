@@ -182,6 +182,47 @@ def test_audit_existing_refuses_persistent_sidecar_churn_without_mutation(
     assert _recursive_storage_snapshot(store.root) == before
 
 
+def test_audit_existing_discards_result_when_live_root_changes_after_scan(
+    tmp_path, monkeypatch
+):
+    store = LocalStore(tmp_path / "data")
+    displaced = tmp_path / "displaced-data"
+    real_audit = LocalStore.audit
+    audit_calls = 0
+
+    def replace_root_after_scan(snapshot_store):
+        nonlocal audit_calls
+        audit_calls += 1
+        result = real_audit(snapshot_store)
+        store.root.replace(displaced)
+        store.root.mkdir()
+        return result
+
+    monkeypatch.setattr(LocalStore, "audit", replace_root_after_scan)
+    try:
+        with pytest.raises(RuntimeError, match="stable storage snapshot"):
+            LocalStore.audit_existing(store.root)
+    finally:
+        store.root.rmdir()
+        displaced.replace(store.root)
+
+    assert audit_calls == 1
+    assert store.db_path.is_file()
+
+
+def test_audit_existing_refuses_temp_parent_inside_live_root_without_writing(
+    tmp_path, monkeypatch
+):
+    store = LocalStore(tmp_path / "data")
+    before = _recursive_storage_snapshot(store.root)
+    monkeypatch.setattr(storage_module.tempfile, "gettempdir", lambda: str(store.root))
+
+    with pytest.raises(RuntimeError, match="temporary directory parent"):
+        LocalStore.audit_existing(store.root)
+
+    assert _recursive_storage_snapshot(store.root) == before
+
+
 def test_legacy_payload_defaults_engine():
     data = transcript().to_dict()
     data.pop("engine")

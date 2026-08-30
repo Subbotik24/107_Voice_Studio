@@ -142,6 +142,22 @@ def _copy_audit_file(
         os.close(descriptor)
 
 
+def _audit_root_matches(root: Path, identity: tuple[int, int]) -> bool:
+    try:
+        info = root.lstat()
+    except OSError:
+        return False
+    return (
+        not _is_reparse_point(info)
+        and stat.S_ISDIR(info.st_mode)
+        and identity
+        == (
+            getattr(info, "st_dev", 0),
+            getattr(info, "st_ino", 0),
+        )
+    )
+
+
 class LocalStore:
     def __init__(self, root: Path):
         self.root = root.expanduser()
@@ -177,15 +193,31 @@ class LocalStore:
             db_path.with_name(f"{db_path.name}-shm"), required=False
         )
 
-        with tempfile.TemporaryDirectory(prefix="voice-studio-audit-") as temporary:
+        live_root = expanded.resolve(strict=True)
+        temporary_parent = Path(tempfile.gettempdir()).resolve(strict=True)
+        try:
+            temporary_parent.relative_to(live_root)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError(
+                "storage audit temporary directory parent is inside live data"
+            )
+        try:
+            temporary_parent_info = temporary_parent.lstat()
+        except OSError as exc:
+            raise RuntimeError(
+                "storage audit temporary directory parent could not be inspected"
+            ) from exc
+        if _is_reparse_point(temporary_parent_info) or not stat.S_ISDIR(
+            temporary_parent_info.st_mode
+        ):
+            raise RuntimeError("storage audit temporary directory parent is unsafe")
+
+        with tempfile.TemporaryDirectory(
+            prefix="voice-studio-audit-", dir=temporary_parent
+        ) as temporary:
             temporary_root = Path(temporary).resolve(strict=True)
-            live_root = expanded.resolve(strict=True)
-            try:
-                temporary_root.relative_to(live_root)
-            except ValueError:
-                pass
-            else:
-                raise RuntimeError("storage audit temporary directory is inside live data")
 
             for attempt in range(AUDIT_SNAPSHOT_ATTEMPTS):
                 attempt_root = temporary_root / f"attempt-{attempt + 1}"
@@ -201,19 +233,9 @@ class LocalStore:
                             before[1],
                         )
                     after = _capture_audit_database_state(db_path)
-                    current_root = expanded.lstat()
                 except (_AuditSnapshotChanged, FileNotFoundError, OSError):
                     continue
-                if (
-                    _is_reparse_point(current_root)
-                    or not stat.S_ISDIR(current_root.st_mode)
-                    or root_identity
-                    != (
-                        getattr(current_root, "st_dev", 0),
-                        getattr(current_root, "st_ino", 0),
-                    )
-                    or before != after
-                ):
+                if before != after or not _audit_root_matches(expanded, root_identity):
                     continue
 
                 store = cls.__new__(cls)
@@ -222,7 +244,13 @@ class LocalStore:
                 store.exports = expanded / "exports"
                 store.models = expanded / "models"
                 store.db_path = snapshot_db
-                return store.audit()
+                try:
+                    result = store.audit()
+                except OSError:
+                    continue
+                if not _audit_root_matches(expanded, root_identity):
+                    continue
+                return result
         raise RuntimeError(
             "could not capture a stable storage snapshot; close active writers and retry"
         )
