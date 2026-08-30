@@ -3,6 +3,20 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## R0 W3-H1 hardware settings validation and advisory detection — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.
+The source/headless implementation validates the static vocabulary before
+worker construction, checks explicit runtime pairs in the worker before
+`WhisperModel`, and keeps detection advisory with `auto/default` fallback.
+
+The focused tests cover CPU-only and CUDA capability payloads, runtime import
+failure, malformed response, child start failure, timeout cleanup, parent
+runtime import boundaries, CLI `hardware detect --json`, readonly GUI choices,
+single-worker serialization, off-Tk probing, and no settings mutation.
+The packaged Windows detector round-trip is recorded separately if a fresh
+PyInstaller build is available; the existing frozen artifact predates W3-H1.
+
 ## W4-B1 reproducible SBOM — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.

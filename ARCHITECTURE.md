@@ -31,6 +31,7 @@ UI та storage не залежать від внутрішньої архіте
 | `voice_studio.app` | Tkinter GUI, worker thread, hotkey, UX |
 | `voice_studio.cli` | CLI для транскрипції, моделей, backup і diagnostics |
 | `voice_studio.engines` | Adapter contract, local runtime cache і explicit cloud adapter |
+| `voice_studio.hardware` | Bounded spawn-based local capability detection (advisory only) |
 | `voice_studio.service` | Оркестрація транскрибування |
 | `voice_studio.storage` | SHA‑256, SQLite, retention |
 | `voice_studio.dictionary` | Детерміновані термінологічні заміни |
@@ -83,6 +84,8 @@ size і факт передачі аудіо перед upload; CLI вимага
 - Import/finalize/storage лишаються в parent process, тому user original не видаляється.
 - Події worker → UI передаються через `queue.Queue`.
 - Одночасний запуск двох транскрибувань UI блокує.
+- Перевірка hardware у Settings запускається як окремий bounded GUI worker;
+  вона не імпортує model runtime у parent process і не змінює збережені settings.
 
 ## 5. Storage
 
@@ -107,6 +110,9 @@ JSONL records, SHA‑256 inventory та опційні managed copies. Restore �
 - ручна правка суцільного тексту не перерозподіляється автоматично по subtitle segments;
 - немає підписаних native installers;
 - точність розпізнавання не заявляється без закритого benchmark.
+- `device`/`compute_type` спочатку перевіряються за статичним словником, а
+  явна пара додатково перевіряється CTranslate2 у worker process перед
+  `WhisperModel`; detection failure лишається advisory з fallback `auto/default`.
 
 ## 7. Release provenance (W4-B1)
 

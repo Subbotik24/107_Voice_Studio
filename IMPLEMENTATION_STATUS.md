@@ -35,6 +35,7 @@ in the supported flow.
 | W2-S1 coordinated worker shutdown (process/queue half, 2026-08-30) | PASS source/headless | transcription and model-download process generations have bounded terminate/kill cleanup, exactly-once queue disposal, reusable close, epoch/concurrency protection and resource-tracker regression evidence; the app/recorder/hotkey thread half remains open, so full W2-S1 is still IN PROGRESS |
 | W2-S1 coordinated worker shutdown (app/recorder/hotkey/maintenance thread half, 2026-08-30) | PASS source/headless | GUI worker registry, one-budget bounded joins, late-event gating, recorder residue retention, bounded hotkey stop and maintenance refusal are covered by regression tests and a clean-profile source GUI close smoke; native physical and packaged acceptance remain open, so full W2-S1 is still IN PROGRESS |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
+| R0 W3-H1 hardware settings and advisory detection (2026-08-30) | PASS source/headless | `device`/`compute_type` lexical validation fails before worker creation; runtime CTranslate2 preflight rejects unavailable CUDA and unsupported concrete pairs before WhisperModel load; bounded spawn detection returns immutable capabilities with `auto/default` fallback; GUI detection uses the retained worker registry and never mutates saved settings |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
 | Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
@@ -76,7 +77,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 - W2-S1 native physical and packaged acceptance (the process/queue and
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);
-- R0 W3-H1 hardware `device`/`compute_type` validation and bounded detection;
 - R0 W3-V1 configurable VAD with the current enabled default preserved;
 - R0 W3-E1 minimal subtitle consistency for existing exports;
 - R1-excluded word-level timestamps and the full split/retime subtitle editor;

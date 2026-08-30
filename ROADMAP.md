@@ -64,6 +64,12 @@ R1/R2 capabilities are not part of the current completion scope.
    - packaged assets і links перевіряються build gate;
    - стан: реалізовано; український і чеський Help візуально перевірено.
 
+9. **Hardware settings validation and advisory detection (W3-H1)**
+   - статичні `device`/`compute_type` choices і runtime preflight;
+   - bounded local detection без model load, network або silent mutation;
+   - стан: реалізовано source/headless; packaged detector round-trip remains
+     an additional Windows evidence check when the build toolchain is available.
+
 ## P1
 
 - speaker diarization;

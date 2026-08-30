@@ -64,6 +64,14 @@ English. When Ollama is running on its standard loopback endpoint,
 **Settings → Local Ollama model** lists the audio-capable models already
 installed on this computer. No API key or cloud-consent switch is needed.
 
+For the Local Whisper profile, **Settings → Recognition** constrains hardware
+choices to the supported `auto`/`cpu`/`cuda` and CTranslate2 compute-type
+vocabulary. **Detect hardware** performs a bounded local advisory check in a
+background worker; it does not load a model, contact the network, or change
+saved settings. If the optional runtime cannot be checked, keep the safe
+`auto/default` selection. Explicit device/compute combinations are checked
+again against the installed CTranslate2 runtime before a Whisper model loads.
+
 In the default profile, the selected Ollama model performs direct speech
 transcription and automatic local cleanup. The immutable STT result remains in
 `raw_text`; cleanup changes only `corrected_text`. A cleanup failure is shown to
