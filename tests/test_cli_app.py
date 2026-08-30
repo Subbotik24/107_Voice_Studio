@@ -47,6 +47,69 @@ def _stored_missing_cli_source(tmp_path, monkeypatch):
     return store, item, original, managed
 
 
+def _recursive_snapshot(root: Path):
+    snapshot = {}
+    for path in sorted(root.rglob("*")):
+        info = path.lstat()
+        snapshot[path.relative_to(root).as_posix()] = (
+            info.st_mode,
+            info.st_size,
+            info.st_mtime_ns,
+            path.read_bytes() if path.is_file() else None,
+        )
+    return snapshot
+
+
+def test_storage_audit_read_only_cli_refuses_missing_root_without_bootstrap(
+    tmp_path, capsys, monkeypatch
+):
+    data = tmp_path / "missing-data"
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "missing-config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "missing-cache"))
+
+    assert main(["storage", "audit"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "storage root does not exist" in captured.err
+    assert not data.exists()
+    assert not (tmp_path / "missing-config").exists()
+    assert not (tmp_path / "missing-cache").exists()
+
+
+def test_storage_audit_read_only_cli_preserves_store_and_restore_journal(
+    tmp_path, capsys, monkeypatch
+):
+    store = _storage_profile(tmp_path, monkeypatch)
+    staging = tmp_path / ".data.restore-staging"
+    staging.mkdir()
+    (staging / "marker.txt").write_bytes(b"unfinished restore")
+    backup_module._write_json_atomic(
+        backup_module.restore_journal_path(store.root),
+        {
+            "journal_version": backup_module.RESTORE_JOURNAL_VERSION,
+            "backup_version": backup_module.BACKUP_VERSION,
+            "created_at": "2026-08-30T00:00:00+00:00",
+            "data_root": str(store.root.resolve()),
+            "staging_path": str(staging.resolve()),
+            "recovery_path": None,
+            "expected_records": 0,
+            "settings_target": None,
+            "settings_payload_written": True,
+            "stage": "swap_started",
+        },
+    )
+    before = _recursive_snapshot(tmp_path)
+
+    assert main(["storage", "audit"]) == 0
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["records"] == 0
+    assert "restore-journal:" not in captured.err
+    assert _recursive_snapshot(tmp_path) == before
+
+
 def test_storage_audit_drift_outputs_additive_sections(tmp_path, capsys, monkeypatch):
     store, item, _original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
     (store.models / "catalog.json").write_text(

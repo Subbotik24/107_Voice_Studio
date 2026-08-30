@@ -65,17 +65,72 @@ class LocalStore:
         self.exports = self.root / "exports"
         self.models = self.root / "models"
         self.db_path = self.root / "history.sqlite3"
+        self._read_only = False
         for path in (self.root, self.sources, self.exports, self.models):
             path.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    @classmethod
+    def open_read_only(cls, root: Path) -> LocalStore:
+        """Open an existing store without bootstrap, migration, or filesystem writes."""
+
+        expanded = root.expanduser()
+        try:
+            root_info = expanded.lstat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"storage root does not exist: {expanded}") from exc
+        if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
+            raise ValueError(f"storage root is not a real directory: {expanded}")
+        db_path = expanded / "history.sqlite3"
+        try:
+            db_info = db_path.lstat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"storage database does not exist: {db_path}") from exc
+        if _is_reparse_point(db_info) or not stat.S_ISREG(db_info.st_mode):
+            raise ValueError(f"storage database is not a real file: {db_path}")
+
+        sidecar_paths = [
+            db_path.with_name(f"{db_path.name}-wal"),
+            db_path.with_name(f"{db_path.name}-shm"),
+        ]
+        sidecar_info: list[os.stat_result | None] = []
+        for path in sidecar_paths:
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                sidecar_info.append(None)
+                continue
+            if _is_reparse_point(info) or not stat.S_ISREG(info.st_mode):
+                raise ValueError(f"storage database sidecar is not a real file: {path}")
+            sidecar_info.append(info)
+        if (sidecar_info[0] is None) != (sidecar_info[1] is None):
+            raise RuntimeError(
+                "storage WAL sidecars are incomplete; read-only audit was refused"
+            )
+        store = cls.__new__(cls)
+        store.root = expanded
+        store.sources = expanded / "sources"
+        store.exports = expanded / "exports"
+        store.models = expanded / "models"
+        store.db_path = db_path
+        store._read_only = True
+        store._read_only_immutable = sidecar_info[0] is None
+        return store
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path, timeout=30)
+        if self._read_only:
+            uri = self.db_path.resolve(strict=True).as_uri() + "?mode=ro"
+            if self._read_only_immutable:
+                uri += "&immutable=1"
+            connection = sqlite3.connect(uri, timeout=30, uri=True)
+        else:
+            connection = sqlite3.connect(self.db_path, timeout=30)
         try:
             connection.row_factory = sqlite3.Row
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA journal_mode = WAL")
+            if not self._read_only:
+                connection.execute("PRAGMA foreign_keys = ON")
+                connection.execute("PRAGMA journal_mode = WAL")
             with connection:
                 yield connection
         finally:

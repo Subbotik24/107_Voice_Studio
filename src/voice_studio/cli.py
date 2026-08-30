@@ -318,6 +318,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        if args.command == "storage" and args.storage_command == "audit":
+            _json(LocalStore.open_read_only(data_dir()).audit())
+            return 0
+
         _settle_interrupted_restore()
         store = LocalStore(data_dir())
 
@@ -358,9 +362,6 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
         if args.command == "storage":
-            if args.storage_command == "audit":
-                _json(store.audit())
-                return 0
             if args.storage_command == "repair-missing":
                 try:
                     repaired = store.repair_missing_source(

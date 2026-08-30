@@ -58,6 +58,68 @@ def test_store_connection_context_releases_sqlite_handle(tmp_path):
         connection.execute("SELECT 1")
 
 
+def test_read_only_store_audit_reads_current_wal_without_journal_mode_write(
+    tmp_path, monkeypatch
+):
+    store = LocalStore(tmp_path / "data")
+    anchor = sqlite3.connect(store.db_path)
+    statements = []
+    real_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = real_connect(*args, **kwargs)
+        connection.set_trace_callback(statements.append)
+        return connection
+
+    try:
+        assert anchor.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"
+        anchor.execute("PRAGMA wal_autocheckpoint = 0")
+        item = transcript()
+        item.id = "wal-current"
+        anchor.execute(
+            """
+            INSERT INTO transcripts (
+                id, created_at, source_sha256, language, engine, model, status,
+                payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                item.id,
+                item.created_at,
+                item.source_sha256,
+                item.language,
+                item.engine,
+                item.model,
+                item.status,
+                json.dumps(item.to_dict()),
+            ),
+        )
+        anchor.commit()
+        assert store.db_path.with_name(f"{store.db_path.name}-wal").is_file()
+        monkeypatch.setattr(storage_module.sqlite3, "connect", traced_connect)
+
+        result = LocalStore.open_read_only(store.root).audit()
+
+        assert result["records"] == 1
+        assert result["status"] == "PASS"
+        assert not any("journal_mode" in statement.lower() for statement in statements)
+    finally:
+        anchor.close()
+
+
+def test_read_only_store_refuses_incomplete_wal_sidecars_without_creating_peer(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    wal_path = store.db_path.with_name(f"{store.db_path.name}-wal")
+    shm_path = store.db_path.with_name(f"{store.db_path.name}-shm")
+    wal_path.write_bytes(b"incomplete WAL fixture")
+
+    with pytest.raises(RuntimeError, match="WAL sidecars are incomplete"):
+        LocalStore.open_read_only(store.root)
+
+    assert wal_path.read_bytes() == b"incomplete WAL fixture"
+    assert not shm_path.exists()
+
+
 def test_legacy_payload_defaults_engine():
     data = transcript().to_dict()
     data.pop("engine")
