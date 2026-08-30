@@ -24,6 +24,7 @@ release evidence remains in `VERIFICATION.md`.
 | Increment | Verified commit | Evidence | Result | Re-run trigger |
 | --- | --- | --- | --- | --- |
 | R0 continuation baseline | `bbc7d34` | `compileall -q src tests` + `PYTHONPATH=src pytest -q` | 609 passed, 9 Windows symlink-privilege skips in 35.32s | any production-code change; superseded per increment |
+| W3-V1 configurable VAD | `a013cec` | RED: 12 failed / 1 passed on untouched code; GREEN focused `tests/test_vad_app.py` 13 passed; related suites (config, faster-whisper, CLI, GUI contract, runtime boundaries, i18n, ollama, hardware, jobs) 199 passed; one full gate after final production change; Help validation; Ruff | 622 passed, 9 Windows symlink-privilege skips in 39.78s | VAD settings/engine/registry/CLI/GUI/i18n code or corresponding tests change |
 | W2-C2 model catalog | `e379b42` | full quality gate | 426 passed, 1 Windows symlink-privilege skip | model catalog, CLI model dispatch, GUI startup or catalog tests change |
 | W2-C1 restore preservation | `94ff8f1` | full quality gate, restore scope, wheel/pip/help | 435 passed, 3 Windows symlink-privilege skips; artifacts PASS | backup/restore, storage layout or archive safety changes |
 | W2-S1 process/queue shutdown | `0d43e77` | full quality gate and process lifecycle scope | 452 passed, 3 Windows symlink-privilege skips | controller, multiprocessing queue or model-download lifecycle changes |
