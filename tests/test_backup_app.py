@@ -814,12 +814,13 @@ def test_public_backup_signatures_are_pinned():
         ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
     ]
     assert [
-        (name, parameter.kind)
+        (name, parameter.kind, parameter.default)
         for name, parameter in inspect.signature(restore_backup).parameters.items()
     ] == [
-        ("path", inspect.Parameter.POSITIONAL_OR_KEYWORD),
-        ("data_root", inspect.Parameter.POSITIONAL_OR_KEYWORD),
-        ("settings_target", inspect.Parameter.KEYWORD_ONLY),
+        ("path", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("data_root", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("settings_target", inspect.Parameter.KEYWORD_ONLY, None),
+        ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
     ]
 
 

@@ -12,6 +12,7 @@ import stat
 import uuid
 import zipfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -46,7 +47,7 @@ RESTORE_JOURNAL_FIELDS = frozenset(
         "stage",
     }
 )
-_RESTORE_STAGES = ("swap_started", "swap_completed")
+_RESTORE_STAGES = ("staging_building", "swap_started", "swap_completed")
 BACKUP_FREE_SPACE_MARGIN_BYTES = 256 * 1024**2
 BACKUP_ZIP_BUDGET = ZipBudget(
     max_container_bytes=4 * 1024**3,
@@ -180,6 +181,50 @@ class _DiscardWriter:
     def write(self, data: bytes) -> int:
         self.size += len(data)
         return len(data)
+
+
+@dataclass
+class _VerifiedV2Context:
+    """Internal authenticated v2 context shared by verify and restore.
+
+    Never returned from a public API, never serialized, never written to
+    the journal. Holds no passphrase; key bytes live only for the call.
+    """
+
+    path: Path
+    manifest: dict[str, Any]
+    members: dict[str, Any]
+    index: dict[str, Any]
+    mapping: dict[str, str]
+    index_name: str
+    master_key: bytes
+
+
+def _decrypt_v2_payload(
+    context: _VerifiedV2Context,
+    archive: zipfile.ZipFile,
+    opaque: str,
+    sink: BinaryIO,
+) -> None:
+    """Decrypt one payload member into ``sink`` with hash verification."""
+
+    metadata = context.members[opaque]
+    member_key = backup_crypto.derive_member_key(context.master_key, opaque)
+    with archive.open(opaque) as stream:
+        reader = _HashingReader(stream)
+        backup_crypto.decrypt_member(
+            opaque,
+            member_key,
+            reader,
+            sink,
+            plaintext_size=metadata["plaintext_size"],
+            chunk_count=metadata["chunks"],
+        )
+    if (
+        reader.hexdigest() != metadata["sha256"]
+        or reader.size != metadata["size"]
+    ):
+        raise ValueError(f"backup member integrity check failed: {opaque}")
 
 
 _V2_OPAQUE_NAME = re.compile(r"payload/[0-9]{8}\.enc")
@@ -467,6 +512,36 @@ def create_backup(
     }
 
 
+def _read_manifest_for_dispatch(
+    archive: zipfile.ZipFile, member_sizes: dict[str, int]
+) -> tuple[list[str], dict[str, Any]]:
+    """Run the shared duplicate/path/bounded-manifest checks and parse it."""
+
+    names = archive.namelist()
+    if len(names) != len(set(names)):
+        raise ValueError("backup contains duplicate members")
+    if "manifest.json" not in names:
+        raise ValueError("backup manifest is missing")
+    for name in names:
+        member = Path(name)
+        if member.is_absolute() or ".." in member.parts or "\\" in name:
+            raise ValueError(f"unsafe backup member: {name}")
+    manifest_size = member_sizes["manifest.json"]
+    manifest_limit = _FIXED_MEMBER_LIMITS["manifest.json"]
+    if manifest_size > manifest_limit:
+        raise ValueError(
+            "backup member exceeds its format limit: "
+            f"manifest.json ({manifest_size} bytes)"
+        )
+    try:
+        manifest = json.loads(archive.read("manifest.json"))
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as exc:
+        raise ValueError(f"invalid backup manifest: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("backup manifest must contain a JSON object")
+    return names, manifest
+
+
 def verify_backup(path: Path, *, passphrase: str | None = None) -> dict[str, Any]:
     path = path.expanduser()
     if not path.is_file():
@@ -474,28 +549,7 @@ def verify_backup(path: Path, *, passphrase: str | None = None) -> dict[str, Any
     inspection = inspect_zip(path, BACKUP_ZIP_BUDGET)
     member_sizes = {member.name: member.expanded_bytes for member in inspection.members}
     with zipfile.ZipFile(path) as archive:
-        names = archive.namelist()
-        if len(names) != len(set(names)):
-            raise ValueError("backup contains duplicate members")
-        if "manifest.json" not in names:
-            raise ValueError("backup manifest is missing")
-        for name in names:
-            member = Path(name)
-            if member.is_absolute() or ".." in member.parts or "\\" in name:
-                raise ValueError(f"unsafe backup member: {name}")
-        manifest_size = member_sizes["manifest.json"]
-        manifest_limit = _FIXED_MEMBER_LIMITS["manifest.json"]
-        if manifest_size > manifest_limit:
-            raise ValueError(
-                "backup member exceeds its format limit: "
-                f"manifest.json ({manifest_size} bytes)"
-            )
-        try:
-            manifest = json.loads(archive.read("manifest.json"))
-        except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as exc:
-            raise ValueError(f"invalid backup manifest: {exc}") from exc
-        if not isinstance(manifest, dict):
-            raise ValueError("backup manifest must contain a JSON object")
+        names, manifest = _read_manifest_for_dispatch(archive, member_sizes)
         # Dispatch is keyed on the manifest version only: a v2 archive never
         # falls back into the v1 parser, whatever the failure.
         version = manifest.get("version")
@@ -620,21 +674,19 @@ def _strict_base64(value: Any, field: str) -> bytes:
         raise ValueError(f"encrypted backup {field} is not valid base64") from exc
 
 
-def _verify_backup_v2(
+def _prepare_v2_context(
     path: Path,
     archive: zipfile.ZipFile,
     member_sizes: dict[str, int],
     names: list[str],
     manifest: dict[str, Any],
     passphrase: str | None,
-) -> dict[str, Any]:
-    """Fully authenticate an encrypted backup v2 archive.
+) -> _VerifiedV2Context:
+    """Authenticate structure, KDF, manifest HMAC and the private index.
 
-    Order: structural validation, KDF bounds and exact profile, manifest
-    HMAC, private index AEAD decryption and validation, then exactly one
-    streaming chunk-authenticated pass over every payload member. A PASS
-    is impossible after any partial check. No passphrase, key, private
-    index or mapping value is returned.
+    Does not decrypt non-index payloads. The returned context is internal:
+    it is never exposed from a public API, serialized or journaled, and
+    its key bytes live only for the duration of the call.
     """
 
     if passphrase is None:
@@ -839,38 +891,55 @@ def _verify_backup_v2(
         if limit is not None and members[opaque]["plaintext_size"] > limit:
             raise ValueError(f"backup member exceeds its format limit: {logical}")
 
+    return _VerifiedV2Context(
+        path=path,
+        manifest=manifest,
+        members=members,
+        index=index,
+        mapping=mapping,
+        index_name=index_name,
+        master_key=master_key,
+    )
+
+
+def _verify_backup_v2(
+    path: Path,
+    archive: zipfile.ZipFile,
+    member_sizes: dict[str, int],
+    names: list[str],
+    manifest: dict[str, Any],
+    passphrase: str | None,
+) -> dict[str, Any]:
+    """Fully authenticate an encrypted backup v2 archive.
+
+    Order: structural validation, KDF bounds and exact profile, manifest
+    HMAC, private index AEAD decryption and validation, then exactly one
+    streaming chunk-authenticated pass over every payload member. A PASS
+    is impossible after any partial check. No passphrase, key, private
+    index or mapping value is returned.
+    """
+
+    context = _prepare_v2_context(
+        path, archive, member_sizes, names, manifest, passphrase
+    )
     # --- Payload verification: each non-index member exactly once, streaming
     # ciphertext through a bounded hashing reader into a discard sink.
     expanded_bytes = 0
-    for opaque in mapping.values():
-        metadata = members[opaque]
-        member_key = backup_crypto.derive_member_key(master_key, opaque)
-        with archive.open(opaque) as stream:
-            reader = _HashingReader(stream)
-            sink = _DiscardWriter()
-            backup_crypto.decrypt_member(
-                opaque,
-                member_key,
-                reader,
-                sink,
-                plaintext_size=metadata["plaintext_size"],
-                chunk_count=metadata["chunks"],
-            )
-        if (
-            reader.hexdigest() != metadata["sha256"]
-            or reader.size != metadata["size"]
-            or sink.size != metadata["plaintext_size"]
-        ):
+    for opaque in context.mapping.values():
+        metadata = context.members[opaque]
+        sink = _DiscardWriter()
+        _decrypt_v2_payload(context, archive, opaque, sink)
+        if sink.size != metadata["plaintext_size"]:
             raise ValueError(f"backup member integrity check failed: {opaque}")
         expanded_bytes += metadata["plaintext_size"]
     return {
         "status": "PASS",
         "path": str(path.resolve()),
         "version": ENCRYPTED_BACKUP_VERSION,
-        "records": index["records"],
-        "members": len(mapping),
+        "records": context.index["records"],
+        "members": len(context.mapping),
         "expanded_bytes": expanded_bytes,
-        "manifest": manifest,
+        "manifest": context.manifest,
     }
 
 
@@ -1027,12 +1096,14 @@ def _load_restore_journal(journal_path: Path, data_root: Path) -> dict[str, Any]
         raise ValueError(
             f"unsupported restore journal version: {journal.get('journal_version')}"
         )
-    if journal.get("backup_version") != BACKUP_VERSION:
+    backup_version = journal.get("backup_version")
+    if backup_version not in (BACKUP_VERSION, ENCRYPTED_BACKUP_VERSION):
         raise ValueError(
-            f"unsupported restore journal backup version: {journal.get('backup_version')}"
+            f"unsupported restore journal backup version: {backup_version}"
         )
-    if journal.get("stage") not in _RESTORE_STAGES:
-        raise ValueError(f"unsupported restore journal stage: {journal.get('stage')}")
+    stage = journal.get("stage")
+    if stage not in _RESTORE_STAGES:
+        raise ValueError(f"unsupported restore journal stage: {stage}")
     if type(journal.get("expected_records")) is not int or journal["expected_records"] < 0:
         raise ValueError("restore journal record count is invalid")
     recorded_root = journal.get("data_root")
@@ -1056,6 +1127,25 @@ def _load_restore_journal(journal_path: Path, data_root: Path) -> dict[str, Any]
             raise ValueError(
                 "restore journal recovery path is outside the data directory"
             )
+    if stage == "staging_building":
+        # staging_building exists only for encrypted backups before the swap:
+        # no recovery directory yet, and the staging name must be exactly the
+        # contained `.<data>.restore-<uuidhex>` the restore created.
+        if backup_version != ENCRYPTED_BACKUP_VERSION:
+            raise ValueError(
+                "restore journal stage staging_building requires backup version 2"
+            )
+        if recovery is not None:
+            raise ValueError(
+                "restore journal staging_building must not have a recovery path"
+            )
+        staging_name = Path(staging).name
+        prefix = f".{data_root.name}.restore-"
+        suffix = (
+            staging_name[len(prefix) :] if staging_name.startswith(prefix) else ""
+        )
+        if len(suffix) != 32 or any(c not in "0123456789abcdef" for c in suffix):
+            raise ValueError("restore journal staging path has an unexpected name")
     return journal
 
 
@@ -1291,8 +1381,9 @@ def recover_interrupted_restore(
     """Finish or undo a restore that a process death left half applied.
 
     Deterministic and non-interactive. A ``*.recovery-*`` directory is never
-    deleted, and staging is only discarded once ``data_root`` is known to be
-    intact.
+    deleted. Before a v2 swap starts, the contained incomplete staging can be
+    discarded whether the live root existed before restore or not; after swap
+    start, staging is discarded only once ``data_root`` is known to be intact.
     """
 
     data_root = data_root.expanduser()
@@ -1313,6 +1404,29 @@ def recover_interrupted_restore(
         if journal.get("settings_payload_written") is True:
             return
         _finish_restored_settings(data_root, settings_target)
+
+    if journal["stage"] == "staging_building":
+        # The live root was never renamed on this stage. Remove only the
+        # strictly contained incomplete staging and the journal; never touch
+        # the live data root, user originals or recovery directories.
+        try:
+            if staging.is_dir():
+                shutil.rmtree(staging)
+            elif staging.exists():
+                return _fail(
+                    "interrupted restore staging is not a directory; "
+                    "nothing was removed",
+                    recovery=recovery_value,
+                )
+        except OSError as exc:
+            return _fail(f"interrupted restore staging could not be removed: {exc}")
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "staging_discarded",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
 
     if journal["stage"] == "swap_completed":
         try:
@@ -1385,7 +1499,15 @@ def restore_backup(
     data_root: Path,
     *,
     settings_target: Path | None = None,
+    passphrase: str | None = None,
 ) -> dict[str, Any]:
+    # Dispatch on the manifest version only. A v1 archive with a passphrase
+    # takes the unchanged v1 path (the passphrase is ignored); a v2 archive
+    # without one fails inside v2 preparation with the exact contract error.
+    if _peek_backup_version(path) == ENCRYPTED_BACKUP_VERSION:
+        return _restore_backup_v2(
+            path, data_root, settings_target=settings_target, passphrase=passphrase
+        )
     verified = verify_backup(path)
     data_root = data_root.expanduser()
     data_root.parent.mkdir(parents=True, exist_ok=True)
@@ -1509,6 +1631,219 @@ def restore_backup(
     return {
         "status": "PASS",
         "records": verified["records"],
+        "data": str(data_root.resolve()),
+        "recovery": str(recovery.resolve()) if recovery else None,
+        "journal_cleared": not journal_path.exists(),
+    }
+
+
+def _peek_backup_version(path: Path) -> Any:
+    """Best-effort manifest version peek for restore dispatch.
+
+    Any failure returns None so the caller falls into the standard path,
+    which re-reads the archive under full validation and raises the
+    proper concrete error.
+    """
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if (
+                archive.getinfo("manifest.json").file_size
+                > _FIXED_MEMBER_LIMITS["manifest.json"]
+            ):
+                return None
+            manifest = json.loads(archive.read("manifest.json"))
+    except (OSError, KeyError, zipfile.BadZipFile, json.JSONDecodeError,
+            UnicodeDecodeError):
+        return None
+    if isinstance(manifest, dict):
+        return manifest.get("version")
+    return None
+
+
+_TRANSCRIPT_STAGING_TEMP_NAME = ".restore-transcripts.jsonl.tmp"
+
+
+def _restore_v2_payloads(
+    context: _VerifiedV2Context,
+    archive: zipfile.ZipFile,
+    store: LocalStore,
+    staging: Path,
+) -> None:
+    """Decrypt each payload exactly once into authenticated staging.
+
+    Transcripts stream into a fixed internal temp file inside staging,
+    are parsed line by line, and the temp file is deleted before the
+    audit. Audio streams directly into ``staging/sources/<safe name>``.
+    Config and unreferenced audio payloads are fully authenticated once into
+    a discard sink (C1 never applies settings or restores orphaned audio).
+    """
+
+    mapping = context.mapping
+    decrypted = {mapping["transcripts.jsonl"]}
+    transcripts_temp = staging / _TRANSCRIPT_STAGING_TEMP_NAME
+    with transcripts_temp.open("wb") as sink:
+        _decrypt_v2_payload(context, archive, mapping["transcripts.jsonl"], sink)
+    try:
+        with transcripts_temp.open("rb") as stream:
+            for raw_line in stream:
+                line = raw_line.decode("utf-8")
+                if not line.strip():
+                    continue
+                transcript = Transcript.from_dict(json.loads(line))
+                source_name = (
+                    Path(transcript.source_path).name if transcript.source_path else ""
+                )
+                logical = f"sources/{source_name}" if source_name else ""
+                if logical and logical in mapping:
+                    target = staging / "sources" / source_name
+                    opaque = mapping[logical]
+                    if opaque not in decrypted:
+                        with target.open("wb") as sink:
+                            _decrypt_v2_payload(context, archive, opaque, sink)
+                        decrypted.add(opaque)
+                    transcript.source_path = str(target)
+                    transcript.audio_retained = True
+                else:
+                    transcript.source_path = None
+                    transcript.audio_retained = False
+                store.save(transcript)
+    finally:
+        transcripts_temp.unlink(missing_ok=True)
+    for opaque in mapping.values():
+        if opaque not in decrypted:
+            _decrypt_v2_payload(context, archive, opaque, _DiscardWriter())
+            decrypted.add(opaque)
+
+
+def _restore_backup_v2(
+    path: Path,
+    data_root: Path,
+    *,
+    settings_target: Path | None,
+    passphrase: str | None,
+) -> dict[str, Any]:
+    """Restore an encrypted backup v2 archive (data only in C1).
+
+    The archive is fully authenticated before the first filesystem
+    mutation, the ``staging_building`` journal exists before the first
+    plaintext byte is written, and the two-phase swap happens only after
+    every payload decrypted exactly once, the record count matches and
+    the staging store audits clean. Ordinary exceptions clean staging and
+    the journal; a hard process death (KeyboardInterrupt/SystemExit)
+    leaves both for ``recover_interrupted_restore``.
+    """
+
+    path = path.expanduser()
+    data_root = data_root.expanduser()
+
+    # --- Authenticate the archive before any mutation. The private index
+    # lives only in bounded memory at this point.
+    inspection = inspect_zip(path, BACKUP_ZIP_BUDGET)
+    member_sizes = {member.name: member.expanded_bytes for member in inspection.members}
+    with zipfile.ZipFile(path) as archive:
+        names, manifest = _read_manifest_for_dispatch(archive, member_sizes)
+        version = manifest.get("version")
+        if type(version) is not int or version != ENCRYPTED_BACKUP_VERSION:
+            raise ValueError(f"unsupported backup version: {version}")
+        context = _prepare_v2_context(
+            path, archive, member_sizes, names, manifest, passphrase
+        )
+
+    # --- C1 guard: encrypted settings recovery lands in C2. Reject safely
+    # before any journal, staging or live mutation.
+    if settings_target is not None and "config/settings.json" in context.mapping:
+        raise ValueError(
+            "encrypted backup settings recovery is not available in this build"
+        )
+
+    expanded_bytes = sum(
+        context.members[opaque]["plaintext_size"]
+        for opaque in context.mapping.values()
+    )
+    local_bytes = _local_restore_bytes(data_root)
+    require_free_space(
+        data_root.parent,
+        expanded_bytes + local_bytes,
+        margin_bytes=BACKUP_FREE_SPACE_MARGIN_BYTES,
+    )
+
+    temporary = data_root.parent / f".{data_root.name}.restore-{uuid.uuid4().hex}"
+    journal_path = restore_journal_path(data_root)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    journal = {
+        "journal_version": RESTORE_JOURNAL_VERSION,
+        "backup_version": ENCRYPTED_BACKUP_VERSION,
+        "created_at": datetime.now(UTC).isoformat(),
+        "data_root": str(data_root.resolve()),
+        "staging_path": str(temporary),
+        "recovery_path": None,
+        "expected_records": int(context.index["records"]),
+        "settings_target": None,
+        "settings_payload_written": True,
+        "stage": "staging_building",
+    }
+    # The journal exists before the first plaintext byte hits the disk.
+    _write_json_atomic(journal_path, journal)
+    recovery: Path | None = None
+    try:
+        store = LocalStore(temporary)
+        with zipfile.ZipFile(path) as archive:
+            _restore_v2_payloads(context, archive, store, temporary)
+        restored_records = len(store.list(limit=1_000_000))
+        if restored_records != context.index["records"]:
+            raise ValueError(
+                "backup restore record count does not match manifest: "
+                f"expected {context.index['records']}, got {restored_records}"
+            )
+        audit = store.audit()
+        if audit["status"] != "PASS":
+            raise ValueError(
+                "backup restore storage audit failed before replacing current data: "
+                f"missing={len(audit['missing'])}, "
+                f"hash_mismatches={len(audit['hash_mismatches'])}, "
+                f"unsafe_paths={len(audit['unsafe_paths'])}"
+            )
+        for transcript in store.list(limit=1_000_000):
+            if transcript.source_path:
+                transcript.source_path = str(
+                    data_root / "sources" / Path(transcript.source_path).name
+                )
+                store.save(transcript)
+        _copy_local_restore_state(data_root, temporary)
+        # Every payload is authenticated and the staging store audited; only
+        # now may the journal advance towards the swap.
+        if data_root.exists():
+            recovery = data_root.parent / (
+                f"{data_root.name}.recovery-{timestamp}-{uuid.uuid4().hex[:8]}"
+            )
+        journal["recovery_path"] = str(recovery) if recovery is not None else None
+        journal["stage"] = "swap_started"
+        _write_json_atomic(journal_path, journal)
+        if recovery is not None:
+            data_root.replace(recovery)
+        try:
+            temporary.replace(data_root)
+        except BaseException:
+            if recovery and recovery.exists() and not data_root.exists():
+                recovery.replace(data_root)
+                journal_path.unlink(missing_ok=True)
+            elif recovery is None and not data_root.exists():
+                journal_path.unlink(missing_ok=True)
+            raise
+        journal["stage"] = "swap_completed"
+        _write_json_atomic(journal_path, journal)
+        journal_path.unlink(missing_ok=True)
+    except Exception:
+        # Ordinary failure: remove the incomplete staging and the journal;
+        # the live data root was never renamed before the swap.
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+        journal_path.unlink(missing_ok=True)
+        raise
+    return {
+        "status": "PASS",
+        "records": context.index["records"],
         "data": str(data_root.resolve()),
         "recovery": str(recovery.resolve()) if recovery else None,
         "journal_cleared": not journal_path.exists(),
