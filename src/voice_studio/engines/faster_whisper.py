@@ -36,6 +36,7 @@ class FasterWhisperEngine:
                 "faster-whisper is not installed. Install the project with "
                 "its default dependencies."
             ) from exc
+        self._validate_runtime_hardware()
         self._model = WhisperModel(
             self.model_path,
             device=self.device,
@@ -43,6 +44,39 @@ class FasterWhisperEngine:
             local_files_only=True,
         )
         return self._model
+
+    def _validate_runtime_hardware(self) -> None:
+        """Reject runtime-incompatible options before constructing WhisperModel."""
+
+        try:
+            import ctranslate2
+        except ImportError as exc:
+            raise RuntimeError(
+                "CTranslate2 runtime is not installed; cannot validate local hardware"
+            ) from exc
+        try:
+            cuda_devices = int(ctranslate2.get_cuda_device_count())
+        except (AttributeError, TypeError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(f"CTranslate2 hardware detection failed: {exc}") from exc
+        if self.device == "cuda" and cuda_devices <= 0:
+            raise RuntimeError("CUDA device was requested but no CUDA device is available")
+        runtime_device = "cpu" if self.device == "auto" else self.device
+        getter = ctranslate2.get_supported_compute_types
+        try:
+            try:
+                supported = getter(runtime_device)
+            except TypeError:
+                supported = getter()
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"CTranslate2 compute-type detection failed for {runtime_device}: {exc}"
+            ) from exc
+        if self.compute_type not in set(supported):
+            allowed = ", ".join(str(item) for item in supported)
+            raise RuntimeError(
+                f"compute_type '{self.compute_type}' is not supported on "
+                f"{runtime_device}; runtime supports: {allowed or 'none'}"
+            )
 
     @staticmethod
     def _confidence(avg_logprob: Any) -> float | None:

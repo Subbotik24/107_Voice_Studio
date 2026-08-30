@@ -29,6 +29,7 @@ from .config import cache_dir, data_dir, load_settings, save_settings, settings_
 from .dictionary import TerminologyDictionary
 from .editor_state import snapshot_editor
 from .exporters import export_transcript
+from .hardware import HardwareDetectionResult, detect_hardware
 from .help_content import (
     HelpTopic,
     help_anchor,
@@ -43,7 +44,12 @@ from .hotkey import GlobalHotkey, hotkey_from_tk_event
 from .i18n import UI_LANGUAGE_CHOICES, translate
 from .jobs import JobCancelled, TranscriptionJobController
 from .model_catalog import ModelCatalog
-from .models import Settings, Transcript
+from .models import (
+    SUPPORTED_COMPUTE_TYPES,
+    SUPPORTED_DEVICES,
+    Settings,
+    Transcript,
+)
 from .profiles import (
     apply_profile,
     discover_ollama_audio_models,
@@ -196,6 +202,8 @@ class VoiceStudioApp(tk.Tk):
         self._ollama_discovery_error = ""
         self._ollama_discovery_thread: threading.Thread | None = None
         self._settings_ollama_combo: ttk.Combobox | None = None
+        self._settings_hardware_device_combo: ttk.Combobox | None = None
+        self._settings_hardware_compute_combo: ttk.Combobox | None = None
         self._settings_info_var: tk.StringVar | None = None
         self._build_ui()
         self._report_restore_recovery()
@@ -1640,6 +1648,27 @@ class VoiceStudioApp(tk.Tk):
                             info.set(self._t("ollama_found", count=len(models)))
                         else:
                             info.set(self._t("ollama_missing"))
+                elif event == "hardware_detection":
+                    result = value
+                    if not isinstance(result, HardwareDetectionResult):
+                        result = HardwareDetectionResult(
+                            "degraded", (), (), ("auto", "default"),
+                            self._t("hardware_detection_degraded"),
+                        )
+                    info = self._settings_info_var
+                    if info is not None:
+                        key = (
+                            "hardware_detection_success"
+                            if result.status == "ok"
+                            else "hardware_detection_degraded"
+                        )
+                        info.set(self._t(key, detail=result.detail))
+                    for combo, values in (
+                        (self._settings_hardware_device_combo, result.device_capabilities),
+                        (self._settings_hardware_compute_combo, result.compute_types),
+                    ):
+                        if combo is not None and combo.winfo_exists():
+                            combo.configure(values=tuple(values))
                 elif event == "job_cancelled":
                     cleanup = value
                     self._cleanup_temp(cleanup)
@@ -2522,6 +2551,8 @@ class VoiceStudioApp(tk.Tk):
         """Finish Tk teardown before starting the native keyboard listener."""
 
         self._settings_ollama_combo = None
+        self._settings_hardware_device_combo = None
+        self._settings_hardware_compute_combo = None
         self._settings_info_var = None
         dialog.grab_release()
         dialog.destroy()
@@ -2532,6 +2563,28 @@ class VoiceStudioApp(tk.Tk):
         if previous_ui_language != self.settings.ui_language:
             self._close_help_window()
         self._refresh_ui_text()
+
+    def _start_hardware_detection(self) -> None:
+        """Run advisory local capability detection in the retained GUI worker."""
+
+        info = self._settings_info_var
+        if info is not None:
+            info.set(self._t("hardware_detection_running"))
+
+        def work() -> None:
+            try:
+                result = detect_hardware()
+            except Exception as exc:
+                result = HardwareDetectionResult(
+                    "degraded", (), (), ("auto", "default"), str(exc)
+                )
+            self._post_event("hardware_detection", result)
+
+        try:
+            self._start_worker("hardware-detection", work)
+        except RuntimeError:
+            if info is not None:
+                info.set(self._t("hardware_detection_busy"))
 
     def _settings_dialog(self) -> None:
         # Do not let the currently configured global shortcut start a recording
@@ -2789,18 +2842,38 @@ class VoiceStudioApp(tk.Tk):
         ttk.Entry(model_field, textvariable=variables["model"]).pack(fill="x")
 
         device_field = field(recognition_page, 1, 1, self._t("device"))
-        ttk.Entry(device_field, textvariable=variables["device"]).pack(fill="x")
+        device_combo = ttk.Combobox(
+            device_field,
+            textvariable=variables["device"],
+            values=SUPPORTED_DEVICES,
+            state="readonly",
+        )
+        device_combo.pack(fill="x")
+        self._settings_hardware_device_combo = device_combo
 
         compute_field = field(recognition_page, 2, 0, self._t("compute_type"))
-        ttk.Entry(compute_field, textvariable=variables["compute_type"]).pack(fill="x")
+        compute_combo = ttk.Combobox(
+            compute_field,
+            textvariable=variables["compute_type"],
+            values=SUPPORTED_COMPUTE_TYPES,
+            state="readonly",
+        )
+        compute_combo.pack(fill="x")
+        self._settings_hardware_compute_combo = compute_combo
 
         openai_stt_field = field(recognition_page, 2, 1, self._t("openai_stt_model"))
         ttk.Entry(
             openai_stt_field, textvariable=variables["openai_transcription_model"]
         ).pack(fill="x")
 
+        ttk.Button(
+            recognition_page,
+            text=self._t("hardware_detect"),
+            command=self._start_hardware_detection,
+        ).grid(row=3, column=1, sticky="e", pady=(0, 18))
+
         dictionary_field = field(
-            recognition_page, 3, 0, self._t("dictionary_json"), columnspan=2
+            recognition_page, 4, 0, self._t("dictionary_json"), columnspan=2
         )
         dictionary_row = ttk.Frame(dictionary_field, style="Card.TFrame")
         dictionary_row.pack(fill="x")

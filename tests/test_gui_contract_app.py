@@ -41,6 +41,7 @@ from voice_studio.app import (
     studio_icon_pixel,
     studio_layout_for_width,
 )
+from voice_studio.hardware import HardwareDetectionResult
 from voice_studio.models import Transcript
 from voice_studio.storage import LocalStore
 
@@ -727,6 +728,80 @@ def test_settings_dialog_declares_all_three_reusable_engine_profiles() -> None:
     assert '"ollama-local"' in settings_dialog
     assert '"whisper-local"' in settings_dialog
     assert '"openai-cloud"' in settings_dialog
+
+
+def test_settings_hardware_controls_are_readonly_and_detection_is_explicit() -> None:
+    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+
+    assert "SUPPORTED_DEVICES" in settings_dialog
+    assert "SUPPORTED_COMPUTE_TYPES" in settings_dialog
+    assert settings_dialog.count('state="readonly"') >= 4
+    assert 'text=self._t("hardware_detect")' in settings_dialog
+    assert "_start_hardware_detection" in settings_dialog
+
+
+def test_hardware_event_updates_advisory_choices_without_selecting_settings() -> None:
+    app = _worker_registry_stub()
+    app._t = lambda key, **values: values.get("detail", key)
+    app._settings_info_var = SimpleNamespace(
+        values=[],
+        set=lambda value: app._settings_info_var.values.append(value),
+    )
+
+    class Combo:
+        def __init__(self):
+            self.values = []
+
+        def winfo_exists(self):
+            return True
+
+        def configure(self, **kwargs):
+            self.values = list(kwargs["values"])
+
+    app._settings_hardware_device_combo = Combo()
+    app._settings_hardware_compute_combo = Combo()
+    app.after = lambda *_args: None
+    app.events.put(
+        (
+            "hardware_detection",
+            HardwareDetectionResult(
+                "ok", ("cpu", "cuda"), ("int8", "float16"), ("auto", "default"), "detected"
+            ),
+        )
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._settings_info_var.values == ["detected"]
+    assert app._settings_hardware_device_combo.values == ["cpu", "cuda"]
+    assert app._settings_hardware_compute_combo.values == ["int8", "float16"]
+
+
+def test_hardware_detection_is_single_worker_and_probe_runs_off_tk_thread(monkeypatch):
+    app = _worker_registry_stub()
+    messages = []
+    app._settings_info_var = SimpleNamespace(set=messages.append)
+    app._t = lambda key, **_values: key
+    entered = threading.Event()
+    release = threading.Event()
+    probe_threads = []
+
+    def fake_detect():
+        probe_threads.append(threading.current_thread())
+        entered.set()
+        release.wait(1)
+        return HardwareDetectionResult("ok", ("cpu",), ("int8",), ("auto", "default"), "ok")
+
+    monkeypatch.setattr(app_module, "detect_hardware", fake_detect)
+    VoiceStudioApp._start_hardware_detection(app)
+    assert entered.wait(1)
+    VoiceStudioApp._start_hardware_detection(app)
+    release.set()
+    thread = app._worker_threads["hardware-detection"]
+    thread.join(1)
+
+    assert probe_threads and probe_threads[0] is not threading.current_thread()
+    assert messages[-1] == "hardware_detection_busy"
 
 
 def test_editor_newline_bindings_and_basic_formatting_are_declared() -> None:

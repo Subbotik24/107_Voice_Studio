@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ from .config import cache_dir, data_dir, load_settings, settings_path
 from .diagnostics import diagnostics
 from .dictionary import TerminologyDictionary
 from .exporters import export_transcript
+from .hardware import detect_hardware
 from .jobs import TranscriptionJobController
 from .media import validate_media_file
 from .model_catalog import ModelCatalog
@@ -68,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
     health = sub.add_parser("health", help="machine-readable health status")
     health.add_argument("--json", action="store_true")
     sub.add_parser("settings", help="print effective settings")
+
+    hardware = sub.add_parser("hardware", help="inspect local hardware capabilities")
+    hardware_commands = hardware.add_subparsers(dest="hardware_command", required=True)
+    hardware_detect = hardware_commands.add_parser("detect", help="detect local runtime support")
+    hardware_detect.add_argument("--json", action="store_true")
 
     workspace = sub.add_parser(
         "init-workspace", help="copy editable starter configs and dictionary"
@@ -237,6 +243,17 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "settings":
             _json(load_settings().to_dict())
+            return 0
+
+        if args.command == "hardware":
+            if args.hardware_command != "detect":
+                parser.error("unsupported hardware command")
+            result = detect_hardware()
+            if args.json:
+                _json(asdict(result))
+            else:
+                print(f"{result.status}: {result.detail}")
+                print(f"fallback: {result.fallback[0]}/{result.fallback[1]}")
             return 0
 
         if args.command == "diagnostics":

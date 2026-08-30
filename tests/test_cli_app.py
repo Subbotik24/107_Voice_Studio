@@ -6,6 +6,7 @@ import pytest
 from voice_studio import backup as backup_module
 from voice_studio import cli
 from voice_studio.cloud_cleanup import CleanupProposal
+from voice_studio.hardware import HardwareDetectionResult
 from voice_studio.models import Settings, Transcript
 from voice_studio.storage import LocalStore
 
@@ -363,6 +364,21 @@ def test_transcribe_cli_rejects_unsupported_hardware_options(option, value):
         cli.build_parser().parse_args(
             ["transcribe", "recording.wav", option, value]
         )
+
+
+def test_hardware_detect_cli_returns_bounded_json(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli,
+        "detect_hardware",
+        lambda: HardwareDetectionResult(
+            "degraded", (), (), ("auto", "default"), "runtime unavailable"
+        ),
+    )
+
+    assert cli.main(["hardware", "detect", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "degraded"
+    assert payload["fallback"] == ["auto", "default"]
 
 
 def test_validate_cli(tmp_path, capsys, make_wav):
