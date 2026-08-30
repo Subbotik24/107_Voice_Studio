@@ -395,3 +395,37 @@ thread lifecycle plan in
 `docs/superpowers/plans/2026-08-30-app-thread-lifecycle-shutdown.md`. Keep the
 process/queue PASS above intact, and do not promote this record to full W2-S1
 until those thread ownership, bounded join and native acceptance checks pass.
+
+---
+
+## W2-S1 coordinated worker shutdown — app/recorder/hotkey/maintenance thread half
+
+**TASK_ID:** W2-S1-app-thread-half
+**СТАТУС:** `PASS` лише для source/headless acceptance. У поєднанні з process/
+queue PASS вище код W2-S1 має повністю перевірені source/headless половини, але
+повний продуктовий W2-S1 залишається `IN PROGRESS` до native physical і
+packaged acceptance. R0 не закрито.
+
+**BASELINE:** `c8182aa` (`main`) — implementation base for the coordinated
+shutdown increment.
+
+**ПІДТВЕРДЖЕНО:** GUI close is idempotent and bounded: active non-daemon
+maintenance refuses close before shutdown; accepted close sets cancellation,
+stops hotkey and recorder owners, closes the process controller, joins daemon
+workers against one monotonic three-second budget, records named residues,
+drops late events, and destroys Tk from `finally`. Recorder timeout or
+identity-ambiguous files are retained and reported. A blocked third-party
+thread cannot be force-killed safely by Python; daemon residue is named and
+left for process exit.
+
+Complete Windows source evidence, quality gate, wheel, dependency check,
+`git diff --check`, and the controlled clean-profile source GUI close smoke are
+recorded in `VERIFICATION.md` and
+`docs/verification/2026-08-30-w2-s1-thread-shutdown.md`.
+
+**НАСТУПНИЙ ІНКРЕМЕНТ:** run native acceptance on physical Windows 10/11 x64
+and macOS Apple Silicon: real microphone capture and disconnect behavior,
+global-hotkey/event-tap lifecycle, packaged executable close, clean-machine
+launch, antivirus/removable-media conditions, and the 50-task device matrix.
+Keep both W2-S1 source/headless PASS records intact; do not claim full W2-S1
+or broader R0 completion until those external checks are actually run.

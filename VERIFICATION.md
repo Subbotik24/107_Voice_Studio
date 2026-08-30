@@ -3,6 +3,43 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-S1 coordinated worker shutdown — app/recorder/hotkey/maintenance thread half — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, source tree on
+`main`, implementation base `c8182aa`. This source/headless record covers the
+GUI thread half and the clean-profile source GUI close smoke. Together with
+the process/queue record below, W2-S1 is `PASS` at source/headless level only;
+native physical-device, packaged and broader R0 acceptance remain open.
+
+The exact shutdown contract is documented in the durable evidence record
+[`docs/verification/2026-08-30-w2-s1-thread-shutdown.md`](docs/verification/2026-08-30-w2-s1-thread-shutdown.md).
+In brief, `_close()` refuses while non-daemon maintenance is active, then sets
+the shutdown/cancel events, stops hotkey and recorder owners, closes the
+process controller, joins all daemon GUI workers against one monotonic
+three-second budget, names any residues, drops late worker events, and reaches
+Tk `destroy()` from a `finally` block. Close is idempotent. Recorder-owned
+timeouts and identity-ambiguous files are retained and reported. Python cannot
+force-kill a blocked third-party thread; a daemon residue is named and the OS
+ends it with the process.
+
+| Check | Result |
+| --- | --- |
+| `python -m compileall -q src tests` | PASS |
+| `PYTHONPATH=src .\\.venv\\Scripts\\python.exe -m pytest -q` | PASS; 483 passed, 3 skipped (Windows symlink privilege boundaries) |
+| Focused app/recorder/hotkey shutdown regressions | PASS; 22 passed, 54 deselected |
+| `.\\scripts\\quality_gate.ps1` with `.venv\\Scripts\\python.exe` | PASS; compileall, Ruff, Help validation, 483 passed / 3 skipped, CLI `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w2-s1-thread-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 691,474 bytes, SHA-256 `EFE7754E9F868D14964B5BC9DF17BCC8AFDF03C17AA3FCC570A6BA25ED969517` |
+| `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` | PASS; no whitespace errors |
+
+Clean-profile source GUI smoke: with all three `VOICE_STUDIO_*_DIR`
+overrides under disposable `build\\w2-s1-thread-smoke`, verified PID `16356`
+started the GUI, received a controlled Tk `app._close` callback, and exited
+code `0` in `2232 ms` (<15 s), with empty stdout/stderr. This does not verify
+the frozen executable, physical microphone or native macOS event tap,
+antivirus/removable-media behavior, clean-machine installation, real power
+loss/forced termination, or the 50-task physical-device matrix.
+
 ## W2-S1 coordinated worker shutdown — process/queue half — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, implementation base

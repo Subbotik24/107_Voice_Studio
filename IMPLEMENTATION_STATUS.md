@@ -31,6 +31,7 @@ in the supported flow.
 | W2-C1 restore preserves machine-local state (2026-08-30) | PASS source/headless | restore replaces backed-up transcripts, settings and sources while copying the current `models/` and `exports/` into staging before the first live-root rename; both trees remain outside `.voice-backup`; unsafe links/reparse points abort with `local restore state contains an unsafe path: ...` before the live root changes; focused restore coverage passed 10 tests with 2 Windows symlink-privilege skips and the full `.venv` gate passed 435 tests with 3 skips |
 | W2-C2 model-catalog self-healing | PASS source/headless | `models reconcile` adopts complete orphan directories, drops only provably absent entries, retains incomplete or unsafe paths as blocked, quarantines corrupt manifests, cleans only bounded stale residue, and runs automatically at model-command and GUI-startup boundaries; 426 tests passed with one Windows symlink-privilege skip; source GUI smoke and complete evidence are recorded in `VERIFICATION.md` |
 | W2-S1 coordinated worker shutdown (process/queue half, 2026-08-30) | PASS source/headless | transcription and model-download process generations have bounded terminate/kill cleanup, exactly-once queue disposal, reusable close, epoch/concurrency protection and resource-tracker regression evidence; the app/recorder/hotkey thread half remains open, so full W2-S1 is still IN PROGRESS |
+| W2-S1 coordinated worker shutdown (app/recorder/hotkey/maintenance thread half, 2026-08-30) | PASS source/headless | GUI worker registry, one-budget bounded joins, late-event gating, recorder residue retention, bounded hotkey stop and maintenance refusal are covered by regression tests and a clean-profile source GUI close smoke; native physical and packaged acceptance remain open, so full W2-S1 is still IN PROGRESS |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
 | Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
@@ -67,8 +68,9 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 ## Not implemented yet
 
 - `cryptography` dependency and encrypted backup v2;
-- W2-S1 app/recorder/hotkey/maintenance thread lifecycle and native acceptance (the
-  process/queue half is verified above);
+- W2-S1 native physical and packaged acceptance (the process/queue and
+  app/recorder/hotkey/maintenance thread halves are verified source/headless
+  above);
 - SQLite/filesystem reconciliation beyond the completed W2-C2 model-catalog self-healing scope;
 - all W3 VAD/timestamp/hardware/editor work;
 - W4 SBOM, signed/notarized installers and updater;
