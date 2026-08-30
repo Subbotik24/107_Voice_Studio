@@ -1,4 +1,6 @@
+import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -193,3 +195,71 @@ def test_reconcile_clean_profile_does_not_write_manifest(tmp_path, monkeypatch):
         "residue_removed": [],
         "catalog_quarantined": None,
     }
+
+
+def test_reconcile_removes_only_stale_well_formed_staging(tmp_path):
+    catalog = ModelCatalog(tmp_path / "managed")
+    stale = catalog.downloads / ("tiny-" + "a" * 32)
+    fresh = catalog.downloads / ("small-" + "b" * 32)
+    malformed = catalog.downloads / "keep-me"
+    for path in (stale, fresh, malformed):
+        path.mkdir()
+        (path / "partial").write_bytes(b"x")
+    old = time.time() - 3 * 24 * 60 * 60
+    os.utime(stale / "partial", (old, old))
+    os.utime(stale, (old, old))
+
+    result = catalog.reconcile()
+
+    assert result["staging_removed"] == [stale.name]
+    assert set(result["staging_kept"]) == {fresh.name, malformed.name}
+    assert not stale.exists()
+    assert fresh.exists() and malformed.exists()
+
+
+def test_reconcile_handles_manifest_residue_by_age(tmp_path):
+    catalog = ModelCatalog(tmp_path / "managed")
+    catalog._save({"version": 1, "models": []})
+    old = catalog.root / "catalog.json.tmp"
+    fresh = catalog.root / ("catalog.json." + "a" * 32 + ".tmp")
+    old.write_text("old", encoding="utf-8")
+    fresh.write_text("fresh", encoding="utf-8")
+    timestamp = time.time() - 301
+    os.utime(old, (timestamp, timestamp))
+
+    before = catalog.catalog_path.read_bytes()
+    result = catalog.reconcile()
+
+    assert result["residue_removed"] == [old.name]
+    assert fresh.exists()
+    assert catalog.catalog_path.read_bytes() == before
+
+
+def test_remove_accepts_unmanaged_directory_only_with_confirmation(tmp_path):
+    catalog = ModelCatalog(tmp_path / "managed")
+    target = local_model(catalog.root / "stray")
+
+    with pytest.raises(ValueError, match="--yes"):
+        catalog.remove("stray")
+
+    assert catalog.remove("stray", confirmed=True) == {
+        "removed": True,
+        "id": "stray",
+        "unmanaged": True,
+    }
+    assert not target.exists()
+
+
+def test_atomic_catalog_save_removes_failed_temporary_file(tmp_path, monkeypatch):
+    catalog = ModelCatalog(tmp_path / "managed")
+    original = Path.replace
+
+    def fail_tmp(path, target):
+        if path.name.startswith("catalog.json.") and path.name.endswith(".tmp"):
+            raise OSError("replace failed")
+        return original(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_tmp)
+    with pytest.raises(OSError, match="replace failed"):
+        catalog._save({"version": 1, "models": []})
+    assert list(catalog.root.glob("catalog.json*.tmp")) == []

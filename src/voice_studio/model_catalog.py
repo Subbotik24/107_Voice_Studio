@@ -110,15 +110,103 @@ class ModelCatalog:
         return payload
 
     def _save(self, payload: dict[str, Any]) -> None:
-        temporary = self.catalog_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(self.catalog_path)
+        temporary = self.root / f"catalog.json.{uuid.uuid4().hex}.tmp"
+        try:
+            temporary.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(self.catalog_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def list(self) -> list[dict[str, Any]]:
         return sorted(self._load()["models"], key=lambda item: item["id"])
+
+    @staticmethod
+    def _newest_mtime(directory: Path) -> float | None:
+        """Return the newest non-following mtime in a staging tree."""
+        try:
+            root_stat = directory.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISDIR(root_stat.st_mode):
+            return None
+        newest = root_stat.st_mtime
+        pending = [directory]
+        try:
+            while pending:
+                current = pending.pop()
+                with os.scandir(current) as iterator:
+                    entries = list(iterator)
+                for entry in entries:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                    newest = max(newest, entry_stat.st_mtime)
+                    if stat.S_ISDIR(entry_stat.st_mode):
+                        pending.append(Path(entry.path))
+        except OSError:
+            return None
+        return newest
+
+    def _cleanup_residue(
+        self, root_entries: list[os.DirEntry[str]], result: dict[str, Any]
+    ) -> None:
+        cutoff = time.time() - CATALOG_RESIDUE_MAX_AGE_SECONDS
+        for entry in root_entries:
+            if entry.name != "catalog.json.tmp" and not (
+                entry.name.startswith("catalog.json.") and entry.name.endswith(".tmp")
+            ):
+                continue
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(entry_stat.st_mode) or entry_stat.st_mtime >= cutoff:
+                continue
+            try:
+                Path(entry.path).unlink()
+            except OSError:
+                continue
+            result["residue_removed"].append(entry.name)
+
+    def _cleanup_staging(self, result: dict[str, Any]) -> None:
+        try:
+            downloads_stat = self.downloads.lstat()
+        except OSError:
+            return
+        if not stat.S_ISDIR(downloads_stat.st_mode):
+            return
+        try:
+            with os.scandir(self.downloads) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError:
+            return
+
+        cutoff = time.time() - STAGING_MAX_AGE_SECONDS
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                result["staging_kept"].append(entry.name)
+                continue
+            if not stat.S_ISDIR(entry_stat.st_mode) or not STAGING_PATTERN.fullmatch(entry.name):
+                result["staging_kept"].append(entry.name)
+                continue
+            newest = self._newest_mtime(path)
+            if newest is None or newest >= cutoff:
+                result["staging_kept"].append(entry.name)
+                continue
+            try:
+                # Re-check the directory entry without following links before removal.
+                if not stat.S_ISDIR(path.lstat().st_mode):
+                    result["staging_kept"].append(entry.name)
+                    continue
+                shutil.rmtree(path)
+            except OSError:
+                result["staging_kept"].append(entry.name)
+            else:
+                result["staging_removed"].append(entry.name)
 
     def reconcile(self) -> dict[str, Any]:
         result = _reconcile_result()
@@ -153,6 +241,9 @@ class ModelCatalog:
                 error=f"cannot scan model catalog: {exc}",
             )
             return result
+
+        self._cleanup_residue(root_entries, result)
+        self._cleanup_staging(result)
 
         models = payload["models"]
         catalogued_ids: set[str] = set()
@@ -575,13 +666,39 @@ class ModelCatalog:
             raise ValueError("model removal requires --yes")
         entry = self.get(value)
         if entry is None:
-            raise FileNotFoundError(f"model is not installed: {value}")
+            target = self.root / value
+            try:
+                target.resolve().relative_to(self.root.resolve())
+            except (OSError, ValueError) as exc:
+                raise ValueError("refusing to remove a model outside the managed catalog") from exc
+            try:
+                target_stat = target.lstat()
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(f"model is not installed: {value}") from exc
+            except OSError as exc:
+                raise ValueError("cannot inspect unmanaged model safely") from exc
+            if stat.S_ISLNK(target_stat.st_mode):
+                raise ValueError("refusing to remove an unmanaged model symlink")
+            if not stat.S_ISDIR(target_stat.st_mode):
+                raise ValueError("refusing to remove an unmanaged model that is not a directory")
+            shutil.rmtree(target)
+            return {"removed": True, "id": value, "unmanaged": True}
         target = self.root / entry["path"]
         try:
             target.resolve().relative_to(self.root.resolve())
         except (OSError, ValueError) as exc:
             raise ValueError("refusing to remove a model outside the managed catalog") from exc
-        if target.is_dir():
+        try:
+            target_stat = target.lstat()
+        except FileNotFoundError:
+            target_stat = None
+        except OSError as exc:
+            raise ValueError("cannot inspect model safely") from exc
+        if target_stat is not None and stat.S_ISLNK(target_stat.st_mode):
+            raise ValueError("refusing to remove a model symlink")
+        if target_stat is not None and not stat.S_ISDIR(target_stat.st_mode):
+            raise ValueError("refusing to remove a model that is not a directory")
+        if target_stat is not None:
             shutil.rmtree(target)
         payload = self._load()
         payload["models"] = [item for item in payload["models"] if item["id"] != value]
