@@ -58,6 +58,8 @@ from .profiles import (
 from .recorder import AudioRecorder
 from .storage import LocalStore
 
+_BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
+
 MEDIA_FILETYPES = [
     ("Audio/video", "*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.aac *.mp4 *.mov *.mkv *.webm"),
     ("All files", "*.*"),
@@ -223,12 +225,34 @@ class VoiceStudioApp(tk.Tk):
             )
 
     def _settle_interrupted_restore(self) -> dict[str, Any]:
-        """Finish or undo an interrupted restore. Never blocks application start."""
+        """Finish or undo an interrupted restore without preventing startup.
+
+        An encrypted restore interrupted with its settings payload pending
+        needs the passphrase once, here on the main thread. Cancel keeps the
+        sidecar and journal untouched and startup continues; the passphrase
+        is passed straight to the backup API and never stored.
+        """
 
         try:
-            return recover_interrupted_restore(
+            result = recover_interrupted_restore(
                 data_dir(), settings_target=settings_path()
             )
+            if result.get("action") != "passphrase_required":
+                return result
+            passphrase = simpledialog.askstring(
+                self._t("backup"),
+                self._t("backup_passphrase_required"),
+                show="*",
+                parent=self,
+            )
+            if passphrase is None:
+                return result
+            try:
+                return recover_interrupted_restore(
+                    data_dir(), settings_target=settings_path(), passphrase=passphrase
+                )
+            finally:
+                del passphrase
         except Exception as exc:  # startup must survive any journal defect
             return {"status": "FAIL", "action": "none", "error": str(exc)}
 
@@ -249,6 +273,7 @@ class VoiceStudioApp(tk.Tk):
             "settings_completed": "restore_recovered",
             "rolled_back": "restore_rolled_back",
             "staging_discarded": "restore_staging_discarded",
+            "passphrase_required": "restore_passphrase_required",
         }.get(action)
         if key is None:
             return
@@ -1712,6 +1737,9 @@ class VoiceStudioApp(tk.Tk):
                         )
                     self.status.set(self._t("backup_complete"))
                     messagebox.showinfo(self._t("backup"), message)
+                elif event == "backup_passphrase_required":
+                    action, callback = value
+                    self._handle_backup_passphrase_required(action, callback)
                 elif event == "backup_error":
                     action, error = value
                     if action == "restore":
@@ -3175,6 +3203,91 @@ class VoiceStudioApp(tk.Tk):
         ttk.Button(buttons, text=self._t("remove"), command=remove).pack(side="right")
         refresh()
 
+    def _prompt_new_backup_passphrase(self, parent: Any) -> str | None:
+        """Collect a new backup passphrase with two masked prompts.
+
+        Returns ``None`` on cancel, empty input or mismatch (with a localized
+        error shown for the latter two). The passphrase stays a local
+        variable; it is never stored on self, Settings, events or status.
+        """
+
+        passphrase = simpledialog.askstring(
+            self._t("backup"),
+            self._t("backup_passphrase_enter")
+            + "\n\n"
+            + self._t("backup_encrypt_warning"),
+            show="*",
+            parent=parent,
+        )
+        if passphrase is None:
+            return None
+        if not passphrase:
+            messagebox.showerror(
+                self._t("backup"), self._t("backup_passphrase_empty"), parent=parent
+            )
+            return None
+        repeated = simpledialog.askstring(
+            self._t("backup"),
+            self._t("backup_passphrase_repeat"),
+            show="*",
+            parent=parent,
+        )
+        if repeated is None:
+            return None
+        if passphrase != repeated:
+            messagebox.showerror(
+                self._t("backup"), self._t("backup_passphrase_mismatch"), parent=parent
+            )
+            return None
+        return passphrase
+
+    def _start_backup_operation(
+        self, action: str, callback: Any, passphrase: str | None = None
+    ) -> None:
+        """Run a backup callback on the maintenance worker.
+
+        The callback takes an optional passphrase. Tk dialogs are never
+        touched from the worker: a passphrase-required contract error is
+        posted as an event and handled on the Tk main thread instead.
+        """
+
+        self._set_busy(True)
+        self.status.set(self._t("backup_running"))
+
+        def work() -> None:
+            try:
+                self._post_event("backup_done", (action, callback(passphrase)))
+            except Exception as exc:
+                if passphrase is None and str(exc) == _BACKUP_PASSPHRASE_REQUIRED:
+                    self._post_event("backup_passphrase_required", (action, callback))
+                else:
+                    self._post_event("backup_error", (action, exc))
+
+        thread = self._start_worker("maintenance", work, daemon=False)
+        self._assign_worker_alias("maintenance", thread, "_maintenance_thread")
+
+    def _handle_backup_passphrase_required(self, action: str, callback: Any) -> None:
+        """Prompt once on the Tk main thread and retry the operation.
+
+        Cancel finishes cleanly: nothing is retried, and a restore restores
+        the runtime it closed before the operation was queued. The passphrase
+        is handed to the retry closure only.
+        """
+
+        self._set_busy(False)
+        passphrase = simpledialog.askstring(
+            self._t("backup"),
+            self._t("backup_passphrase_enter"),
+            show="*",
+            parent=self,
+        )
+        if passphrase is None:
+            if action == "restore":
+                self._reload_after_restore()
+            self.status.set(self._t("backup_cancelled"))
+            return
+        self._start_backup_operation(action, callback, passphrase=passphrase)
+
     def _backup_dialog(self) -> None:
         # Maintenance workers are created as ``threading.Thread`` instances
         # by the shared registry, and remain non-daemon until the operation ends.
@@ -3183,6 +3296,7 @@ class VoiceStudioApp(tk.Tk):
         dialog.transient(self)
         dialog.resizable(False, False)
         include_audio = tk.BooleanVar(value=True)
+        encrypt = tk.BooleanVar(value=False)
         ttk.Label(
             dialog,
             text=self._t("backup_description"),
@@ -3193,20 +3307,22 @@ class VoiceStudioApp(tk.Tk):
             text=self._t("include_audio"),
             variable=include_audio,
         ).grid(row=1, column=0, columnspan=3, sticky="w", padx=12, pady=6)
+        ttk.Checkbutton(
+            dialog,
+            text=self._t("backup_encrypt"),
+            variable=encrypt,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 2))
+        ttk.Label(
+            dialog,
+            text=self._t("backup_encrypt_warning"),
+            wraplength=520,
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
 
-        def start_operation(action: str, callback: Any) -> None:
-            self._set_busy(True)
-            self.status.set(self._t("backup_running"))
+        def start_operation(
+            action: str, callback: Any, passphrase: str | None = None
+        ) -> None:
             dialog.destroy()
-
-            def work() -> None:
-                try:
-                    self._post_event("backup_done", (action, callback()))
-                except Exception as exc:
-                    self._post_event("backup_error", (action, exc))
-
-            thread = self._start_worker("maintenance", work, daemon=False)
-            self._assign_worker_alias("maintenance", thread, "_maintenance_thread")
+            self._start_backup_operation(action, callback, passphrase=passphrase)
 
         def create() -> None:
             destination = filedialog.asksaveasfilename(
@@ -3214,17 +3330,20 @@ class VoiceStudioApp(tk.Tk):
                 defaultextension=".voice-backup",
                 filetypes=[("VOICE Studio backup", "*.voice-backup")],
             )
-            if destination:
-                include_audio_value = bool(include_audio.get())
-                start_operation(
-                    "create",
-                    lambda: create_backup(
-                        self.store,
-                        Path(destination),
-                        settings_file=settings_path(),
-                        include_audio=include_audio_value,
-                    ),
-                )
+            if not destination:
+                return
+            include_audio_value = bool(include_audio.get())
+            passphrase = None
+            if encrypt.get():
+                passphrase = self._prompt_new_backup_passphrase(dialog)
+                if passphrase is None:
+                    return  # cancelled or rejected: the operation never starts
+            self._queue_backup_create(
+                Path(destination),
+                include_audio_value,
+                passphrase,
+                start_operation,
+            )
 
         def verify() -> None:
             source = filedialog.askopenfilename(
@@ -3232,7 +3351,12 @@ class VoiceStudioApp(tk.Tk):
                 filetypes=[("VOICE Studio backup", "*.voice-backup")],
             )
             if source:
-                start_operation("verify", lambda: verify_backup(Path(source)))
+                start_operation(
+                    "verify",
+                    lambda passphrase=None: verify_backup(
+                        Path(source), passphrase=passphrase
+                    ),
+                )
 
         def restore() -> None:
             source = filedialog.askopenfilename(
@@ -3250,14 +3374,34 @@ class VoiceStudioApp(tk.Tk):
             self._queue_restore(Path(source), start_operation)
 
         ttk.Button(dialog, text=self._t("create"), command=create).grid(
-            row=2, column=0, padx=12, pady=12
+            row=4, column=0, padx=12, pady=12
         )
         ttk.Button(dialog, text=self._t("verify"), command=verify).grid(
-            row=2, column=1, padx=6, pady=12
+            row=4, column=1, padx=6, pady=12
         )
         ttk.Button(dialog, text=self._t("restore"), command=restore).grid(
-            row=2, column=2, padx=12, pady=12
+            row=4, column=2, padx=12, pady=12
         )
+
+    def _queue_backup_create(
+        self,
+        destination: Path,
+        include_audio: bool,
+        passphrase: str | None,
+        start_operation: Any,
+    ) -> None:
+        """Queue backup creation without retaining the secret in its callback."""
+
+        def create(passphrase_for_run: str | None = None) -> dict[str, Any]:
+            return create_backup(
+                self.store,
+                destination,
+                settings_file=settings_path(),
+                include_audio=include_audio,
+                passphrase=passphrase_for_run,
+            )
+
+        start_operation("create", create, passphrase)
 
     def _queue_restore(self, source: Path, start_operation: Any) -> bool:
         if not self._confirm_editor_transition():
@@ -3265,10 +3409,11 @@ class VoiceStudioApp(tk.Tk):
         self.job_controller.close()
         start_operation(
             "restore",
-            lambda: restore_backup(
+            lambda passphrase=None: restore_backup(
                 source,
                 data_dir(),
                 settings_target=settings_path(),
+                passphrase=passphrase,
             ),
         )
         return True

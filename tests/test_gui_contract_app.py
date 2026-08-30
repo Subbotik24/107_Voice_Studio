@@ -627,11 +627,13 @@ def test_background_worker_families_use_registry_and_event_gate() -> None:
         "_start_ollama_model_discovery",
         "_process",
         "_ai_cleanup",
-        "_backup_dialog",
+        "_start_backup_operation",
     ):
         body = inspect.getsource(getattr(VoiceStudioApp, method))
         assert "_start_worker" in body, method
         assert "self.events.put(" not in body, method
+    # Backup dialog workers go through the shared operation runner.
+    assert "_start_backup_operation" in inspect.getsource(VoiceStudioApp._backup_dialog)
     assert "_post_event" in source
 
 
@@ -700,11 +702,13 @@ def test_close_remains_blocked_by_non_daemon_maintenance_before_shutdown() -> No
 def test_backup_ui_is_declared_with_async_work_and_reversible_restore() -> None:
     build_ui = inspect.getsource(VoiceStudioApp._build_ui)
     backup_dialog = inspect.getsource(VoiceStudioApp._backup_dialog)
+    create_flow = inspect.getsource(VoiceStudioApp._queue_backup_create)
     event_handler = inspect.getsource(VoiceStudioApp._poll_events)
 
     assert 'self._t("backup")' in build_ui
     assert "threading.Thread" in backup_dialog
-    assert "create_backup" in backup_dialog
+    assert "_queue_backup_create" in backup_dialog
+    assert "create_backup" in create_flow
     assert "verify_backup" in backup_dialog
     assert "restore_backup" in backup_dialog
     assert 'self._t("restore_backup_prompt")' in backup_dialog
