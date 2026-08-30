@@ -136,6 +136,79 @@ def test_local_restore_state_rejects_windows_junction_without_touching_target(tm
     assert not staging.exists()
 
 
+def test_local_restore_state_rejects_symlink_data_root_without_touching_target(tmp_path):
+    target = tmp_path / "outside"
+    (target / "models").mkdir(parents=True)
+    sentinel = target / "models" / "sentinel.bin"
+    sentinel.write_bytes(b"external")
+    data = tmp_path / "data"
+    try:
+        data.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._local_restore_bytes(data)
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert sentinel.read_bytes() == b"external"
+    assert not staging.exists()
+
+
+def test_local_restore_state_rejects_windows_junction_data_root_without_touching_target(
+    tmp_path,
+):
+    target = tmp_path / "outside"
+    (target / "models").mkdir(parents=True)
+    sentinel = target / "models" / "sentinel.bin"
+    sentinel.write_bytes(b"external")
+    data = tmp_path / "data"
+    _make_junction(data, target)
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._local_restore_bytes(data)
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert data.is_dir()
+    assert sentinel.read_bytes() == b"external"
+    assert not staging.exists()
+
+
+def test_local_restore_state_aborts_when_source_changes_during_copy(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    source = data / "models" / "model.bin"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"original")
+    staging = tmp_path / "staging"
+    original_copy2 = backup_module.shutil.copy2
+    changed = False
+
+    def mutate_then_copy(src, dst, *, follow_symlinks=True):
+        nonlocal changed
+        result = original_copy2(src, dst, follow_symlinks=follow_symlinks)
+        if not changed:
+            Path(src).write_bytes(b"changed")
+            changed = True
+        return result
+
+    monkeypatch.setattr(backup_module.shutil, "copy2", mutate_then_copy)
+
+    with pytest.raises(ValueError, match="local restore state changed during copy"):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert changed
+    assert source.read_bytes() == b"changed"
+    assert source.is_file()
+    assert data.is_dir()
+    assert (staging / "models" / "model.bin").read_bytes() == b"original"
+
+
 def transcript(item_id: str, source_hash: str, source_path: str) -> Transcript:
     return Transcript(
         id=item_id,

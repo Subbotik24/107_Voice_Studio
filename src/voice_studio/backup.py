@@ -53,6 +53,8 @@ _FIXED_MEMBER_LIMITS = {
     "config/dictionary.json": 16 * 1024**2,
 }
 _LOCAL_RESTORE_NAMES = ("exports", "models")
+_LocalRestoreFingerprint = tuple[int, int, int, int, int, int]
+_LocalRestoreEntry = tuple[str, _LocalRestoreFingerprint]
 
 
 def _stream_hash(stream: BinaryIO) -> tuple[str, int]:
@@ -436,21 +438,58 @@ def _unsafe_local_restore_path(path: Path) -> ValueError:
     return ValueError(f"local restore state contains an unsafe path: {path}")
 
 
+def _local_restore_fingerprint(info: os.stat_result) -> _LocalRestoreFingerprint:
+    """Capture identity and mutable attributes used for cooperative change checks."""
+
+    return (
+        stat.S_IFMT(info.st_mode),
+        info.st_size,
+        getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
+        getattr(info, "st_ctime_ns", int(info.st_ctime * 1_000_000_000)),
+        getattr(info, "st_dev", 0),
+        getattr(info, "st_ino", 0),
+    )
+
+
 def _validate_local_restore_entry(path: Path, info: os.stat_result) -> None:
     if _is_reparse_point(info) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
         raise _unsafe_local_restore_path(path)
+
+
+def _local_restore_directory_state(
+    source: Path,
+) -> tuple[_LocalRestoreFingerprint, tuple[_LocalRestoreEntry, ...]]:
+    """Validate a directory and snapshot its direct entries without following links."""
+
+    try:
+        source_info = os.lstat(source)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise _unsafe_local_restore_path(source) from exc
+    _validate_local_restore_entry(source, source_info)
+    if not stat.S_ISDIR(source_info.st_mode):
+        raise _unsafe_local_restore_path(source)
+    entries: list[_LocalRestoreEntry] = []
+    try:
+        with os.scandir(source) as directory:
+            for entry in directory:
+                entry_path = Path(entry.path)
+                info = entry.stat(follow_symlinks=False)
+                _validate_local_restore_entry(entry_path, info)
+                entries.append((entry.name, _local_restore_fingerprint(info)))
+    except OSError as exc:
+        raise _unsafe_local_restore_path(source) from exc
+    return _local_restore_fingerprint(source_info), tuple(sorted(entries))
 
 
 def _local_restore_tree_bytes(source: Path) -> int:
     """Inspect one local-state tree without following links."""
 
     try:
-        source_info = os.lstat(source)
+        before = _local_restore_directory_state(source)
     except FileNotFoundError:
         return 0
-    _validate_local_restore_entry(source, source_info)
-    if not stat.S_ISDIR(source_info.st_mode):
-        raise _unsafe_local_restore_path(source)
 
     total = 0
     with os.scandir(source) as entries:
@@ -465,6 +504,9 @@ def _local_restore_tree_bytes(source: Path) -> int:
                 total += _local_restore_tree_bytes(entry_path)
             else:
                 total += info.st_size
+    after = _local_restore_directory_state(source)
+    if before != after:
+        raise ValueError(f"local restore state changed during scan: {source}")
     return total
 
 
@@ -484,15 +526,17 @@ def _local_restore_bytes(data_root: Path) -> int:
 
 
 def _copy_local_restore_tree(source: Path, destination: Path) -> None:
-    """Copy one validated local-state tree without following links."""
+    """Copy one validated local-state tree without following links.
+
+    Validation is best-effort: a cooperative local change between syscalls is
+    rejected, while a malicious same-account TOCTTOU actor remains outside the
+    threat model because that actor can already alter private local files.
+    """
 
     try:
-        source_info = os.lstat(source)
+        before = _local_restore_directory_state(source)
     except OSError as exc:
         raise _unsafe_local_restore_path(source) from exc
-    _validate_local_restore_entry(source, source_info)
-    if not stat.S_ISDIR(source_info.st_mode):
-        raise _unsafe_local_restore_path(source)
 
     destination.mkdir(exist_ok=True)
     with os.scandir(source) as entries:
@@ -521,6 +565,22 @@ def _copy_local_restore_tree(source: Path, destination: Path) -> None:
                     destination_entry,
                     follow_symlinks=False,
                 )
+                try:
+                    after_info = os.lstat(source_entry)
+                except OSError as exc:
+                    raise _unsafe_local_restore_path(source_entry) from exc
+                _validate_local_restore_entry(source_entry, after_info)
+                if (
+                    not stat.S_ISREG(after_info.st_mode)
+                    or _local_restore_fingerprint(current_info)
+                    != _local_restore_fingerprint(after_info)
+                ):
+                    raise ValueError(
+                        f"local restore state changed during copy: {source_entry}"
+                    )
+    after = _local_restore_directory_state(source)
+    if before != after:
+        raise ValueError(f"local restore state changed during copy: {source}")
     shutil.copystat(source, destination, follow_symlinks=False)
 
 
@@ -529,6 +589,13 @@ def _copy_local_restore_state(data_root: Path, staging: Path) -> list[str]:
 
     data_root = data_root.expanduser()
     staging = staging.expanduser()
+    try:
+        root_info = os.lstat(data_root)
+    except FileNotFoundError:
+        return []
+    _validate_local_restore_entry(data_root, root_info)
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise _unsafe_local_restore_path(data_root)
     sources: list[tuple[str, Path]] = []
     for name in _LOCAL_RESTORE_NAMES:
         source = data_root / name
