@@ -72,6 +72,10 @@ saved settings. If the optional runtime cannot be checked, keep the safe
 `auto/default` selection. Explicit device/compute combinations are checked
 again against the installed CTranslate2 runtime before a Whisper model loads.
 
+The same profile exposes a **VAD silence filter** setting, enabled by default.
+Disable it in Settings or with `voice-studio transcribe --no-vad` when the
+filter clips quiet speech; the Ollama and OpenAI profiles ignore it.
+
 In the default profile, the selected Ollama model performs direct speech
 transcription and automatic local cleanup. The immutable STT result remains in
 `raw_text`; cleanup changes only `corrected_text`. A cleanup failure is shown to

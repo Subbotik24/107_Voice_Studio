@@ -42,6 +42,10 @@ performs a bounded local advisory check in a background worker; it does not
 load a model or change saved settings. If detection is unavailable, keep the
 safe `auto/default` selection. Explicit combinations are checked against the
 installed runtime before the Whisper model loads.
+
+**VAD silence filter** is enabled by default and applies only to Local Whisper.
+Turn it off if the filter clips quiet speech; the CLI equivalents are `--vad`
+and `--no-vad`. The Ollama and OpenAI profiles ignore this setting.
 | **OpenAI STT model** | Used only by the cloud profile. |
 | **Dictionary JSON** | Deterministic replacements after recognition. |
 | **Local Ollama model** | Installed model that reports `audio` capability. |

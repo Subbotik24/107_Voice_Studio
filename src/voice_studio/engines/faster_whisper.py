@@ -18,12 +18,16 @@ class FasterWhisperEngine:
         device: str = "auto",
         compute_type: str = "default",
         display_name: str | None = None,
+        vad_filter: bool = True,
     ):
         validate_hardware_options(device, compute_type)
+        if type(vad_filter) is not bool:
+            raise ValueError("vad_filter must be a boolean")
         self.model_path = model
         self.model_name = display_name or Path(model).name
         self.device = device
         self.compute_type = compute_type
+        self.vad_filter = vad_filter
         self._model: Any | None = None
 
     def _load(self) -> Any:
@@ -104,7 +108,7 @@ class FasterWhisperEngine:
         parts, info = model.transcribe(
             str(source),
             language=None if language in {None, "auto"} else language,
-            vad_filter=True,
+            vad_filter=self.vad_filter,
             beam_size=5,
             word_timestamps=False,
         )
@@ -130,6 +134,7 @@ class FasterWhisperEngine:
             "language_probability": getattr(info, "language_probability", None),
             "device": self.device,
             "compute_type": self.compute_type,
+            "vad_filter": self.vad_filter,
             "model_load_seconds": model_load_seconds,
         }
         return EngineResult(

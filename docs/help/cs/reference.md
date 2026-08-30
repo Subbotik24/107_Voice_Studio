@@ -42,6 +42,10 @@ hardware** provede omezenou místní kontrolu na pozadí; nenačte model ani
 nezmění uložené nastavení. Pokud kontrola není dostupná, ponechte bezpečné
 `auto/default`. Zvolené kombinace se před načtením modelu ověří proti místnímu
 runtime.
+
+**VAD filtr pauz** je ve výchozím stavu zapnutý a platí pouze pro profil
+Lokální Whisper. Vypněte jej, pokud filtr ořezává tichou řeč; ekvivalenty v CLI
+jsou `--vad` a `--no-vad`. Profily Ollama a OpenAI toto nastavení ignorují.
 | **Model OpenAI STT** | Používá jen cloudový profil. |
 | **Slovník JSON** | Deterministické nahrazení po rozpoznání. |
 | **Lokální model Ollama** | Instalovaný model s capability `audio`. |

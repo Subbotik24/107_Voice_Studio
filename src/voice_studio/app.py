@@ -2639,6 +2639,7 @@ class VoiceStudioApp(tk.Tk):
             "model": tk.StringVar(value=self.settings.model),
             "device": tk.StringVar(value=self.settings.device),
             "compute_type": tk.StringVar(value=self.settings.compute_type),
+            "vad_filter": tk.BooleanVar(value=self.settings.vad_filter),
             "retention": tk.StringVar(value=self.settings.retention),
             "dictionary_path": tk.StringVar(value=self.settings.dictionary_path),
             "hotkey": tk.StringVar(value=self.settings.hotkey),
@@ -2878,6 +2879,11 @@ class VoiceStudioApp(tk.Tk):
             openai_stt_field, textvariable=variables["openai_transcription_model"]
         ).pack(fill="x")
 
+        ttk.Checkbutton(
+            recognition_page,
+            text=self._t("vad_filter"),
+            variable=variables["vad_filter"],
+        ).grid(row=3, column=0, sticky="w", pady=(0, 18))
         ttk.Button(
             recognition_page,
             text=self._t("hardware_detect"),
@@ -3016,6 +3022,7 @@ class VoiceStudioApp(tk.Tk):
                     model=str(variables["model"].get()).strip(),
                     device=str(variables["device"].get()).strip(),
                     compute_type=str(variables["compute_type"].get()).strip(),
+                    vad_filter=bool(variables["vad_filter"].get()),
                     retention=str(variables["retention"].get()).strip(),
                     dictionary_path=str(variables["dictionary_path"].get()).strip(),
                     hotkey=str(variables["hotkey"].get()).strip(),

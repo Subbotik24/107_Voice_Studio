@@ -92,6 +92,21 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--ollama-model", help="installed Ollama audio-capable model name")
     transcribe.add_argument("--device", choices=SUPPORTED_DEVICES)
     transcribe.add_argument("--compute-type", choices=SUPPORTED_COMPUTE_TYPES)
+    vad_group = transcribe.add_mutually_exclusive_group()
+    vad_group.add_argument(
+        "--vad",
+        dest="vad_filter",
+        action="store_true",
+        default=None,
+        help="enable the faster-whisper VAD filter (default from settings)",
+    )
+    vad_group.add_argument(
+        "--no-vad",
+        dest="vad_filter",
+        action="store_false",
+        default=None,
+        help="disable the faster-whisper VAD filter when it clips quiet speech",
+    )
     transcribe.add_argument("--retention", choices=["keep", "delete_after_transcription"])
     transcribe.add_argument("--dictionary", type=Path)
     transcribe.add_argument("--export-format", choices=["txt", "md", "json", "srt", "vtt"])
@@ -210,6 +225,7 @@ def _load_effective_settings(args: argparse.Namespace) -> Settings:
         ("ollama_model", "ollama_model"),
         ("device", "device"),
         ("compute_type", "compute_type"),
+        ("vad_filter", "vad_filter"),
         ("retention", "retention"),
     ):
         value = getattr(args, argument, None)

@@ -136,6 +136,7 @@ class Settings:
         "auto_copy",
         "offline_only",
         "automatic_cleanup",
+        "vad_filter",
     )
 
     profile: str = "ollama-local"
@@ -151,6 +152,7 @@ class Settings:
     auto_copy: bool = False
     offline_only: bool = True
     automatic_cleanup: bool = True
+    vad_filter: bool = True
     task_timeout_seconds: int = 7_200
     cloud_provider: str = "openai"
     cleanup_provider: str = "ollama"

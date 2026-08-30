@@ -17,6 +17,7 @@ class EngineKey:
     model: str
     device: str
     compute_type: str
+    vad_filter: bool
     cloud_model: str
     ollama_model: str
 
@@ -36,6 +37,7 @@ class EngineManager:
             model=settings.model,
             device=settings.device,
             compute_type=settings.compute_type,
+            vad_filter=settings.vad_filter,
             cloud_model=settings.openai_transcription_model,
             ollama_model=settings.ollama_model,
         )
@@ -51,6 +53,7 @@ class EngineManager:
                 device=settings.device,
                 compute_type=settings.compute_type,
                 display_name=settings.model,
+                vad_filter=settings.vad_filter,
             )
         elif settings.engine == "openai-cloud":
             engine = OpenAICloudEngine(settings.openai_transcription_model)
