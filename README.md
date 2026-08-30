@@ -124,11 +124,22 @@ The planned release assets are:
 - `VOICE-Studio-0.3.0-test-rc1-macos-arm64-unsigned.dmg`
 - `VOICE-Studio-0.3.0-test-rc1-windows-x64-unsigned.zip`
 - wheel, release manifest and `SHA256SUMS.txt`
+- `voice-studio-sbom.cdx.json` (CycloneDX 1.6 dependency inventory)
 
 macOS Gatekeeper and Windows SmartScreen warnings are expected because these
 artifacts are unsigned. Download only from the project GitHub Release, verify
 checksums, and test on non-critical data. No Python is required for the frozen
 artifacts.
+
+The reproducible SBOM is generated only from the pinned
+`requirements-windows.lock` file and is staged beside the Test RC release
+manifest and checksums as `voice-studio-sbom.cdx.json`. The verified artifact
+contains 58 normalized components and is byte-identical when generated from
+lock copies in different temporary roots. Its scope is the pinned Windows x64
+release environment, not necessarily the contents of a frozen runtime. It is
+not license evidence, vulnerability evidence, or a publisher signature; the
+Test RC remains unsigned, and native Windows/macOS and physical-device gates
+remain **NOT RUN** for this increment.
 
 ## Development and checks
 

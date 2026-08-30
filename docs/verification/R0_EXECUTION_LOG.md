@@ -32,15 +32,23 @@ release evidence remains in `VERIFICATION.md`.
 | W2-C3 stable audit snapshot | `7e7f8e0` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 531 passed, 8 Windows symlink-privilege skips; focused 148 passed, 8 skipped | root replacement and temp containment changed at `b7ba7fd` |
 | W2-C3 final read-only audit | `b7ba7fd` | full pytest, focused storage/model/backup/CLI, focused independent review, compile, Ruff, diff check | 533 passed, 8 Windows symlink-privilege skips; related 150 passed, 8 skipped; final review CLEAN | storage/audit/CLI production code or corresponding tests change |
 | W2-C3 final docs/artifact | `1c0f471` | Help validation, wheel rebuild, pip check, diff check | 13 Help files PASS; wheel 700,821 bytes, SHA-256 `33441D2FB1932501241DA09E205C566EB6BD7DB392666ECAD29AFD0FEADBFCC8`; dependencies PASS | Help/package inputs or release metadata change |
+| W4-B1 reproducible SBOM | `686d9406d5ee8d246d410e41e07d184355acdaca` | two lock-root generators, one post-code full quality gate, wheel, pip check | SBOM 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`; 58 components; 573 passed, 9 Windows symlink-privilege skips; wheel 700,821 bytes, SHA-256 `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8` | production generator/manifest/staging code or corresponding tests change |
 
-## Current checkpoint
+## W4-B1 current checkpoint
 
-- Verified production HEAD: `b7ba7fd`.
-- Documentation and rebuilt wheel checkpoint: `1c0f471`; independent documentation
-  re-review CLEAN.
-- Do not repeat the 533-test full suite unless production code changes again.
-  Run Help validation and `git diff --check`; repeat focused/full tests only if
-  the review requires another production-code change.
-- W2-C3 native/packaged/removable-media/antivirus/clean-machine acceptance remains
-  `NOT_RUN`. The eight source-suite skips are Windows symlink-creation cases
-  denied by `WinError 1314`; junction/reparse coverage did execute.
+- Verified production code commit: `686d9406d5ee8d246d410e41e07d184355acdaca`.
+- Canonical artifact comparison passed: outputs from two temporary lock roots
+  were byte-identical; the retained relative artifact has 58 components, no
+  absolute/private paths, 11,159 bytes and SHA-256
+  `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`.
+- Exactly one post-code full quality gate ran: 573 passed, 9 Windows
+  symlink-privilege skips; wheel and `pip check` passed. It was not rerun after
+  documentation-only edits. The wheel was 700,821 bytes with SHA-256
+  `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8`.
+- The SBOM is lock-only provenance for the pinned Windows release environment,
+  not necessarily frozen-runtime contents, and is not license/vulnerability/
+  signature evidence. Source/contract/syntax checks passed; physical Windows or
+  macOS Test RC builds, signing, clean-machine and physical-device gates remain
+  `NOT_RUN`.
+- After documentation edits, only Help validation, `git diff --check` and
+  status checks are permitted; do not repeat the full suite.

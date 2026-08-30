@@ -1,5 +1,38 @@
 # ЗАВДАННЯ ДЛЯ ANTIGRAVITY — COMPLETION AUDIT RECORDS
 
+## W4-B1 reproducible SBOM — COMPLETE
+
+**TASK_ID:** W4-B1-reproducible-sbom
+**СТАТУС:** `COMPLETE` для source/contract verification. Цей increment додає
+детермінований SBOM до release manifest/package staging, але не закриває
+підпис, native, clean-machine або фізичний Windows/macOS acceptance.
+**ГІЛКА РОБОТИ:** локальна `main`; нових гілок або worktree не створено,
+push не виконувався.
+**ВЕРИФІКОВАНИЙ CODE COMMIT:** `686d9406d5ee8d246d410e41e07d184355acdaca`.
+**Доказ:** дві генерації з копій `requirements-windows.lock` у різних
+тимчасових коренях byte-identical; 58 components; artifact
+`build/w4-b1-sbom/voice-studio-sbom.cdx.json`, 11,159 bytes, SHA-256
+`0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`.
+Один post-code quality gate: `573 passed`, `9 skipped` через Windows
+symlink privilege; wheel і `pip check` — PASS. SBOM є інвентарем pinned
+Windows release environment, не frozen-runtime contents, і не є доказом
+ліцензій, вразливостей або підпису.
+
+### W4-B1 acceptance limits
+
+- Test RC artifacts remain unsigned; signing/notarization is `NOT_RUN`.
+- Physical Windows/macOS Test RC builds, clean-machine installation and
+  physical-device acceptance are `NOT_RUN`; source/contract/syntax checks only.
+- The nine skips are Windows symlink-privilege boundaries (`WinError 1314`),
+  including one SBOM symlink test; junction/reparse coverage ran where
+  available.
+
+**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W5` — фізичне 50-task acceptance на
+підтримуваних ОС (Windows permissions/manual Accessibility delivery and
+macOS/Windows Test RC evidence), з окремим release go/no-go after the gates.
+
+---
+
 ## W2-C3 storage audit and confirmed repair — COMPLETE
 
 **TASK_ID:** W2-C3-storage-audit-and-repair

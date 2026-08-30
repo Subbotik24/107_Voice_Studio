@@ -31,6 +31,7 @@ in the supported flow.
 | W2-C1 restore preserves machine-local state (2026-08-30) | PASS source/headless | restore replaces backed-up transcripts, settings and sources while copying the current `models/` and `exports/` into staging before the first live-root rename; both trees remain outside `.voice-backup`; unsafe links/reparse points abort with `local restore state contains an unsafe path: ...` before the live root changes; focused restore coverage passed 10 tests with 2 Windows symlink-privilege skips and the full `.venv` gate passed 435 tests with 3 skips |
 | W2-C2 model-catalog self-healing | PASS source/headless | `models reconcile` adopts complete orphan directories, drops only provably absent entries, retains incomplete or unsafe paths as blocked, quarantines corrupt manifests, cleans only bounded stale residue, and runs automatically at model-command and GUI-startup boundaries; 426 tests passed with one Windows symlink-privilege skip; source GUI smoke and complete evidence are recorded in `VERIFICATION.md` |
 | W2-C3 storage audit and confirmed repair (2026-08-30) | PASS source/headless | end-to-end read-only `storage audit` validates the existing root and reads SQLite through a stable temporary database/WAL snapshot with bounded retry and root-identity checks; it additively reports missing transcript rows plus nested model/export drift while preserving the core top-level status used by restore; `storage repair-missing ID --expected-path PATH --yes` transactionally detaches only a proven missing managed reference and never unlinks or recreates audio; export candidates are never auto-deleted; related coverage passed 150 tests with 8 Windows symlink-privilege skips and the full `.venv` gate passed 533 tests with the same 8 skips |
+| W4-B1 reproducible SBOM (2026-08-30) | PASS source/contract | deterministic CycloneDX 1.6 `voice-studio-sbom.cdx.json` generated from `requirements-windows.lock`; two temporary-root generations were byte-identical, contained 58 components and no private/absolute paths; code commit `686d9406d5ee8d246d410e41e07d184355acdaca` passed the one post-code gate with 573 tests and 9 Windows symlink-privilege skips; wheel and `pip check` passed |
 | W2-S1 coordinated worker shutdown (process/queue half, 2026-08-30) | PASS source/headless | transcription and model-download process generations have bounded terminate/kill cleanup, exactly-once queue disposal, reusable close, epoch/concurrency protection and resource-tracker regression evidence; the app/recorder/hotkey thread half remains open, so full W2-S1 is still IN PROGRESS |
 | W2-S1 coordinated worker shutdown (app/recorder/hotkey/maintenance thread half, 2026-08-30) | PASS source/headless | GUI worker registry, one-budget bounded joins, late-event gating, recorder residue retention, bounded hotkey stop and maintenance refusal are covered by regression tests and a clean-profile source GUI close smoke; native physical and packaged acceptance remain open, so full W2-S1 is still IN PROGRESS |
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
@@ -76,16 +77,19 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);
 - all W3 VAD/timestamp/hardware/editor work;
-- W4 SBOM, signed/notarized installers and updater;
+- W4 signed/notarized installers and updater (the reproducible SBOM increment is complete; native signing remains open);
 - W5 physical 50-task acceptance per OS;
 - W6 independent release go/no-go.
 
 ## Current environment limitations
 
 The Windows x64 executable, locked Python 3.12 build environment, packaged
-runtime probe and GUI launch were verified. Clean-machine acceptance, signing,
-real microphone/hotkey coverage and production speech-quality measurements
-remain open exactly as listed in `VERIFICATION.md`.
+runtime probe and GUI launch were verified in earlier Test RC work. W4-B1
+verified the source/contract SBOM and Python build artifacts only; no physical
+Windows/macOS Test RC build or acceptance run was performed for this
+increment. Clean-machine acceptance, signing, real microphone/hotkey coverage
+and production speech-quality measurements remain open exactly as listed in
+`VERIFICATION.md`.
 
 ## Release rule
 

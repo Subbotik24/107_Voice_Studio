@@ -107,3 +107,20 @@ JSONL records, SHA‑256 inventory та опційні managed copies. Restore �
 - ручна правка суцільного тексту не перерозподіляється автоматично по subtitle segments;
 - немає підписаних native installers;
 - точність розпізнавання не заявляється без закритого benchmark.
+
+## 7. Release provenance (W4-B1)
+
+`scripts/generate_sbom.py` emits the deterministic CycloneDX 1.6 artifact
+`voice-studio-sbom.cdx.json` from the exact rows in
+`requirements-windows.lock`. Components are normalized and sorted; the
+artifact contains no timestamps, generated identifiers, absolute/private
+paths, model weights or installed-environment discovery. Release manifests
+store its path relative to the release directory and record its byte size and
+SHA-256; the Windows and macOS staging flows include the same filename in
+their checksum inputs.
+
+This SBOM inventories the pinned Windows x64 release environment and does not
+necessarily describe frozen-runtime contents. The lock-only inventory is not
+license evidence, vulnerability evidence, or a publisher signature. Signing,
+native package acceptance and physical Windows/macOS Test RC gates are
+`NOT_RUN` for W4-B1.

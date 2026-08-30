@@ -3,6 +3,42 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W4-B1 reproducible SBOM — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.
+The production-code commit verified before documentation edits was
+`686d9406d5ee8d246d410e41e07d184355acdaca`.
+
+The generator was run twice against copies of `requirements-windows.lock` in
+different temporary roots. The resulting bytes were compared directly, the
+JSON was checked for exactly 58 components and no absolute/private path
+material, and the first output was retained as
+`build/w4-b1-sbom/voice-studio-sbom.cdx.json`.
+
+| Check | Result |
+| --- | --- |
+| Canonical artifact comparison | PASS; byte-identical outputs, 58 components, path scan PASS |
+| SBOM artifact | `build/w4-b1-sbom/voice-studio-sbom.cdx.json`, 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377` |
+| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compileall, Ruff, Help validation, 573 passed / 9 skipped, CLI `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w4-b1-wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl`, 700,821 bytes, SHA-256 `d2f9edce44c5968566ac1b6f7d57025243722bcc8892802b770ce76dbc85c6d8` |
+| `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` before documentation edits | PASS; no whitespace errors |
+
+The full quality gate above was run exactly once after the W4-B1 production
+code was complete and was not rerun after these documentation-only edits. The
+source/contract/syntax checks passed, but no physical Windows or macOS Test RC
+build, clean-machine install, signing/notarization, or physical-device
+acceptance was run for W4-B1. The SBOM is a lock-only inventory of the pinned
+Windows x64 release environment, not necessarily frozen-runtime contents. It
+does not establish license coverage, vulnerability status, or a publisher
+signature. The Test RC artifacts remain unsigned and native/physical gates are
+`NOT_RUN`.
+
+The filename associated with the Test RC release artifacts is
+`voice-studio-sbom.cdx.json`; release manifests use a relative path and record
+the artifact size and SHA-256. No secrets, private paths, model weights or
+generated release outputs were added to Git.
+
 ## W2-C3 storage audit and confirmed repair — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, source tree on local
