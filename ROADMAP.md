@@ -2,6 +2,8 @@
 
 Current Test RC status and verified evidence are tracked in
 `IMPLEMENTATION_STATUS.md` and `VERIFICATION.md`.
+Potential post-R0 growth is described separately in `FUTURE_GROWTH.md`; those
+R1/R2 capabilities are not part of the current completion scope.
 
 ## P0 — довести desktop‑застосунок до release candidate
 
