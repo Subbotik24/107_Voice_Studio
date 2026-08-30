@@ -616,16 +616,18 @@ class ModelCatalog:
             raise OSError(f"not enough free space for {value}: need {required} bytes, have {free}")
         temporary = self.downloads / f"{value}-{uuid.uuid4().hex}"
         temporary.mkdir(parents=True)
-        context = multiprocessing.get_context("spawn")
-        result_queue = context.Queue()
-        process = context.Process(
-            target=_download_worker,
-            args=(value, str(temporary), revision, result_queue),
-            name=f"model-download-{value}",
-        )
-        process.start()
-        started = time.monotonic()
+        result_queue: Any | None = None
+        process: Any | None = None
         try:
+            context = multiprocessing.get_context("spawn")
+            result_queue = context.Queue()
+            process = context.Process(
+                target=_download_worker,
+                args=(value, str(temporary), revision, result_queue),
+                name=f"model-download-{value}",
+            )
+            process.start()
+            started = time.monotonic()
             while process.is_alive():
                 if cancelled and cancelled():
                     raise RuntimeError(f"model download cancelled: {value}")

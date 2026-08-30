@@ -17,46 +17,46 @@ def _stop_process(process: Any, *, graceful_seconds: float = 0.0) -> None:
     try:
         if not process.is_alive():
             return
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         return
 
     if graceful_seconds > 0:
         try:
             process.join(timeout=graceful_seconds)
-        except (AttributeError, OSError, ValueError):
+        except (AssertionError, AttributeError, OSError, ValueError):
             pass
         try:
             if not process.is_alive():
                 return
-        except (AttributeError, OSError, ValueError):
+        except (AssertionError, AttributeError, OSError, ValueError):
             return
 
     try:
         process.terminate()
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         pass
     try:
         process.join(timeout=5)
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         return
     try:
         if not process.is_alive():
             return
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         return
 
     try:
         process.kill()
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         pass
     try:
         process.join(timeout=2)
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         return
     # Inspect the final state too: callers must not assume kill/join succeeded.
     try:
         process.is_alive()
-    except (AttributeError, OSError, ValueError):
+    except (AssertionError, AttributeError, OSError, ValueError):
         pass
 
 

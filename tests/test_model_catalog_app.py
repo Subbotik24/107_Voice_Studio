@@ -1,4 +1,5 @@
 import os
+import queue
 import shutil
 import subprocess
 import time
@@ -8,6 +9,77 @@ import pytest
 
 from voice_studio import model_catalog as model_catalog_module
 from voice_studio.model_catalog import ModelCatalog
+
+
+class DownloadQueue:
+    def __init__(self, result=None):
+        self.events = []
+        self.result = result
+
+    def get(self, timeout=None):
+        self.events.append(("get", timeout))
+        if self.result is None:
+            raise queue.Empty
+        return self.result
+
+    def cancel_join_thread(self):
+        self.events.append("cancel_join_thread")
+
+    def close(self):
+        self.events.append("close")
+
+
+class DownloadProcess:
+    def __init__(self, *, alive=False, exitcode=0, start_error=None):
+        self.events = []
+        self.alive = alive
+        self.exitcode = exitcode
+        self.start_error = start_error
+
+    def start(self):
+        self.events.append("start")
+        if self.start_error:
+            raise self.start_error
+
+    def is_alive(self):
+        return self.alive
+
+    def terminate(self):
+        self.events.append("terminate")
+
+    def join(self, timeout=None):
+        self.events.append(("join", timeout))
+
+    def kill(self):
+        self.events.append("kill")
+        self.alive = False
+
+
+class DownloadContext:
+    def __init__(self, process, result=None):
+        self.queue = DownloadQueue(result)
+        self.process = process
+
+    def Queue(self):
+        return self.queue
+
+    def Process(self, *, args, **_kwargs):
+        assert args[3] is self.queue
+        return self.process
+
+
+def patch_download_context(monkeypatch, context):
+    monkeypatch.setattr(model_catalog_module, "registry_url", lambda: None)
+    monkeypatch.setattr(
+        model_catalog_module.shutil,
+        "disk_usage",
+        lambda _path: type("Usage", (), {"free": 10**15})(),
+    )
+    monkeypatch.setattr(
+        model_catalog_module.multiprocessing,
+        "get_context",
+        lambda _name: context,
+    )
 
 
 def local_model(path: Path) -> Path:
@@ -128,8 +200,6 @@ def test_cancelled_download_bounds_stubborn_process_and_disposes_queue(
             return self.process
 
     context = SpawnContext()
-    original = tmp_path / "original.wav"
-    original.write_bytes(b"original")
     catalog = ModelCatalog(tmp_path / "managed")
     monkeypatch.setattr(model_catalog_module, "registry_url", lambda: None)
     monkeypatch.setattr(
@@ -149,7 +219,77 @@ def test_cancelled_download_bounds_stubborn_process_and_disposes_queue(
     assert context.process.events == ["start", "terminate", ("join", 5), "kill", ("join", 2)]
     assert context.result_queue.events == ["cancel_join_thread", "close"]
     assert list(catalog.downloads.iterdir()) == []
-    assert original.read_bytes() == b"original"
+
+
+def test_download_start_failure_disposes_queue_and_owned_staging(tmp_path, monkeypatch):
+    process = DownloadProcess(start_error=RuntimeError("spawn failed"))
+    context = DownloadContext(process)
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+
+    with pytest.raises(RuntimeError, match="spawn failed"):
+        catalog.install("tiny")
+
+    assert context.queue.events == ["cancel_join_thread", "close"]
+    assert list(catalog.downloads.iterdir()) == []
+
+
+def test_timed_out_download_kills_stubborn_process_and_disposes_queue(
+    tmp_path, monkeypatch
+):
+    process = DownloadProcess(alive=True)
+    context = DownloadContext(process)
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+
+    with pytest.raises(TimeoutError, match="model download timed out after -1 seconds: tiny"):
+        catalog.install("tiny", timeout_seconds=-1)
+
+    assert process.events == ["start", "terminate", ("join", 5), "kill", ("join", 2)]
+    assert context.queue.events == ["cancel_join_thread", "close"]
+    assert list(catalog.downloads.iterdir()) == []
+
+
+def test_download_worker_error_disposes_queue_and_owned_staging(tmp_path, monkeypatch):
+    process = DownloadProcess(alive=False, exitcode=1)
+    context = DownloadContext(process, {"ok": False, "error": "network failed"})
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+
+    with pytest.raises(RuntimeError, match="cannot install model tiny: network failed"):
+        catalog.install("tiny")
+
+    assert process.events == ["start"]
+    assert context.queue.events == [("get", 2), "cancel_join_thread", "close"]
+    assert list(catalog.downloads.iterdir()) == []
+
+
+def test_successful_download_disposes_queue_without_terminating_exited_worker(
+    tmp_path, monkeypatch
+):
+    process = DownloadProcess(alive=False)
+    context = DownloadContext(process, {"ok": True})
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+    promoted = {}
+
+    def promote(model_id, temporary, *, source, revision):
+        promoted.update(
+            model_id=model_id,
+            temporary=temporary,
+            source=source,
+            revision=revision,
+        )
+        return {"id": model_id}
+
+    monkeypatch.setattr(catalog, "_promote", promote)
+
+    assert catalog.install("tiny", revision="rev-1") == {"id": "tiny"}
+
+    assert process.events == ["start"]
+    assert context.queue.events == [("get", 2), "cancel_join_thread", "close"]
+    assert not promoted["temporary"].exists()
+    assert list(catalog.downloads.iterdir()) == []
 
 
 def test_uninstalled_model_has_actionable_error(tmp_path):
