@@ -28,7 +28,7 @@ from .exporters import export_transcript
 from .jobs import TranscriptionJobController
 from .media import validate_media_file
 from .model_catalog import ModelCatalog
-from .models import Settings
+from .models import SUPPORTED_COMPUTE_TYPES, SUPPORTED_DEVICES, Settings
 from .profiles import apply_profile
 from .storage import LocalStore
 
@@ -84,8 +84,8 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--engine", choices=["ollama", "faster-whisper", "openai-cloud"])
     transcribe.add_argument("--model", help="faster-whisper model name or local model path")
     transcribe.add_argument("--ollama-model", help="installed Ollama audio-capable model name")
-    transcribe.add_argument("--device")
-    transcribe.add_argument("--compute-type")
+    transcribe.add_argument("--device", choices=SUPPORTED_DEVICES)
+    transcribe.add_argument("--compute-type", choices=SUPPORTED_COMPUTE_TYPES)
     transcribe.add_argument("--retention", choices=["keep", "delete_after_transcription"])
     transcribe.add_argument("--dictionary", type=Path)
     transcribe.add_argument("--export-format", choices=["txt", "md", "json", "srt", "vtt"])
@@ -180,8 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark.add_argument("manifest", type=Path)
     benchmark.add_argument("--engine", choices=["faster-whisper"])
     benchmark.add_argument("--model")
-    benchmark.add_argument("--device")
-    benchmark.add_argument("--compute-type")
+    benchmark.add_argument("--device", choices=SUPPORTED_DEVICES)
+    benchmark.add_argument("--compute-type", choices=SUPPORTED_COMPUTE_TYPES)
     benchmark.add_argument("--output", type=Path)
 
     return root

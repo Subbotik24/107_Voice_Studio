@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from voice_studio import backup as backup_module
 from voice_studio import cli
 from voice_studio.cloud_cleanup import CleanupProposal
@@ -350,6 +352,17 @@ def test_transcribe_cli_engine_override_applies_matching_profile(monkeypatch):
     assert whisper.automatic_cleanup is False
     assert cloud.profile == "openai-cloud"
     assert cloud.offline_only is False
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [("--device", "rocm"), ("--compute-type", "float64")],
+)
+def test_transcribe_cli_rejects_unsupported_hardware_options(option, value):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            ["transcribe", "recording.wav", option, value]
+        )
 
 
 def test_validate_cli(tmp_path, capsys, make_wav):

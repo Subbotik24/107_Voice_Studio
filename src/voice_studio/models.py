@@ -10,11 +10,38 @@ SUPPORTED_PROFILES = ("ollama-local", "whisper-local", "openai-cloud")
 SUPPORTED_ENGINES = ("ollama", "faster-whisper", "openai-cloud")
 SUPPORTED_CLEANUP_PROVIDERS = ("none", "ollama", "openai")
 RETENTION_POLICIES = ("keep", "delete_after_transcription")
+SUPPORTED_DEVICES = ("auto", "cpu", "cuda")
+SUPPORTED_COMPUTE_TYPES = (
+    "default",
+    "auto",
+    "int8",
+    "int8_float32",
+    "int8_float16",
+    "int8_bfloat16",
+    "int16",
+    "float16",
+    "float32",
+    "bfloat16",
+)
 PROFILE_INVARIANTS = {
     "ollama-local": ("ollama", "ollama", True, True),
     "whisper-local": ("faster-whisper", "none", False, True),
     "openai-cloud": ("openai-cloud", "openai", False, False),
 }
+
+
+def validate_hardware_options(device: str, compute_type: str) -> None:
+    """Validate the supported faster-whisper/CTranslate2 option vocabulary."""
+
+    for field_name, value, allowed in (
+        ("device", device, SUPPORTED_DEVICES),
+        ("compute_type", compute_type, SUPPORTED_COMPUTE_TYPES),
+    ):
+        if value not in allowed:
+            rendered = ", ".join(allowed)
+            raise ValueError(
+                f"unsupported {field_name} '{value}'; allowed values: {rendered}"
+            )
 
 
 def utc_now() -> str:
@@ -176,6 +203,7 @@ class Settings:
             raise ValueError("device cannot be empty")
         if not self.compute_type.strip():
             raise ValueError("compute_type cannot be empty")
+        validate_hardware_options(self.device, self.compute_type)
         if not self.hotkey.strip():
             raise ValueError("hotkey cannot be empty")
         if not 60 <= self.task_timeout_seconds <= 86_400:

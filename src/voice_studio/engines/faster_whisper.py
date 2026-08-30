@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..models import Segment
+from ..models import Segment, validate_hardware_options
 from .base import EngineResult
 
 
@@ -19,6 +19,7 @@ class FasterWhisperEngine:
         compute_type: str = "default",
         display_name: str | None = None,
     ):
+        validate_hardware_options(device, compute_type)
         self.model_path = model
         self.model_name = display_name or Path(model).name
         self.device = device

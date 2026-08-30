@@ -225,6 +225,33 @@ def test_task_timeout_is_bounded():
         Settings(task_timeout_seconds=30).validate()
 
 
+@pytest.mark.parametrize("field", ["device", "compute_type"])
+def test_settings_reject_unsupported_hardware_options(field):
+    value = "unsupported-hardware-option"
+    with pytest.raises(ValueError, match=rf"{field}.*{value}") as error:
+        replace = {field: value}
+        Settings(**replace).validate()
+
+    message = str(error.value)
+    allowed = (
+        ("auto", "cpu", "cuda")
+        if field == "device"
+        else (
+            "default",
+            "auto",
+            "int8",
+            "int8_float32",
+            "int8_float16",
+            "int8_bfloat16",
+            "int16",
+            "float16",
+            "float32",
+            "bfloat16",
+        )
+    )
+    assert all(option in message for option in allowed)
+
+
 @pytest.mark.parametrize(
     ("payload", "field", "expected"),
     [
