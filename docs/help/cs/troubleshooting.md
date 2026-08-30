@@ -34,6 +34,22 @@ editoru.
 Chyba platí jen pro profil **Lokální Whisper**. V **Modely** model importujte
 nebo stáhněte, ověřte a jeho přesné ID uložte v nastavení.
 
+## Obnova katalogu modelů vyžaduje pozornost
+
+Spusťte offline obnovu a zkontrolujte její JSON výsledek:
+
+```text
+voice-studio models reconcile
+```
+
+Neúplný adresář modelu zůstává na místě pro ruční kontrolu; program jej
+automaticky nepřevezme, nepřesune ani nesmaže. Po kontrole lze unmanaged adresář
+odstranit uživatelsky potvrzeným příkazem
+`voice-studio models remove MODEL_ID --yes`. Poškozený `catalog.json` se přesune
+do karantény s časovým názvem `catalog.json.corrupt-*` a katalog se obnoví;
+poškozený manifest zůstává zachován a automaticky se nikdy nemaže. Položky
+`blocked` v JSON uvádějí cestu a důvod vyžadující pozornost.
+
 ## Soubor nelze otevřít
 
 Zkontrolujte podporovanou příponu, zvukovou stopu, místní přehrání a limit

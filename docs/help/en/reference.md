@@ -48,6 +48,27 @@ and two hours. Ollama has a separate 30-minute per-transcription limit. Export:
 TXT, MD, JSON, SRT, VTT. Ollama output has one timed segment. OpenAI STT accepts
 only its documented formats and up to 25 MB.
 
+## Model catalog recovery
+
+The model-management commands reconcile the local Faster Whisper catalog before
+they run. This applies to `models list`, `models install`, `models verify`,
+`models remove`, and the explicit recovery command. Reconciliation is local and
+offline; it does not download, update, or delete a model implicitly.
+
+To inspect or request recovery directly, run:
+
+```text
+voice-studio models reconcile
+```
+
+The command prints one JSON object with `status` (`PASS` or `FAIL`), `action`
+(`none`, `repaired`, or `attention`), `adopted`, `dropped`, `blocked` (each
+blocked item has `id`, `path`, and `reason`), `staging_removed`,
+`staging_kept`, `residue_removed`, and `catalog_quarantined` (a path or
+`null`). A failure also includes `error`.
+Normal `models` commands report a non-trivial recovery result on stderr with
+the `model-catalog:` prefix; healthy, unchanged catalogs stay quiet.
+
 ## Privacy
 
 - Ollama uses the fixed loopback endpoint `127.0.0.1:11434`.

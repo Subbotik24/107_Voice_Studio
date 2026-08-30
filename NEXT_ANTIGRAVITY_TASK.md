@@ -1,12 +1,17 @@
-# ЗАВДАННЯ ДЛЯ ANTIGRAVITY
+# ЗАВДАННЯ ДЛЯ ANTIGRAVITY — COMPLETE
 
 **TASK_ID:** W2-C2-model-catalog-self-healing
+**СТАТУС:** `COMPLETE` — цей запис закриває лише W2-C2, а не всі R0 або продуктову
+приймальну програму.
 **ГІЛКА РОБОТИ:** `main`. Нових гілок **не створювати** — уся розробка й пуші
 йдуть безпосередньо в `main`.
-**BASELINE:** `e22a65f` (`main`). Перед стартом виконати
-`git fetch origin main && git checkout main && git pull origin main`.
-**Останній перевірений зелений стан:** `e22a65f` (`ruff` чистий, `347 passed`,
-wheel і `pip check` — PASS; CI зелений на macOS-14 і windows-2022 × CPython 3.11/3.12).
+**BASELINE:** `356d4f3` (`main`) — останній кодовий commit W2-C2 перед
+документуванням і фінальною перевіркою.
+**Останній перевірений зелений стан:** джерельний quality gate на Windows x64
+з CPython 3.12: `426 passed`, `1 skipped` (Windows symlink privilege), Ruff,
+Help validation, wheel і `pip check` — PASS; точні команди й обмеження наведені
+у `VERIFICATION.md`. Completion commit має повідомлення
+`docs: record model catalog self-healing verification`.
 **Джерело завдання:** `IMPLEMENTATION_STATUS.md` → розділ «Not implemented yet» → пункт
 «SQLite/filesystem/model-catalog reconciliation», половина про **каталог моделей**.
 Нової функціональності не вигадувати.

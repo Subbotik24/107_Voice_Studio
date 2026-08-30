@@ -36,6 +36,22 @@ the text directly.
 This error applies only to **Local Whisper**. Open **Models**, import or download
 a compatible model, verify it, and save its exact ID in Settings.
 
+## Model catalog recovery needs attention
+
+Run the offline recovery command and inspect its JSON result:
+
+```text
+voice-studio models reconcile
+```
+
+An incomplete model directory is retained in place for manual inspection; it
+is not adopted, moved, or deleted automatically. After checking the path, a
+user-confirmed `voice-studio models remove MODEL_ID --yes` can remove an
+unmanaged directory. A corrupt `catalog.json` is quarantined under a timestamped
+`catalog.json.corrupt-*` name and rebuilt; the damaged manifest is retained and
+is never deleted automatically. The `blocked` entries in the JSON identify the
+path and reason requiring attention.
+
 ## The media file cannot be opened
 
 Check the supported extension, audio stream, local playback, and the 2 GiB / two

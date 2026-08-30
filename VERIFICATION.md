@@ -3,6 +3,28 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## W2-C2 model-catalog self-healing — 2026-08-30
+
+Environment: Windows x64, repository `.venv` CPython 3.12. The W2-C2 focused
+suite covered adoption, phantom-entry removal, blocked incomplete/reparse paths,
+bounded staging and residue cleanup, manifest quarantine, idempotence, CLI
+boundaries, GUI startup outcomes and three-language message parity.
+
+| Check | Result |
+| --- | --- |
+| `$env:PYTHONPATH='src'; .\\.venv\\Scripts\\python.exe -m pytest -q tests/test_model_catalog_app.py tests/test_cli_app.py tests/test_gui_contract_app.py tests/test_i18n_app.py` | PASS, 87 passed, 1 skipped; the skip is directory symlink creation denied (`WinError 1314`) |
+| `$env:PYTHON_BIN=(Resolve-Path '.\\.venv\\Scripts\\python.exe').Path; .\\scripts\\quality_gate.ps1` | PASS; compile, Ruff, Help validation (13 Markdown files), 426 tests passed / 1 skipped, and CLI version `0.3.0rc1` |
+| `.\\.venv\\Scripts\\python.exe -m build --wheel --no-isolation --outdir build\\w2-c2-wheel` | PASS; `build\\w2-c2-wheel\\voice_studio-0.3.0rc1-py3-none-any.whl` (684,669 bytes) |
+| `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
+| `git diff --check` | PASS; no whitespace errors |
+| Clean-profile source GUI smoke | PASS; launched `.venv\\Scripts\\python.exe -m voice_studio.app` with disposable `VOICE_STUDIO_CONFIG_DIR`, `VOICE_STUDIO_DATA_DIR` and `VOICE_STUDIO_CACHE_DIR` under `build\\w2-c2-smoke`; verified PID 40332 was the project Python, it remained alive after 5 seconds, then only that exact process was terminated; no stdout/stderr |
+
+The source GUI smoke is not packaged/native acceptance. It did not exercise a
+physical microphone, signed executable, clean machine, or Windows/macOS device
+matrix. The mandated bare global-Python pytest invocation could not collect the
+suite because that interpreter lacks `platformdirs`; the supported repository
+`.venv` commands above are the recorded quality evidence.
+
 ## W2-R1 journaled restore recovery — 2026-08-28
 
 Environment: Linux x86_64, CPython 3.12.3 virtual environment. This is a source

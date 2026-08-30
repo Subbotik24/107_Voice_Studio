@@ -47,5 +47,25 @@ Podporované vstupy: WAV, MP3, M4A, FLAC, OGG, OPUS, AAC, MP4, MOV, MKV,
 WEBM; nejvýše 2 GiB a dvě hodiny. Ollama má samostatný limit 30 minut na jeden
 přepis. Export: TXT, MD, JSON, SRT a VTT. Ollama vytváří jeden časový úsek.
 
+## Obnova katalogu modelů
+
+Příkazy pro správu modelů před provedením operace zkontrolují a sjednotí místní
+katalog Faster Whisper. Platí to pro `models list`, `models install`,
+`models verify`, `models remove` i pro výslovný příkaz obnovy. Obnova je místní
+a offline; sama nestahuje, neaktualizuje ani nemaže model.
+
+Kontrolu nebo obnovu lze vyvolat přímo:
+
+```text
+voice-studio models reconcile
+```
+
+Příkaz vypíše jeden objekt JSON s poli `status` (`PASS` nebo `FAIL`), `action`
+(`none`, `repaired` nebo `attention`), `adopted`, `dropped`, `blocked` (každá
+blokovaná položka má `id`, `path` a `reason`), `staging_removed`,
+`staging_kept`, `residue_removed` a `catalog_quarantined` (cesta nebo `null`).
+Při selhání přidá také `error`. Běžné příkazy `models` oznámí netriviální výsledek na
+stderr s prefixem `model-catalog:`; zdravý nezměněný katalog zůstane tichý.
+
 Ollama používá jen `127.0.0.1:11434`; cloud není fallback; `raw_text` je
 neměnný; API keys nejsou v nastavení, metadata, záloze ani diagnostice.
