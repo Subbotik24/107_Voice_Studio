@@ -4,7 +4,9 @@ import base64
 import binascii
 import hashlib
 import json
+import os
 import shutil
+import stat
 import uuid
 import zipfile
 from datetime import UTC, datetime
@@ -50,6 +52,7 @@ _FIXED_MEMBER_LIMITS = {
     "config/settings.json": 1024**2,
     "config/dictionary.json": 16 * 1024**2,
 }
+_LOCAL_RESTORE_NAMES = ("exports", "models")
 
 
 def _stream_hash(stream: BinaryIO) -> tuple[str, int]:
@@ -419,6 +422,135 @@ def _promote_staging(staging: Path, data_root: Path, expected_records: int) -> b
         return True
     data_root.replace(staging)
     return False
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    """Return whether an entry is a link or Windows reparse point."""
+
+    attributes = getattr(info, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return stat.S_ISLNK(info.st_mode) or bool(attributes & reparse_flag)
+
+
+def _unsafe_local_restore_path(path: Path) -> ValueError:
+    return ValueError(f"local restore state contains an unsafe path: {path}")
+
+
+def _validate_local_restore_entry(path: Path, info: os.stat_result) -> None:
+    if _is_reparse_point(info) or not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+        raise _unsafe_local_restore_path(path)
+
+
+def _local_restore_tree_bytes(source: Path) -> int:
+    """Inspect one local-state tree without following links."""
+
+    try:
+        source_info = os.lstat(source)
+    except FileNotFoundError:
+        return 0
+    _validate_local_restore_entry(source, source_info)
+    if not stat.S_ISDIR(source_info.st_mode):
+        raise _unsafe_local_restore_path(source)
+
+    total = 0
+    with os.scandir(source) as entries:
+        for entry in entries:
+            entry_path = Path(entry.path)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise _unsafe_local_restore_path(entry_path) from exc
+            _validate_local_restore_entry(entry_path, info)
+            if stat.S_ISDIR(info.st_mode):
+                total += _local_restore_tree_bytes(entry_path)
+            else:
+                total += info.st_size
+    return total
+
+
+def _local_restore_bytes(data_root: Path) -> int:
+    """Return bytes occupied by the current machine-local restore state."""
+
+    data_root = data_root.expanduser()
+    try:
+        root_info = os.lstat(data_root)
+    except FileNotFoundError:
+        return 0
+    _validate_local_restore_entry(data_root, root_info)
+    if not stat.S_ISDIR(root_info.st_mode):
+        raise _unsafe_local_restore_path(data_root)
+
+    return sum(_local_restore_tree_bytes(data_root / name) for name in _LOCAL_RESTORE_NAMES)
+
+
+def _copy_local_restore_tree(source: Path, destination: Path) -> None:
+    """Copy one validated local-state tree without following links."""
+
+    try:
+        source_info = os.lstat(source)
+    except OSError as exc:
+        raise _unsafe_local_restore_path(source) from exc
+    _validate_local_restore_entry(source, source_info)
+    if not stat.S_ISDIR(source_info.st_mode):
+        raise _unsafe_local_restore_path(source)
+
+    destination.mkdir(exist_ok=True)
+    with os.scandir(source) as entries:
+        for entry in entries:
+            source_entry = Path(entry.path)
+            destination_entry = destination / entry.name
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise _unsafe_local_restore_path(source_entry) from exc
+            _validate_local_restore_entry(source_entry, info)
+            if stat.S_ISDIR(info.st_mode):
+                _copy_local_restore_tree(source_entry, destination_entry)
+            else:
+                # Re-check immediately before copying so a replaced directory
+                # cannot turn into a link after the directory scan.
+                try:
+                    current_info = os.lstat(source_entry)
+                except OSError as exc:
+                    raise _unsafe_local_restore_path(source_entry) from exc
+                _validate_local_restore_entry(source_entry, current_info)
+                if not stat.S_ISREG(current_info.st_mode):
+                    raise _unsafe_local_restore_path(source_entry)
+                shutil.copy2(
+                    source_entry,
+                    destination_entry,
+                    follow_symlinks=False,
+                )
+    shutil.copystat(source, destination, follow_symlinks=False)
+
+
+def _copy_local_restore_state(data_root: Path, staging: Path) -> list[str]:
+    """Copy current ``exports`` and ``models`` into restored staging."""
+
+    data_root = data_root.expanduser()
+    staging = staging.expanduser()
+    sources: list[tuple[str, Path]] = []
+    for name in _LOCAL_RESTORE_NAMES:
+        source = data_root / name
+        try:
+            info = os.lstat(source)
+        except FileNotFoundError:
+            continue
+        _validate_local_restore_entry(source, info)
+        if not stat.S_ISDIR(info.st_mode):
+            raise _unsafe_local_restore_path(source)
+        # Validate the complete source before creating any staging output. If
+        # one tree contains an unsafe entry, the live source and staging are
+        # both left untouched.
+        _local_restore_tree_bytes(source)
+        sources.append((name, source))
+
+    if not sources:
+        return []
+    staging.mkdir(parents=True, exist_ok=True)
+    for name, source in sources:
+        _copy_local_restore_tree(source, staging / name)
+    return [name for name, _source in sources]
 
 
 def recover_interrupted_restore(

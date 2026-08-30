@@ -1,6 +1,8 @@
 import inspect
 import json
+import os
 import shutil
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -12,6 +14,126 @@ from voice_studio.backup import create_backup, restore_backup, verify_backup
 from voice_studio.config import save_settings
 from voice_studio.models import Settings, Transcript
 from voice_studio.storage import LocalStore
+
+
+def _make_junction(link: Path, target: Path) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows junctions are unavailable")
+    try:
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as exc:
+        pytest.skip(f"junction command is unavailable: {exc}")
+    except PermissionError as exc:
+        pytest.skip(f"junction creation denied: {exc}")
+    except subprocess.CalledProcessError as exc:
+        output = f"{exc.stdout or ''} {exc.stderr or ''}".lower()
+        if "denied" in output or "access" in output or "privilege" in output:
+            pytest.skip(f"junction creation denied: {exc}")
+        raise
+
+
+def test_local_restore_state_primitives_copy_nested_trees(tmp_path):
+    data = tmp_path / "data"
+    staging = tmp_path / "staging"
+    (data / "models" / "tiny").mkdir(parents=True)
+    (data / "exports" / "nested").mkdir(parents=True)
+    (data / "models" / "tiny" / "model.bin").write_bytes(b"model-bytes")
+    (data / "models" / "catalog.json").write_bytes(b'{"version":1}')
+    (data / "exports" / "nested" / "result.txt").write_bytes(b"export-bytes")
+
+    expected_bytes = sum(
+        path.stat().st_size
+        for root in (data / "models", data / "exports")
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+    assert backup_module._local_restore_bytes(data) == expected_bytes
+    assert backup_module._copy_local_restore_state(data, staging) == [
+        "exports",
+        "models",
+    ]
+    assert (staging / "models" / "tiny" / "model.bin").read_bytes() == b"model-bytes"
+    assert (staging / "models" / "catalog.json").read_bytes() == b'{"version":1}'
+    assert (
+        staging / "exports" / "nested" / "result.txt"
+    ).read_bytes() == b"export-bytes"
+    assert (data / "models" / "tiny" / "model.bin").read_bytes() == b"model-bytes"
+    assert (data / "exports" / "nested" / "result.txt").read_bytes() == b"export-bytes"
+
+
+def test_local_restore_state_rejects_top_level_regular_file_without_mutation(tmp_path):
+    data = tmp_path / "data"
+    staging = tmp_path / "staging"
+    unsafe = data / "models"
+    unsafe.parent.mkdir(parents=True)
+    unsafe.write_bytes(b"not-a-directory")
+
+    with pytest.raises(
+        ValueError, match=r"local restore state contains an unsafe path: .*models"
+    ):
+        backup_module._local_restore_bytes(data)
+    with pytest.raises(
+        ValueError, match=r"local restore state contains an unsafe path: .*models"
+    ):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert unsafe.read_bytes() == b"not-a-directory"
+    assert not staging.exists()
+
+
+def test_local_restore_state_rejects_symlink_without_touching_target(tmp_path):
+    data = tmp_path / "data"
+    staging = tmp_path / "staging"
+    target = tmp_path / "outside"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    models = data / "models"
+    models.mkdir(parents=True)
+    link = models / "linked"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._local_restore_bytes(data)
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert link.is_symlink()
+    assert sentinel.read_bytes() == b"external"
+    assert not staging.exists()
+
+
+def test_local_restore_state_rejects_windows_junction_without_touching_target(tmp_path):
+    target = tmp_path / "outside"
+    target.mkdir()
+    sentinel = target / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    data = tmp_path / "data"
+    models = data / "models"
+    models.mkdir(parents=True)
+    junction = models / "linked"
+    _make_junction(junction, target)
+    staging = tmp_path / "staging"
+
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._local_restore_bytes(data)
+    with pytest.raises(ValueError, match="local restore state contains an unsafe path"):
+        backup_module._copy_local_restore_state(data, staging)
+
+    assert junction.is_dir()
+    assert sentinel.read_bytes() == b"external"
+    assert not staging.exists()
 
 
 def transcript(item_id: str, source_hash: str, source_path: str) -> Transcript:
