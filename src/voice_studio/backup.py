@@ -33,6 +33,7 @@ _PRIVATE_INDEX_LIMIT_BYTES = 16 * 1024**2
 RESTORE_JOURNAL_VERSION = 1
 RESTORE_SIDECAR_VERSION = 1
 RESTORE_SIDECAR_NAME = ".restore-settings.json"
+RESTORE_V2_SIDECAR_NAME = ".restore-settings-v2"
 RESTORE_JOURNAL_FIELDS = frozenset(
     {
         "journal_version",
@@ -1072,6 +1073,197 @@ def _finish_restored_settings(data_root: Path, settings_target: Path | None) -> 
     return True
 
 
+def _write_v2_settings_sidecar(
+    staging: Path,
+    archive: zipfile.ZipFile,
+    context: _VerifiedV2Context,
+) -> None:
+    """Park the authenticated config ciphertext inside staging.
+
+    The sidecar holds the plaintext manifest plus the raw ciphertext of
+    the private index, settings and (optional) dictionary members. It
+    contains no plaintext settings, no passphrase and no key material,
+    so a restore interrupted after the swap never leaves secrets on disk.
+    """
+
+    sidecar = staging / RESTORE_V2_SIDECAR_NAME
+    payload_dir = sidecar / "payload"
+    payload_dir.mkdir(parents=True)
+    (sidecar / "manifest.json").write_text(
+        json.dumps(context.manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    members = {context.index_name, context.mapping["config/settings.json"]}
+    dictionary_opaque = context.mapping.get("config/dictionary.json")
+    if dictionary_opaque is not None:
+        members.add(dictionary_opaque)
+    for opaque in sorted(members):
+        with archive.open(opaque) as source, (
+            payload_dir / Path(opaque).name
+        ).open("wb") as destination:
+            shutil.copyfileobj(source, destination, 1024 * 1024)
+
+
+class _SidecarV2Archive:
+    """Read-only ``payload/*.enc`` member view of an encrypted sidecar.
+
+    Provides the ``open`` interface ``_decrypt_v2_payload`` needs so the
+    same authenticated decryption path serves archives and sidecars.
+    """
+
+    def __init__(self, payload_dir: Path) -> None:
+        self._payload_dir = payload_dir
+
+    def open(self, name: str) -> BinaryIO:
+        if _V2_OPAQUE_NAME.fullmatch(name) is None:
+            raise ValueError(f"unsafe backup member: {name}")
+        return (self._payload_dir / Path(name).name).open("rb")
+
+    def getinfo(self, name: str) -> zipfile.ZipInfo:
+        if _V2_OPAQUE_NAME.fullmatch(name) is None:
+            raise ValueError(f"unsafe backup member: {name}")
+        info = zipfile.ZipInfo(name)
+        info.compress_type = zipfile.ZIP_STORED
+        return info
+
+
+def _inspect_v2_settings_sidecar(
+    sidecar: Path,
+) -> tuple[Path, Path, dict[str, int]]:
+    """Validate the sidecar tree without following reparse points."""
+
+    info = os.lstat(sidecar)
+    if _is_reparse_point(info) or not stat.S_ISDIR(info.st_mode):
+        raise ValueError("encrypted restore sidecar is not a safe directory")
+    if {entry.name for entry in os.scandir(sidecar)} != {"manifest.json", "payload"}:
+        raise ValueError("encrypted restore sidecar contains unexpected entries")
+    manifest_file = sidecar / "manifest.json"
+    manifest_info = os.lstat(manifest_file)
+    if _is_reparse_point(manifest_info) or not stat.S_ISREG(manifest_info.st_mode):
+        raise ValueError("encrypted restore sidecar manifest is not a safe file")
+    if manifest_info.st_size > _FIXED_MEMBER_LIMITS["manifest.json"]:
+        raise ValueError("encrypted restore sidecar manifest exceeds its limit")
+    payload_dir = sidecar / "payload"
+    payload_info = os.lstat(payload_dir)
+    if _is_reparse_point(payload_info) or not stat.S_ISDIR(payload_info.st_mode):
+        raise ValueError("encrypted restore sidecar payload is not a safe directory")
+    payload_sizes: dict[str, int] = {}
+    for entry in payload_dir.iterdir():
+        entry_info = os.lstat(entry)
+        opaque = f"payload/{entry.name}"
+        if (
+            _V2_OPAQUE_NAME.fullmatch(opaque) is None
+            or _is_reparse_point(entry_info)
+            or not stat.S_ISREG(entry_info.st_mode)
+        ):
+            raise ValueError(
+                f"encrypted restore sidecar contains an unsafe member: {entry.name}"
+            )
+        payload_sizes[opaque] = entry_info.st_size
+    return manifest_file, payload_dir, payload_sizes
+
+
+def _remove_v2_settings_sidecar(data_root: Path) -> None:
+    sidecar = data_root / RESTORE_V2_SIDECAR_NAME
+    try:
+        _inspect_v2_settings_sidecar(sidecar)
+    except FileNotFoundError:
+        return
+    shutil.rmtree(sidecar)
+
+
+def _recover_v2_settings(
+    data_root: Path, settings_target: Path, passphrase: str
+) -> None:
+    """Re-authenticate the encrypted sidecar and apply parked settings.
+
+    Raises ``ValueError``/``OSError`` on any mismatch; the sidecar is
+    preserved so the user can retry with the correct passphrase. No
+    plaintext fallback: a wrong passphrase or any tampering fails closed.
+    """
+
+    if not isinstance(passphrase, str):
+        raise TypeError("passphrase must be a str or None")
+    sidecar = data_root / RESTORE_V2_SIDECAR_NAME
+    manifest_file, payload_dir, payload_sizes = _inspect_v2_settings_sidecar(sidecar)
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"encrypted restore sidecar manifest is unreadable: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("encrypted restore sidecar manifest must contain a JSON object")
+    declared_members = manifest.get("members")
+    if not isinstance(declared_members, dict):
+        raise ValueError("encrypted restore sidecar members must be an object")
+    archive = _SidecarV2Archive(payload_dir)
+    declared_sizes = {
+        name: (
+            metadata.get("size", -1)
+            if isinstance(metadata, dict) and type(metadata.get("size")) is int
+            else -1
+        )
+        for name, metadata in declared_members.items()
+    }
+    context = _prepare_v2_context(
+        sidecar,
+        archive,
+        declared_sizes,
+        ["manifest.json", *declared_members],
+        manifest,
+        passphrase,
+    )
+    members = context.members
+    index_name = context.index_name
+    mapping = context.mapping
+    settings_opaque = mapping.get("config/settings.json")
+    if not isinstance(settings_opaque, str) or settings_opaque not in members:
+        raise ValueError("encrypted restore sidecar has no settings payload")
+    dictionary_opaque = mapping.get("config/dictionary.json")
+    if dictionary_opaque is not None and (
+        not isinstance(dictionary_opaque, str) or dictionary_opaque not in members
+    ):
+        raise ValueError("encrypted restore sidecar dictionary payload is invalid")
+    expected = {index_name, settings_opaque}
+    if dictionary_opaque is not None:
+        expected.add(dictionary_opaque)
+    if set(payload_sizes) != expected:
+        raise ValueError(
+            "encrypted restore sidecar members do not match the authenticated index"
+        )
+    for logical, opaque in (
+        ("config/settings.json", settings_opaque),
+        ("config/dictionary.json", dictionary_opaque),
+    ):
+        if opaque is None:
+            continue
+        _verify_v2_member_metadata(opaque, members[opaque], payload_sizes)
+        if members[opaque]["plaintext_size"] > _FIXED_MEMBER_LIMITS[logical]:
+            raise ValueError(
+                f"backup member exceeds its format limit: {logical}"
+            )
+    settings_buffer = io.BytesIO()
+    _decrypt_v2_payload(context, archive, settings_opaque, settings_buffer)
+    try:
+        settings_payload = json.loads(settings_buffer.getvalue().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"backup settings are invalid: {exc}") from exc
+    if not isinstance(settings_payload, dict):
+        raise ValueError("backup settings must contain a JSON object")
+    dictionary_payload: bytes | None = None
+    if dictionary_opaque is not None:
+        dictionary_buffer = io.BytesIO()
+        _decrypt_v2_payload(context, archive, dictionary_opaque, dictionary_buffer)
+        dictionary_payload = dictionary_buffer.getvalue()
+        settings_payload["dictionary_path"] = str(
+            settings_target.parent / "dictionary.restored.json"
+        )
+    Settings.from_dict(settings_payload)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    _apply_restored_settings(
+        settings_target, settings_payload, dictionary_payload, timestamp
+    )
+
+
 def _fail(error: str, **extra: Any) -> dict[str, Any]:
     return {
         "status": "FAIL",
@@ -1146,6 +1338,15 @@ def _load_restore_journal(journal_path: Path, data_root: Path) -> dict[str, Any]
         )
         if len(suffix) != 32 or any(c not in "0123456789abcdef" for c in suffix):
             raise ValueError("restore journal staging path has an unexpected name")
+    if (
+        backup_version == ENCRYPTED_BACKUP_VERSION
+        and journal.get("settings_payload_written") is False
+        and (
+            not isinstance(journal.get("settings_target"), str)
+            or not journal["settings_target"]
+        )
+    ):
+        raise ValueError("restore journal settings target is invalid")
     return journal
 
 
@@ -1377,6 +1578,7 @@ def recover_interrupted_restore(
     data_root: Path,
     *,
     settings_target: Path | None = None,
+    passphrase: str | None = None,
 ) -> dict[str, Any]:
     """Finish or undo a restore that a process death left half applied.
 
@@ -1384,6 +1586,10 @@ def recover_interrupted_restore(
     deleted. Before a v2 swap starts, the contained incomplete staging can be
     discarded whether the live root existed before restore or not; after swap
     start, staging is discarded only once ``data_root`` is known to be intact.
+    When an encrypted (v2) restore died with the settings payload pending,
+    ``passphrase`` is required to re-authenticate the encrypted
+    ``.restore-settings-v2`` sidecar; without it the call returns
+    ``passphrase_required`` and changes nothing.
     """
 
     data_root = data_root.expanduser()
@@ -1400,10 +1606,31 @@ def recover_interrupted_restore(
     expected_records = journal["expected_records"]
     recovery_value = str(recovery) if recovery is not None else None
 
-    def _settings_step() -> None:
+    def _settings_step() -> dict[str, Any] | None:
         if journal.get("settings_payload_written") is True:
-            return
+            if journal.get("backup_version") == ENCRYPTED_BACKUP_VERSION:
+                _remove_v2_settings_sidecar(data_root)
+            return None
+        if journal.get("backup_version") == ENCRYPTED_BACKUP_VERSION:
+            target = settings_target
+            if target is None and journal.get("settings_target"):
+                target = Path(journal["settings_target"])
+            if passphrase is None:
+                # Report, mutate nothing, keep sidecar and journal for retry.
+                return {
+                    "status": "PASS",
+                    "action": "passphrase_required",
+                    "records": expected_records,
+                    "recovery": recovery_value,
+                }
+            assert target is not None
+            _recover_v2_settings(data_root, target.expanduser(), passphrase)
+            journal["settings_payload_written"] = True
+            _write_json_atomic(journal_path, journal)
+            _remove_v2_settings_sidecar(data_root)
+            return None
         _finish_restored_settings(data_root, settings_target)
+        return None
 
     if journal["stage"] == "staging_building":
         # The live root was never renamed on this stage. Remove only the
@@ -1430,9 +1657,39 @@ def recover_interrupted_restore(
 
     if journal["stage"] == "swap_completed":
         try:
-            _settings_step()
+            early = _settings_step()
         except (OSError, ValueError) as exc:
             return _fail(f"restored settings could not be written: {exc}")
+        if early is not None:
+            return early
+        journal_path.unlink(missing_ok=True)
+        return {
+            "status": "PASS",
+            "action": "settings_completed",
+            "records": expected_records,
+            "recovery": recovery_value,
+        }
+
+    v2_settings_were_promoted = (
+        journal.get("backup_version") == ENCRYPTED_BACKUP_VERSION
+        and journal.get("settings_payload_written") is False
+        and not staging.exists()
+        and (data_root / RESTORE_V2_SIDECAR_NAME).exists()
+        and _restored_store_is_sound(data_root, expected_records)
+    )
+    if v2_settings_were_promoted:
+        # The staging rename completed, but the process died before the
+        # swap_completed journal write. The authenticated sidecar inside the
+        # sound promoted store distinguishes this state from an untouched live
+        # root. Persist the transition before asking for/applying a passphrase.
+        journal["stage"] = "swap_completed"
+        try:
+            _write_json_atomic(journal_path, journal)
+            early = _settings_step()
+        except (OSError, ValueError) as exc:
+            return _fail(f"restored settings could not be written: {exc}")
+        if early is not None:
+            return early
         journal_path.unlink(missing_ok=True)
         return {
             "status": "PASS",
@@ -1462,10 +1719,14 @@ def recover_interrupted_restore(
     except OSError as exc:
         return _fail(f"interrupted restore staging could not be promoted: {exc}")
     if promoted:
+        journal["stage"] = "swap_completed"
+        _write_json_atomic(journal_path, journal)
         try:
-            _settings_step()
+            early = _settings_step()
         except (OSError, ValueError) as exc:
             return _fail(f"restored settings could not be written: {exc}")
+        if early is not None:
+            return early
         journal_path.unlink(missing_ok=True)
         return {
             "status": "PASS",
@@ -1669,17 +1930,25 @@ def _restore_v2_payloads(
     archive: zipfile.ZipFile,
     store: LocalStore,
     staging: Path,
-) -> None:
+    settings_target: Path | None,
+) -> tuple[dict[str, Any] | None, bytes | None]:
     """Decrypt each payload exactly once into authenticated staging.
 
     Transcripts stream into a fixed internal temp file inside staging,
     are parsed line by line, and the temp file is deleted before the
     audit. Audio streams directly into ``staging/sources/<safe name>``.
-    Config and unreferenced audio payloads are fully authenticated once into
-    a discard sink (C1 never applies settings or restores orphaned audio).
+    When settings recovery is pending, the config payloads are decrypted
+    once into bounded memory and validated like the v1 pre-swap path;
+    every other payload is authenticated once into a discard sink
+    (orphaned audio is never restored).
     """
 
     mapping = context.mapping
+    settings_pending = (
+        settings_target is not None and "config/settings.json" in mapping
+    )
+    settings_payload: dict[str, Any] | None = None
+    dictionary_payload: bytes | None = None
     decrypted = {mapping["transcripts.jsonl"]}
     transcripts_temp = staging / _TRANSCRIPT_STAGING_TEMP_NAME
     with transcripts_temp.open("wb") as sink:
@@ -1710,10 +1979,37 @@ def _restore_v2_payloads(
                 store.save(transcript)
     finally:
         transcripts_temp.unlink(missing_ok=True)
-    for opaque in mapping.values():
-        if opaque not in decrypted:
+    for logical, opaque in mapping.items():
+        if opaque in decrypted:
+            continue
+        if settings_pending and logical in (
+            "config/settings.json",
+            "config/dictionary.json",
+        ):
+            if context.members[opaque]["plaintext_size"] > _FIXED_MEMBER_LIMITS[logical]:
+                raise ValueError(
+                    f"backup member exceeds its format limit: {logical}"
+                )
+            buffer = io.BytesIO()
+            _decrypt_v2_payload(context, archive, opaque, buffer)
+            payload = buffer.getvalue()
+            if logical == "config/settings.json":
+                candidate = json.loads(payload.decode("utf-8"))
+                if not isinstance(candidate, dict):
+                    raise ValueError("backup settings must contain a JSON object")
+                settings_payload = candidate
+            else:
+                dictionary_payload = payload
+        else:
             _decrypt_v2_payload(context, archive, opaque, _DiscardWriter())
-            decrypted.add(opaque)
+        decrypted.add(opaque)
+    if settings_payload is not None:
+        if dictionary_payload is not None and settings_target is not None:
+            settings_payload["dictionary_path"] = str(
+                settings_target.parent / "dictionary.restored.json"
+            )
+        Settings.from_dict(settings_payload)
+    return settings_payload, dictionary_payload
 
 
 def _restore_backup_v2(
@@ -1723,15 +2019,19 @@ def _restore_backup_v2(
     settings_target: Path | None,
     passphrase: str | None,
 ) -> dict[str, Any]:
-    """Restore an encrypted backup v2 archive (data only in C1).
+    """Restore an encrypted backup v2 archive.
 
     The archive is fully authenticated before the first filesystem
     mutation, the ``staging_building`` journal exists before the first
     plaintext byte is written, and the two-phase swap happens only after
     every payload decrypted exactly once, the record count matches and
-    the staging store audits clean. Ordinary exceptions clean staging and
-    the journal; a hard process death (KeyboardInterrupt/SystemExit)
-    leaves both for ``recover_interrupted_restore``.
+    the staging store audits clean. When settings recovery is requested
+    and possible, the config ciphertext is parked in an encrypted
+    ``.restore-settings-v2`` sidecar inside staging before the swap and
+    applied after ``swap_completed``; a hard process death
+    (KeyboardInterrupt/SystemExit) leaves sidecar and journal for
+    ``recover_interrupted_restore``, which needs the passphrase again.
+    Ordinary exceptions clean staging and the journal.
     """
 
     path = path.expanduser()
@@ -1750,12 +2050,13 @@ def _restore_backup_v2(
             path, archive, member_sizes, names, manifest, passphrase
         )
 
-    # --- C1 guard: encrypted settings recovery lands in C2. Reject safely
-    # before any journal, staging or live mutation.
-    if settings_target is not None and "config/settings.json" in context.mapping:
-        raise ValueError(
-            "encrypted backup settings recovery is not available in this build"
-        )
+    # --- Settings recovery (C2): when the caller asked for settings and the
+    # archive carries them, the decrypted payload is parked as ciphertext in
+    # an encrypted sidecar inside staging before the swap and applied only
+    # after the swap completes.
+    settings_pending = (
+        settings_target is not None and "config/settings.json" in context.mapping
+    )
 
     expanded_bytes = sum(
         context.members[opaque]["plaintext_size"]
@@ -1779,8 +2080,8 @@ def _restore_backup_v2(
         "staging_path": str(temporary),
         "recovery_path": None,
         "expected_records": int(context.index["records"]),
-        "settings_target": None,
-        "settings_payload_written": True,
+        "settings_target": str(settings_target) if settings_pending else None,
+        "settings_payload_written": not settings_pending,
         "stage": "staging_building",
     }
     # The journal exists before the first plaintext byte hits the disk.
@@ -1789,7 +2090,14 @@ def _restore_backup_v2(
     try:
         store = LocalStore(temporary)
         with zipfile.ZipFile(path) as archive:
-            _restore_v2_payloads(context, archive, store, temporary)
+            settings_payload, dictionary_payload = _restore_v2_payloads(
+                context, archive, store, temporary, settings_target
+            )
+            if settings_pending:
+                # Park the authenticated config ciphertext (index + settings +
+                # dictionary) inside staging before the swap, so a hard death
+                # after the swap never leaves plaintext settings behind.
+                _write_v2_settings_sidecar(temporary, archive, context)
         restored_records = len(store.list(limit=1_000_000))
         if restored_records != context.index["records"]:
             raise ValueError(
@@ -1833,10 +2141,22 @@ def _restore_backup_v2(
             raise
         journal["stage"] = "swap_completed"
         _write_json_atomic(journal_path, journal)
+        if settings_pending and settings_payload is not None:
+            _apply_restored_settings(
+                settings_target, settings_payload, dictionary_payload, timestamp
+            )
+            journal["settings_payload_written"] = True
+            _write_json_atomic(journal_path, journal)
+            # Once the completion marker is durable, recovery can safely
+            # finish sidecar cleanup without asking for the passphrase again.
+            _remove_v2_settings_sidecar(data_root)
         journal_path.unlink(missing_ok=True)
     except Exception:
-        # Ordinary failure: remove the incomplete staging and the journal;
-        # the live data root was never renamed before the swap.
+        # Before the completed swap, ordinary failures remove incomplete
+        # staging and its journal. Once the swap completed, keep the encrypted
+        # sidecar and journal so settings recovery can be retried safely.
+        if journal["stage"] == "swap_completed":
+            raise
         if temporary.exists():
             shutil.rmtree(temporary, ignore_errors=True)
         journal_path.unlink(missing_ok=True)

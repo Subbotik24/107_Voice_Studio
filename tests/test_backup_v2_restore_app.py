@@ -32,7 +32,6 @@ PASSPHRASE = "synthetic slice-c1 passphrase"
 WRONG = "synthetic wrong passphrase"
 REQUIRED_ERROR = "backup is encrypted; a passphrase is required"
 MANIFEST_ERROR = "backup authentication failed: wrong passphrase or corrupted manifest"
-SETTINGS_GUARD = "encrypted backup settings recovery is not available in this build"
 
 
 def _transcript(item_id: str, source_hash: str, source_path: str) -> Transcript:
@@ -680,8 +679,8 @@ def test_no_plaintext_temp_file_remains(tmp_path, make_wav):
     )
 
 
-# 27. The C1 settings guard fires before any journal, staging or mutation.
-def test_settings_guard_fires_before_any_mutation(tmp_path, make_wav):
+# 27. C2a: settings recovery works; the former C1 guard no longer fires.
+def test_settings_recovery_replaces_c1_guard(tmp_path, make_wav):
     _store, backup, _managed, _originals = _make_v2(tmp_path, make_wav, settings=True)
     data = tmp_path / "data"
     data.mkdir()
@@ -689,14 +688,16 @@ def test_settings_guard_fires_before_any_mutation(tmp_path, make_wav):
     settings_target = tmp_path / "config" / "settings.json"
     settings_target.parent.mkdir(parents=True, exist_ok=True)
     settings_target.write_text("{}", encoding="utf-8")
-    before = settings_target.read_bytes()
-    with pytest.raises(ValueError) as excinfo:
-        restore_backup(backup, data, settings_target=settings_target, passphrase=PASSPHRASE)
-    assert str(excinfo.value) == SETTINGS_GUARD
-    assert (data / "keep.txt").read_bytes() == b"live"
-    assert settings_target.read_bytes() == before
+    result = restore_backup(
+        backup, data, settings_target=settings_target, passphrase=PASSPHRASE
+    )
+    assert result["status"] == "PASS"
+    # The previous live root is preserved untouched in the recovery directory.
+    recovery = Path(result["recovery"])
+    assert (recovery / "keep.txt").read_bytes() == b"live"
     assert not _journal_path(data).exists()
     assert _staging_dirs(data) == []
+    assert not (data / ".restore-settings-v2").exists()
 
 
 # 28. Config payloads authenticate into the discard sink without a target.

@@ -822,6 +822,16 @@ def test_public_backup_signatures_are_pinned():
         ("settings_target", inspect.Parameter.KEYWORD_ONLY, None),
         ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
     ]
+    assert [
+        (name, parameter.kind, parameter.default)
+        for name, parameter in inspect.signature(
+            backup_module.recover_interrupted_restore
+        ).parameters.items()
+    ] == [
+        ("data_root", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("settings_target", inspect.Parameter.KEYWORD_ONLY, None),
+        ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
+    ]
 
 
 def test_recovery_reports_failure_when_neither_copy_survives(tmp_path):
