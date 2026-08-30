@@ -475,7 +475,7 @@ def _local_restore_directory_state(
         with os.scandir(source) as directory:
             for entry in directory:
                 entry_path = Path(entry.path)
-                info = entry.stat(follow_symlinks=False)
+                info = os.lstat(entry_path)
                 _validate_local_restore_entry(entry_path, info)
                 entries.append((entry.name, _local_restore_fingerprint(info)))
     except OSError as exc:
@@ -726,9 +726,10 @@ def restore_backup(
     verified = verify_backup(path)
     data_root = data_root.expanduser()
     data_root.parent.mkdir(parents=True, exist_ok=True)
+    local_bytes = _local_restore_bytes(data_root)
     require_free_space(
         data_root.parent,
-        verified["expanded_bytes"],
+        verified["expanded_bytes"] + local_bytes,
         margin_bytes=BACKUP_FREE_SPACE_MARGIN_BYTES,
     )
     temporary = data_root.parent / f".{data_root.name}.restore-{uuid.uuid4().hex}"
@@ -819,6 +820,7 @@ def restore_backup(
             "stage": "swap_started",
         }
         _write_json_atomic(journal_path, journal)
+        _copy_local_restore_state(data_root, temporary)
         if recovery is not None:
             data_root.replace(recovery)
         try:

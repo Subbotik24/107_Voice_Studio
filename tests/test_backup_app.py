@@ -265,6 +265,34 @@ def test_backup_verify_and_recover_preserves_previous_data(tmp_path, make_wav):
     assert restored_settings["dictionary_path"].endswith("dictionary.restored.json")
 
 
+def test_restore_preserves_local_models_and_exports_but_not_archive_members(
+    tmp_path, make_wav
+):
+    archive_path = _seed_backup(tmp_path, make_wav)
+    data = tmp_path / "data"
+    LocalStore(data).save(transcript("current", "c" * 64, ""))
+    (data / "models" / "tiny").mkdir(parents=True)
+    (data / "models" / "tiny" / "model.bin").write_bytes(b"model")
+    (data / "models" / "catalog.json").write_text(
+        '{"version":1,"models":[]}', encoding="utf-8"
+    )
+    (data / "exports").mkdir(parents=True, exist_ok=True)
+    (data / "exports" / "kept.txt").write_bytes(b"export")
+
+    restored = restore_backup(archive_path, data)
+
+    assert restored["status"] == "PASS"
+    assert LocalStore(data).get("backed-up") is not None
+    assert LocalStore(data).get("current") is None
+    assert (data / "models" / "tiny" / "model.bin").read_bytes() == b"model"
+    assert (data / "models" / "catalog.json").read_bytes() == b'{"version":1,"models":[]}'
+    assert (data / "exports" / "kept.txt").read_bytes() == b"export"
+    with zipfile.ZipFile(archive_path) as archive:
+        assert not any(
+            name.startswith(("models/", "exports/")) for name in archive.namelist()
+        )
+
+
 def test_backup_duplicate_member_is_rejected(tmp_path):
     store = LocalStore(tmp_path / "data")
     backup = tmp_path / "safe.voice-backup"
@@ -347,6 +375,38 @@ def test_restore_preflights_free_space_for_bounded_expansion(
     assert calls[0][2] > 0
 
 
+def test_restore_preflights_archive_and_local_state_bytes(tmp_path, monkeypatch):
+    source_store = LocalStore(tmp_path / "source")
+    backup = tmp_path / "safe.voice-backup"
+    create_backup(source_store, backup)
+    data = tmp_path / "restored"
+    (data / "models" / "tiny").mkdir(parents=True)
+    (data / "models" / "tiny" / "model.bin").write_bytes(b"model")
+    (data / "exports").mkdir(parents=True, exist_ok=True)
+    (data / "exports" / "kept.txt").write_bytes(b"export")
+    verified = verify_backup(backup)
+    expected_local = backup_module._local_restore_bytes(data)
+    calls: list[tuple[object, int, int]] = []
+
+    monkeypatch.setattr(
+        backup_module,
+        "require_free_space",
+        lambda path, required, *, margin_bytes: calls.append(
+            (path, required, margin_bytes)
+        ) or required + margin_bytes,
+    )
+
+    restore_backup(backup, data)
+
+    assert calls == [
+        (
+            data.parent,
+            verified["expanded_bytes"] + expected_local,
+            backup_module.BACKUP_FREE_SPACE_MARGIN_BYTES,
+        )
+    ]
+
+
 def _seed_backup(tmp_path, make_wav, *, settings_file=None):
     """Build a store with one audio-backed record and a verified backup of it."""
 
@@ -420,6 +480,10 @@ def test_interrupted_swap_is_completed_from_the_journal(tmp_path, make_wav, monk
             corrected_text="current",
         )
     )
+    (data / "models" / "tiny").mkdir(parents=True, exist_ok=True)
+    (data / "models" / "tiny" / "model.bin").write_bytes(b"old-model")
+    (data / "exports").mkdir(parents=True, exist_ok=True)
+    (data / "exports" / "kept.txt").write_bytes(b"old-export")
     _crash_between_swap_steps(monkeypatch, data)
     with pytest.raises(KeyboardInterrupt):
         restore_backup(archive_path, data)
@@ -439,9 +503,53 @@ def test_interrupted_swap_is_completed_from_the_journal(tmp_path, make_wav, monk
     store = LocalStore(data)
     assert len(store.list(limit=100)) == 1
     assert store.get("backed-up") is not None
+    assert (data / "models" / "tiny" / "model.bin").read_bytes() == b"old-model"
+    assert (data / "exports" / "kept.txt").read_bytes() == b"old-export"
     assert store.audit()["status"] == "PASS"
     assert not _journal(data).exists()
     assert _recovery_directories(data), "the displaced data must never be deleted"
+    recovery = _recovery_directories(data)[0]
+    assert (recovery / "models" / "tiny" / "model.bin").read_bytes() == b"old-model"
+    assert (recovery / "exports" / "kept.txt").read_bytes() == b"old-export"
+
+
+def test_interrupted_local_state_copy_keeps_live_root(tmp_path, make_wav, monkeypatch):
+    archive_path = _seed_backup(tmp_path, make_wav)
+    data = tmp_path / "data"
+    LocalStore(data).save(transcript("current", "c" * 64, ""))
+    (data / "models").mkdir(parents=True, exist_ok=True)
+    (data / "models" / "sentinel.bin").write_bytes(b"live-model")
+    (data / "exports").mkdir(parents=True, exist_ok=True)
+    (data / "exports" / "sentinel.txt").write_bytes(b"live-export")
+    original_copy_tree = backup_module._copy_local_restore_tree
+
+    def interrupted_copy(data_root, staging):
+        original_copy_tree(data_root / "exports", staging / "exports")
+        raise KeyboardInterrupt("simulated power loss during local-state copy")
+
+    monkeypatch.setattr(backup_module, "_copy_local_restore_state", interrupted_copy)
+    monkeypatch.setattr(backup_module.shutil, "rmtree", lambda *args, **kwargs: None)
+    with pytest.raises(KeyboardInterrupt, match="local-state copy"):
+        restore_backup(archive_path, data)
+
+    assert data.is_dir()
+    assert (data / "models" / "sentinel.bin").read_bytes() == b"live-model"
+    assert (data / "exports" / "sentinel.txt").read_bytes() == b"live-export"
+    assert _journal(data).is_file()
+    staging = _staging_directories(data)
+    assert staging
+    assert (staging[0] / "exports" / "sentinel.txt").read_bytes() == b"live-export"
+    assert not _recovery_directories(data)
+
+    monkeypatch.undo()
+    result = backup_module.recover_interrupted_restore(data)
+
+    assert result["status"] == "PASS"
+    assert result["action"] == "staging_discarded"
+    assert (data / "models" / "sentinel.bin").read_bytes() == b"live-model"
+    assert (data / "exports" / "sentinel.txt").read_bytes() == b"live-export"
+    assert not _staging_directories(data)
+    assert not _recovery_directories(data)
 
 
 def test_interrupted_swap_rolls_back_when_staging_is_gone(tmp_path, make_wav, monkeypatch):
