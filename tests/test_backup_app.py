@@ -795,7 +795,17 @@ def test_restore_journal_carries_no_transcript_text_and_no_secrets(
     }
 
 
-def test_public_backup_signatures_are_unchanged():
+def test_public_backup_signatures_are_pinned():
+    assert [
+        (name, parameter.kind, parameter.default)
+        for name, parameter in inspect.signature(create_backup).parameters.items()
+    ] == [
+        ("store", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("destination", inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.empty),
+        ("settings_file", inspect.Parameter.KEYWORD_ONLY, None),
+        ("include_audio", inspect.Parameter.KEYWORD_ONLY, True),
+        ("passphrase", inspect.Parameter.KEYWORD_ONLY, None),
+    ]
     assert list(inspect.signature(verify_backup).parameters) == ["path"]
     assert [
         (name, parameter.kind)

@@ -3,21 +3,26 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import io
 import json
 import os
 import shutil
 import stat
 import uuid
 import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from . import backup_crypto
 from .archive import ZipBudget, inspect_zip, require_free_space
 from .models import Settings, Transcript
 from .storage import LocalStore
 
 BACKUP_VERSION = 1
+ENCRYPTED_BACKUP_VERSION = 2
+_PRIVATE_INDEX_LIMIT_BYTES = 16 * 1024**2
 RESTORE_JOURNAL_VERSION = 1
 RESTORE_SIDECAR_VERSION = 1
 RESTORE_SIDECAR_NAME = ".restore-settings.json"
@@ -70,13 +75,287 @@ def _member_info(payload: bytes) -> dict[str, Any]:
     return {"sha256": hashlib.sha256(payload).hexdigest(), "size": len(payload)}
 
 
+class _JsonlTranscriptStream:
+    """Iterator-backed binary stream of JSONL transcript bytes.
+
+    Feeds ``backup_crypto.encrypt_member`` line by line so the
+    transcripts payload is never materialized as a single bytes object.
+    Only explicitly sized, bounded reads are supported.
+    """
+
+    def __init__(self, transcripts: list[Transcript]) -> None:
+        self._lines = iter(
+            (
+                json.dumps(item.to_dict(), ensure_ascii=False, sort_keys=True) + "\n"
+            ).encode("utf-8")
+            for item in transcripts
+        )
+        self._pending = bytearray()
+        self._exhausted = False
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise ValueError(
+                "unbounded reads are not supported for transcript streaming"
+            )
+        while len(self._pending) < size and not self._exhausted:
+            try:
+                self._pending += next(self._lines)
+            except StopIteration:
+                self._exhausted = True
+        chunk = bytes(self._pending[:size])
+        del self._pending[:size]
+        return chunk
+
+
+class _LimitedReader:
+    """Binary reader enforcing a plaintext format ceiling while streaming."""
+
+    def __init__(self, stream: BinaryIO, limit: int, member: str) -> None:
+        self._stream = stream
+        self._remaining = limit
+        self._member = member
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise ValueError("unbounded reads are not supported for backup members")
+        data = self._stream.read(size)
+        self._remaining -= len(data)
+        if self._remaining < 0:
+            raise ValueError(
+                f"backup member exceeds its format limit: {self._member}"
+            )
+        return data
+
+
+class _HashingWriter:
+    """Counting SHA-256 writer around a ZIP member stream."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._stream = stream
+        self._digest = hashlib.sha256()
+        self.size = 0
+
+    def write(self, data: bytes) -> int:
+        self._digest.update(data)
+        self.size += len(data)
+        return self._stream.write(data)
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
+def _read_bounded_payload(path: Path, limit: int, member: str) -> bytes:
+    with path.open("rb") as stream:
+        payload = stream.read(limit + 1)
+    if len(payload) > limit:
+        raise ValueError(f"backup member exceeds its format limit: {member}")
+    return payload
+
+
+def _create_backup_v2(
+    store: LocalStore,
+    destination: Path,
+    *,
+    settings_file: Path | None,
+    include_audio: bool,
+    passphrase: str,
+) -> dict[str, Any]:
+    """Create an encrypted backup version 2 archive.
+
+    Layout and cryptography follow the W2-E1 design contract
+    (``docs/superpowers/plans/2026-08-30-w2-e1-encrypted-backup-design.md``
+    section 5): ``manifest.json`` is the only plaintext member, every
+    payload lives under a consecutive opaque ``payload/NNNNNNNN.enc``
+    name stored with ``ZIP_STORED``, and the logical-name mapping exists
+    only inside the encrypted private index. The passphrase and all keys
+    are never written, logged or returned.
+    """
+
+    destination = destination.expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    transcripts = store.list(limit=1_000_000)
+    salt = os.urandom(backup_crypto.SALT_SIZE)
+    master_key = backup_crypto.derive_master_key(passphrase, salt)
+    del passphrase
+
+    payload_openers: dict[str, Callable[[], BinaryIO]] = {
+        "transcripts.jsonl": lambda: _LimitedReader(
+            _JsonlTranscriptStream(transcripts),
+            _FIXED_MEMBER_LIMITS["transcripts.jsonl"],
+            "transcripts.jsonl",
+        )
+    }
+    if settings_file and settings_file.is_file():
+        settings_payload = _read_bounded_payload(
+            settings_file,
+            _FIXED_MEMBER_LIMITS["config/settings.json"],
+            "config/settings.json",
+        )
+        payload_openers["config/settings.json"] = (
+            lambda payload=settings_payload: io.BytesIO(payload)
+        )
+        dictionary_payload: bytes | None = None
+        dictionary: Path | None = None
+        try:
+            settings = Settings.from_dict(json.loads(settings_payload))
+            candidate = Path(settings.dictionary_path).expanduser()
+            if settings.dictionary_path and candidate.is_file():
+                dictionary = candidate
+        except (OSError, ValueError, json.JSONDecodeError):
+            dictionary = None
+        if dictionary is not None:
+            try:
+                dictionary_payload = _read_bounded_payload(
+                    dictionary,
+                    _FIXED_MEMBER_LIMITS["config/dictionary.json"],
+                    "config/dictionary.json",
+                )
+            except OSError:
+                dictionary_payload = None
+        if dictionary_payload is not None:
+            payload_openers["config/dictionary.json"] = (
+                lambda payload=dictionary_payload: io.BytesIO(payload)
+            )
+    audio_files: dict[str, Path] = {}
+    if include_audio:
+        source_root = store.sources.resolve()
+        for transcript in transcripts:
+            if not transcript.source_path:
+                continue
+            source = Path(transcript.source_path).expanduser()
+            try:
+                source.resolve().relative_to(source_root)
+            except (OSError, ValueError):
+                continue
+            if source.is_file():
+                audio_files[f"sources/{source.name}"] = source
+    for audio_name, audio_path in audio_files.items():
+        payload_openers[audio_name] = lambda path=audio_path: path.open("rb")
+
+    total_members = len(payload_openers) + 2  # manifest.json + encrypted index
+    if total_members > BACKUP_ZIP_BUDGET.max_members:
+        raise ValueError(
+            f"backup exceeds the member budget: {total_members} members > "
+            f"{BACKUP_ZIP_BUDGET.max_members}"
+        )
+
+    index_member = "payload/00000000.enc"
+    mapping = {
+        logical_name: f"payload/{position + 1:08d}.enc"
+        for position, logical_name in enumerate(payload_openers)
+    }
+    index = {
+        "version": ENCRYPTED_BACKUP_VERSION,
+        "created_at": datetime.now(UTC).isoformat(),
+        "records": len(transcripts),
+        "include_audio": include_audio,
+        "members": mapping,
+    }
+    index_plaintext = json.dumps(
+        index, ensure_ascii=False, sort_keys=True
+    ).encode("utf-8")
+    if len(index_plaintext) > _PRIVATE_INDEX_LIMIT_BYTES:
+        raise ValueError("backup private index exceeds its format limit")
+
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        manifest_members: dict[str, dict[str, Any]] = {}
+        with zipfile.ZipFile(temporary, "w") as archive:
+
+            def _write_encrypted_member(
+                opaque_name: str, opener: Callable[[], BinaryIO]
+            ) -> None:
+                member_info = zipfile.ZipInfo(opaque_name)
+                member_info.compress_type = zipfile.ZIP_STORED
+                member_key = backup_crypto.derive_member_key(master_key, opaque_name)
+                with archive.open(member_info, "w") as member_stream:
+                    sink = _HashingWriter(member_stream)
+                    source = opener()
+                    try:
+                        plaintext_size, chunks = backup_crypto.encrypt_member(
+                            opaque_name, member_key, source, sink
+                        )
+                    finally:
+                        close = getattr(source, "close", None)
+                        if close is not None:
+                            close()
+                manifest_members[opaque_name] = {
+                    "sha256": sink.hexdigest(),
+                    "size": sink.size,
+                    "plaintext_size": plaintext_size,
+                    "chunks": chunks,
+                }
+
+            for logical_name, opener in payload_openers.items():
+                _write_encrypted_member(mapping[logical_name], opener)
+            _write_encrypted_member(
+                index_member, lambda: io.BytesIO(index_plaintext)
+            )
+
+            manifest = {
+                "version": ENCRYPTED_BACKUP_VERSION,
+                "encryption": {
+                    "algorithm": "AES-256-GCM-CHUNKED",
+                    "kdf": "argon2id",
+                    "kdf_params": {
+                        "iterations": backup_crypto.ARGON2_ITERATIONS,
+                        "memory_cost_kib": backup_crypto.ARGON2_MEMORY_COST_KIB,
+                        "lanes": backup_crypto.ARGON2_LANES,
+                    },
+                    "salt_base64": base64.b64encode(salt).decode("ascii"),
+                    "manifest_tag_base64": "",
+                },
+                "index_member": index_member,
+                "members": manifest_members,
+            }
+            canonical = json.dumps(
+                manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            manifest_key = backup_crypto.derive_manifest_key(master_key)
+            manifest["encryption"]["manifest_tag_base64"] = base64.b64encode(
+                backup_crypto.compute_manifest_tag(manifest_key, canonical)
+            ).decode("ascii")
+            manifest_payload = (
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+            ).encode("utf-8")
+            if len(manifest_payload) > _FIXED_MEMBER_LIMITS["manifest.json"]:
+                raise ValueError(
+                    "backup member exceeds its format limit: manifest.json"
+                )
+            archive.writestr("manifest.json", manifest_payload)
+        inspect_zip(temporary, BACKUP_ZIP_BUDGET)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return {
+        "path": str(destination.resolve()),
+        "records": len(transcripts),
+        "audio_files": len(audio_files),
+        "version": ENCRYPTED_BACKUP_VERSION,
+    }
+
+
 def create_backup(
     store: LocalStore,
     destination: Path,
     *,
     settings_file: Path | None = None,
     include_audio: bool = True,
+    passphrase: str | None = None,
 ) -> dict[str, Any]:
+    if passphrase is not None:
+        if not isinstance(passphrase, str):
+            raise TypeError("passphrase must be a str or None")
+        if passphrase == "":
+            raise ValueError("passphrase cannot be empty")
+        return _create_backup_v2(
+            store,
+            destination,
+            settings_file=settings_file,
+            include_audio=include_audio,
+            passphrase=passphrase,
+        )
     destination = destination.expanduser()
     destination.parent.mkdir(parents=True, exist_ok=True)
     transcripts = store.list(limit=1_000_000)
