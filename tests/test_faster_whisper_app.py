@@ -1,5 +1,6 @@
+import builtins
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -67,3 +68,67 @@ def test_engine_allows_selector_compute_types_when_runtime_reports_concrete_type
 
     assert FasterWhisperEngine("tiny", compute_type="default")._load() is model
     assert FasterWhisperEngine("tiny", compute_type="auto")._load() is model
+
+
+@pytest.mark.parametrize(
+    ("cuda_devices", "expected_runtime_device"),
+    [(0, "cpu"), (1, "cuda")],
+)
+def test_engine_validates_auto_compute_type_for_ct2_selected_runtime_device(
+    monkeypatch, cuda_devices, expected_runtime_device
+):
+    calls = []
+
+    def supported_compute_types(device=None):
+        calls.append(device)
+        return ("float16",)
+
+    fake_ctranslate2 = SimpleNamespace(
+        get_cuda_device_count=lambda: cuda_devices,
+        get_supported_compute_types=supported_compute_types,
+    )
+    model = object()
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ctranslate2)
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=lambda *_args, **_kwargs: model),
+    )
+
+    engine = FasterWhisperEngine("tiny", device="auto", compute_type="float16")
+
+    assert engine._load() is model
+    assert calls == [expected_runtime_device]
+
+
+def test_engine_preflights_ctranslate2_before_faster_whisper_import(monkeypatch):
+    imported_faster_whisper = []
+    real_import = builtins.__import__
+
+    def controlled_import(name, *args, **kwargs):
+        if name == "ctranslate2":
+            raise OSError("CTranslate2 DLL load failed")
+        if name == "faster_whisper":
+            imported_faster_whisper.append(name)
+            return SimpleNamespace(WhisperModel=lambda *_a, **_k: object())
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", controlled_import)
+    monkeypatch.delitem(sys.modules, "ctranslate2", raising=False)
+    fake_faster_whisper = ModuleType("faster_whisper")
+
+    def get_faster_whisper_attribute(name):
+        if name == "WhisperModel":
+            imported_faster_whisper.append(name)
+            return lambda *_a, **_k: object()
+        raise AttributeError(name)
+
+    fake_faster_whisper.__getattr__ = get_faster_whisper_attribute
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_faster_whisper)
+
+    engine = FasterWhisperEngine("tiny", device="auto", compute_type="float16")
+
+    with pytest.raises(RuntimeError, match="CTranslate2 runtime"):
+        engine._load()
+
+    assert imported_faster_whisper == []

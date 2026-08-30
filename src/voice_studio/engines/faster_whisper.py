@@ -29,6 +29,7 @@ class FasterWhisperEngine:
     def _load(self) -> Any:
         if self._model is not None:
             return self._model
+        self._validate_runtime_hardware()
         try:
             from faster_whisper import WhisperModel
         except ImportError as exc:
@@ -36,7 +37,6 @@ class FasterWhisperEngine:
                 "faster-whisper is not installed. Install the project with "
                 "its default dependencies."
             ) from exc
-        self._validate_runtime_hardware()
         self._model = WhisperModel(
             self.model_path,
             device=self.device,
@@ -50,7 +50,7 @@ class FasterWhisperEngine:
 
         try:
             import ctranslate2
-        except ImportError as exc:
+        except (ImportError, OSError) as exc:
             raise RuntimeError(
                 "CTranslate2 runtime is not installed; cannot validate local hardware"
             ) from exc
@@ -60,7 +60,11 @@ class FasterWhisperEngine:
             raise RuntimeError(f"CTranslate2 hardware detection failed: {exc}") from exc
         if self.device == "cuda" and cuda_devices <= 0:
             raise RuntimeError("CUDA device was requested but no CUDA device is available")
-        runtime_device = "cpu" if self.device == "auto" else self.device
+        runtime_device = (
+            ("cuda" if cuda_devices > 0 else "cpu")
+            if self.device == "auto"
+            else self.device
+        )
         getter = ctranslate2.get_supported_compute_types
         try:
             try:

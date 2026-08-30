@@ -812,6 +812,42 @@ def test_cancel_during_prepare_never_starts_worker_request(tmp_path, make_wav):
     assert list(store.sources.iterdir()) == []
 
 
+def test_run_rejects_mutated_hardware_settings_before_prepare_or_worker(
+    tmp_path, make_wav, monkeypatch
+):
+    source = make_wav(tmp_path / "original.wav")
+    settings = Settings(model="fixture")
+    settings.device = "rocm"
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=recording_worker,
+    )
+    prepare_called = False
+    worker_called = False
+
+    def forbidden_prepare(*_args, **_kwargs):
+        nonlocal prepare_called
+        prepare_called = True
+        pytest.fail("source preparation must not run for invalid settings")
+
+    def forbidden_ensure(*_args, **_kwargs):
+        nonlocal worker_called
+        worker_called = True
+        pytest.fail("worker startup must not run for invalid settings")
+
+    monkeypatch.setattr("voice_studio.jobs.TranscriptionService.prepare", forbidden_prepare)
+    monkeypatch.setattr(controller, "_ensure_worker", forbidden_ensure)
+    with pytest.raises(ValueError, match="device.*rocm"):
+        controller.run(source, settings, TerminologyDictionary())
+
+    assert not prepare_called
+    assert not worker_called
+    assert source.exists()
+    controller.close()
+
+
 def test_prepare_consumed_deadline_is_not_reset_for_inference(tmp_path, make_wav, monkeypatch):
     from voice_studio import operation
     from voice_studio import service as service_module
@@ -847,8 +883,9 @@ def test_prepare_consumed_deadline_is_not_reset_for_inference(tmp_path, make_wav
         with pytest.raises(TimeoutError, match="inference"):
             controller.run(
                 source,
-                Settings(model="fixture", task_timeout_seconds=1),
+                Settings(model="fixture"),
                 TerminologyDictionary(),
+                timeout_seconds=1,
             )
     finally:
         controller.close()

@@ -332,7 +332,7 @@ class TranscriptionJobController:
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[str, float], None] | None = None,
     ) -> Transcript:
-        settings.validate_profile_invariants()
+        settings.validate()
         timeout = settings.task_timeout_seconds if timeout_seconds is None else timeout_seconds
         budget = OperationBudget(
             timeout,
