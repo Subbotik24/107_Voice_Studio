@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import multiprocessing
 import queue
+import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from .dictionary import TerminologyDictionary
 from .media import MAX_SOURCE_BYTES
 from .models import Settings, Transcript
 from .operation import JobCancelled, OperationBudget
+from .process_lifecycle import _dispose_queue, _stop_process
 from .service import TranscriptionService
 from .storage import LocalStore
 
@@ -66,6 +69,14 @@ def _engine_worker(
             )
 
 
+@dataclass(frozen=True)
+class _WorkerGeneration:
+    process: Any
+    requests: Any
+    results: Any
+    token: int
+
+
 class TranscriptionJobController:
     def __init__(
         self,
@@ -78,66 +89,193 @@ class TranscriptionJobController:
         self.cache_directory = cache_directory
         self.worker_target = worker_target
         self._context = multiprocessing.get_context("spawn")
-        self._requests: Any | None = None
-        self._results: Any | None = None
-        self._process: Any | None = None
+        self._lifecycle_lock = threading.RLock()
+        self._run_lock = threading.Lock()
+        self._generation: _WorkerGeneration | None = None
+        self._generation_token = 0
+        self._lifecycle_epoch = 0
 
-    def _ensure_worker(self) -> None:
-        if self._process is not None and self._process.is_alive():
-            return
-        self._requests = self._context.Queue()
-        self._results = self._context.Queue()
-        self._process = self._context.Process(
-            target=self.worker_target,
-            args=(
-                self._requests,
-                self._results,
-                str(self.cache_directory),
-                str(self.store.models),
-            ),
-            name="voice-studio-transcription-worker",
-        )
-        self._process.start()
+    @property
+    def _process(self) -> Any | None:
+        with self._lifecycle_lock:
+            generation = self._generation
+            return generation.process if generation is not None else None
+
+    @property
+    def _requests(self) -> Any | None:
+        with self._lifecycle_lock:
+            generation = self._generation
+            return generation.requests if generation is not None else None
+
+    @property
+    def _results(self) -> Any | None:
+        with self._lifecycle_lock:
+            generation = self._generation
+            return generation.results if generation is not None else None
+
+    @staticmethod
+    def _dispose_generation(generation: _WorkerGeneration) -> None:
+        _stop_process(generation.process)
+        _dispose_queue(generation.requests)
+        _dispose_queue(generation.results)
+
+    def _detach_generation(
+        self,
+        expected: _WorkerGeneration | None = None,
+    ) -> _WorkerGeneration | None:
+        with self._lifecycle_lock:
+            generation = self._generation
+            if generation is None:
+                return None
+            if expected is not None and generation.token != expected.token:
+                return None
+            self._generation = None
+            return generation
+
+    def _epoch_cancelled(
+        self,
+        epoch: int,
+        cancelled: Callable[[], bool] | None,
+    ) -> bool:
+        with self._lifecycle_lock:
+            if self._lifecycle_epoch != epoch:
+                return True
+        return cancelled() if cancelled is not None else False
+
+    def _ensure_worker(self) -> _WorkerGeneration:
+        stale: _WorkerGeneration | None = None
+        failed: _WorkerGeneration | None = None
+        generation: _WorkerGeneration | None = None
+        startup_error: BaseException | None = None
+        with self._lifecycle_lock:
+            current = self._generation
+            if current is not None:
+                try:
+                    alive = current.process.is_alive()
+                except (AssertionError, AttributeError, OSError, ValueError):
+                    alive = False
+                if alive:
+                    return current
+                self._generation = None
+                stale = current
+
+            requests: Any | None = None
+            results: Any | None = None
+            try:
+                requests = self._context.Queue()
+                results = self._context.Queue()
+                self._generation_token += 1
+                generation = _WorkerGeneration(
+                    process=self._context.Process(
+                        target=self.worker_target,
+                        args=(
+                            requests,
+                            results,
+                            str(self.cache_directory),
+                            str(self.store.models),
+                        ),
+                        name="voice-studio-transcription-worker",
+                    ),
+                    requests=requests,
+                    results=results,
+                    token=self._generation_token,
+                )
+                generation.process.start()
+                self._generation = generation
+            except BaseException as exc:
+                if generation is not None:
+                    failed = generation
+                else:
+                    if requests is not None:
+                        _dispose_queue(requests)
+                    if results is not None:
+                        _dispose_queue(results)
+                startup_error = exc
+
+        if stale is not None:
+            self._dispose_generation(stale)
+        if failed is not None:
+            self._dispose_generation(failed)
+        if startup_error is not None:
+            raise startup_error
+        assert generation is not None
+        return generation
+
+    def _submit(self, generation: _WorkerGeneration, request: dict[str, Any]) -> None:
+        with self._lifecycle_lock:
+            if self._generation is not generation:
+                raise JobCancelled("transcription worker was closed")
+            try:
+                generation.requests.put(request)
+            except (AttributeError, OSError, ValueError) as exc:
+                raise JobCancelled("transcription worker was closed") from exc
 
     def restart(self) -> None:
-        self._terminate_worker()
+        self.close()
         self._ensure_worker()
 
     def _terminate_worker(self) -> None:
-        process = self._process
-        if process is not None and process.is_alive():
-            process.terminate()
-            process.join(timeout=5)
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=2)
-        self._process = None
-        self._requests = None
-        self._results = None
+        generation = self._detach_generation()
+        if generation is not None:
+            self._dispose_generation(generation)
 
     def close(self) -> None:
-        if self._process is not None and self._process.is_alive() and self._requests is not None:
-            self._requests.put(None)
-            self._process.join(timeout=3)
-        self._terminate_worker()
+        with self._lifecycle_lock:
+            self._lifecycle_epoch += 1
+            generation = self._generation
+            self._generation = None
+        if generation is None:
+            return
+        try:
+            generation.requests.put(None)
+        except (AttributeError, OSError, ValueError):
+            pass
+        _stop_process(generation.process, graceful_seconds=3)
+        _dispose_queue(generation.requests)
+        _dispose_queue(generation.results)
 
     def _wait_for_result(
         self,
+        generation: _WorkerGeneration,
         job_id: str,
         budget: OperationBudget,
         phase: str,
     ) -> dict[str, Any]:
         while True:
-            wait_seconds = budget.remaining(phase, ceiling=0.1)
-            if self._process is None or not self._process.is_alive():
-                exit_code = self._process.exitcode if self._process is not None else "unknown"
-                self._terminate_worker()
+            with self._lifecycle_lock:
+                if self._generation is not generation:
+                    raise JobCancelled("transcription worker was closed")
+            try:
+                wait_seconds = budget.remaining(phase, ceiling=0.1)
+            except (JobCancelled, TimeoutError) as exc:
+                with self._lifecycle_lock:
+                    if self._generation is not generation:
+                        raise JobCancelled("transcription worker was closed") from exc
+                raise
+            try:
+                alive = generation.process.is_alive()
+            except (AssertionError, AttributeError, OSError, ValueError):
+                alive = False
+            if not alive:
+                detached = self._detach_generation(generation)
+                if detached is None:
+                    raise JobCancelled("transcription worker was closed")
+                try:
+                    exit_code = generation.process.exitcode
+                except (AssertionError, AttributeError, OSError, ValueError):
+                    exit_code = "unknown"
+                self._dispose_generation(detached)
                 raise RuntimeError(f"transcription worker stopped unexpectedly: {exit_code}")
             try:
-                response = self._results.get(timeout=wait_seconds)
+                response = generation.results.get(timeout=wait_seconds)
             except queue.Empty:
                 continue
+            except (AttributeError, OSError, ValueError) as exc:
+                raise JobCancelled("transcription worker was closed") from exc
             if response.get("job_id") == job_id:
+                with self._lifecycle_lock:
+                    if self._generation is not generation:
+                        raise JobCancelled("transcription worker was closed")
                 return response
 
     def _record_cleanup_outcome(
@@ -165,9 +303,36 @@ class TranscriptionJobController:
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[str, float], None] | None = None,
     ) -> Transcript:
+        with self._run_lock:
+            with self._lifecycle_lock:
+                epoch = self._lifecycle_epoch
+            return self._run_once(
+                source,
+                settings,
+                dictionary,
+                epoch=epoch,
+                timeout_seconds=timeout_seconds,
+                cancelled=cancelled,
+                progress=progress,
+            )
+
+    def _run_once(
+        self,
+        source: Path,
+        settings: Settings,
+        dictionary: TerminologyDictionary,
+        *,
+        epoch: int,
+        timeout_seconds: int | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        progress: Callable[[str, float], None] | None = None,
+    ) -> Transcript:
         settings.validate_profile_invariants()
         timeout = settings.task_timeout_seconds if timeout_seconds is None else timeout_seconds
-        budget = OperationBudget(timeout, cancelled)
+        budget = OperationBudget(
+            timeout,
+            lambda: self._epoch_cancelled(epoch, cancelled),
+        )
         service = TranscriptionService(self.store, engine=None, dictionary=dictionary)
         started = time.monotonic()
 
@@ -187,12 +352,14 @@ class TranscriptionJobController:
                 budget,
                 max_bytes=MAX_SOURCE_BYTES,
             )
+            budget.checkpoint("prepare")
             job_id = uuid.uuid4().hex
             budget.checkpoint("loading")
-            self._ensure_worker()
+            generation = self._ensure_worker()
             report("loading")
             budget.checkpoint("loading")
-            self._requests.put(
+            self._submit(
+                generation,
                 {
                     "job_id": job_id,
                     "settings": settings.to_dict(),
@@ -201,7 +368,7 @@ class TranscriptionJobController:
                 }
             )
             report("transcribing")
-            response = self._wait_for_result(job_id, budget, "inference")
+            response = self._wait_for_result(generation, job_id, budget, "inference")
             if not response["ok"]:
                 raise RuntimeError(response["error"])
             report("saving")
@@ -215,7 +382,8 @@ class TranscriptionJobController:
             if settings.automatic_cleanup and transcript.engine == "ollama":
                 report("cleaning")
                 cleanup_job_id = uuid.uuid4().hex
-                self._requests.put(
+                self._submit(
+                    generation,
                     {
                         "action": "cleanup",
                         "job_id": cleanup_job_id,
@@ -225,6 +393,7 @@ class TranscriptionJobController:
                 )
                 try:
                     cleanup_response = self._wait_for_result(
+                        generation,
                         cleanup_job_id,
                         budget,
                         "cleaning",

@@ -1,4 +1,7 @@
 import os
+import subprocess
+import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -9,6 +12,7 @@ from voice_studio.dictionary import TerminologyDictionary
 from voice_studio.engines.base import EngineResult
 from voice_studio.jobs import JobCancelled, TranscriptionJobController
 from voice_studio.models import Segment, Settings
+from voice_studio.operation import OperationBudget
 from voice_studio.process_lifecycle import _dispose_queue, _stop_process
 from voice_studio.storage import LocalStore
 
@@ -63,6 +67,112 @@ def test_dispose_queue_is_idempotent_and_never_joins_feeder():
     assert queue_object.close_calls == 1
 
 
+class ControllerQueue:
+    def __init__(self):
+        self.items = []
+        self.cancel_calls = 0
+        self.close_calls = 0
+
+    def put(self, value):
+        self.items.append(value)
+
+    def cancel_join_thread(self):
+        self.cancel_calls += 1
+
+    def close(self):
+        self.close_calls += 1
+
+
+class ControllerProcess:
+    def __init__(self, context):
+        self.context = context
+        self.alive = False
+        self.start_calls = 0
+        self.join_calls = []
+
+    def start(self):
+        self.start_calls += 1
+        if self.start_calls == 1 and len(self.context.processes) == 1:
+            self.context.first_start_started.set()
+            self.context.first_start_release.wait(timeout=5)
+        self.alive = True
+
+    def is_alive(self):
+        return self.alive
+
+    def join(self, timeout=None):
+        self.join_calls.append(timeout)
+        if timeout == 3:
+            self.alive = False
+
+    def terminate(self):
+        self.alive = False
+
+    def kill(self):
+        self.alive = False
+
+
+class ControllerContext:
+    def __init__(self):
+        self.processes = []
+        self.queues = []
+        self.first_start_started = threading.Event()
+        self.first_start_release = threading.Event()
+
+    def Queue(self):
+        result = ControllerQueue()
+        self.queues.append(result)
+        return result
+
+    def Process(self, **_kwargs):
+        result = ControllerProcess(self)
+        self.processes.append(result)
+        return result
+
+
+def test_concurrent_ensure_worker_returns_one_generation(tmp_path):
+    context = ControllerContext()
+    controller = TranscriptionJobController(LocalStore(tmp_path / "data"), tmp_path / "cache")
+    controller._context = context
+    generations = []
+
+    def ensure():
+        generations.append(controller._ensure_worker())
+
+    first = threading.Thread(target=ensure)
+    second = threading.Thread(target=ensure)
+    first.start()
+    assert context.first_start_started.wait(timeout=2)
+    second.start()
+    time.sleep(0.1)
+    context.first_start_release.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    try:
+        assert generations[0] is generations[1]
+        assert len(context.processes) == 1
+        assert context.processes[0].start_calls == 1
+    finally:
+        controller.close()
+
+
+def test_close_detaches_and_disposes_generation_once(tmp_path):
+    context = ControllerContext()
+    controller = TranscriptionJobController(LocalStore(tmp_path / "data"), tmp_path / "cache")
+    controller._context = context
+    controller._ensure_worker()
+
+    controller.close()
+    controller.close()
+
+    assert context.queues[0].cancel_calls == 1
+    assert context.queues[0].close_calls == 1
+    assert context.queues[1].cancel_calls == 1
+    assert context.queues[1].close_calls == 1
+    assert controller._process is None
+
+
 def fixture_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
     while True:
         request = requests.get()
@@ -99,6 +209,202 @@ def recording_worker(requests: Any, _results: Any, cache: str, _models: str) -> 
 
 def idle_worker(requests: Any, _results: Any, _cache: str, _models: str) -> None:
     requests.get()
+
+
+def test_close_during_slow_run_maps_to_job_cancelled(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=slow_worker,
+    )
+    running = threading.Event()
+    outcome = []
+
+    def run_job():
+        try:
+            controller.run(
+                source,
+                Settings(model="fixture"),
+                TerminologyDictionary(),
+                progress=lambda phase, _elapsed: running.set()
+                if phase == "transcribing"
+                else None,
+            )
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=run_job)
+    thread.start()
+    assert running.wait(timeout=10)
+    controller.close()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], JobCancelled)
+    assert source.exists()
+
+
+def test_close_during_prepare_cancels_before_worker_creation(tmp_path, make_wav, monkeypatch):
+    from voice_studio import service as service_module
+
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(store, tmp_path / "cache")
+    context = ControllerContext()
+    controller._context = context
+    prepare_started = threading.Event()
+    release_prepare = threading.Event()
+    original_prepare = service_module.TranscriptionService.prepare
+
+    def blocked_prepare(service, *args, **kwargs):
+        prepared = original_prepare(service, *args, **kwargs)
+        prepare_started.set()
+        assert release_prepare.wait(timeout=5)
+        return prepared
+
+    monkeypatch.setattr(service_module.TranscriptionService, "prepare", blocked_prepare)
+    outcome = []
+
+    def run_job():
+        try:
+            controller.run(source, Settings(model="fixture"), TerminologyDictionary())
+        except BaseException as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=run_job)
+    thread.start()
+    assert prepare_started.wait(timeout=10)
+    assert controller._generation is None
+    controller.close()
+    release_prepare.set()
+    context.first_start_release.set()
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert len(outcome) == 1
+    assert isinstance(outcome[0], JobCancelled)
+    assert context.processes == []
+    assert controller._generation is None
+    assert list(store.sources.iterdir()) == []
+    assert source.exists()
+
+
+def test_run_after_close_starts_a_new_generation(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    controller = TranscriptionJobController(
+        LocalStore(tmp_path / "data"),
+        tmp_path / "cache",
+        worker_target=fixture_worker,
+    )
+    controller.close()
+    try:
+        transcript = controller.run(
+            source,
+            Settings(model="fixture"),
+            TerminologyDictionary(),
+        )
+    finally:
+        controller.close()
+    assert transcript.raw_text == "local result"
+
+
+def test_concurrent_runs_are_serialized_and_keep_their_results(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    controller = TranscriptionJobController(
+        LocalStore(tmp_path / "data"),
+        tmp_path / "cache",
+        worker_target=fixture_worker,
+    )
+    barrier = threading.Barrier(2)
+    results = []
+    errors = []
+
+    def run_job():
+        try:
+            barrier.wait()
+            results.append(
+                controller.run(
+                    source,
+                    Settings(model="fixture"),
+                    TerminologyDictionary(),
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run_job) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    controller.close()
+
+    assert not errors
+    assert len(results) == 2
+    assert {result.raw_text for result in results} == {"local result"}
+
+
+def test_stopped_worker_disposes_both_queues_before_error(tmp_path):
+    context = ControllerContext()
+    controller = TranscriptionJobController(LocalStore(tmp_path / "data"), tmp_path / "cache")
+    controller._context = context
+    generation = controller._ensure_worker()
+    generation.process.alive = False
+
+    with pytest.raises(RuntimeError, match="worker stopped unexpectedly"):
+        controller._wait_for_result(
+            generation,
+            "missing",
+            OperationBudget(1),
+            "inference",
+        )
+
+    assert context.queues[0].cancel_calls == 1
+    assert context.queues[0].close_calls == 1
+    assert context.queues[1].cancel_calls == 1
+    assert context.queues[1].close_calls == 1
+
+
+def test_controller_subprocess_closes_without_resource_tracker_warning(tmp_path):
+    script = """
+from pathlib import Path
+import wave
+from voice_studio.dictionary import TerminologyDictionary
+from voice_studio.jobs import TranscriptionJobController
+from voice_studio.models import Settings
+from voice_studio.storage import LocalStore
+from tests.test_jobs_app import fixture_worker
+
+source = Path(r'{source}')
+source.parent.mkdir(parents=True, exist_ok=True)
+with wave.open(str(source), 'wb') as handle:
+    handle.setnchannels(1)
+    handle.setsampwidth(2)
+    handle.setframerate(16000)
+    handle.writeframes(b'\\0\\0' * 1600)
+controller = TranscriptionJobController(
+    LocalStore(Path(r'{data}')), Path(r'{cache}'), worker_target=fixture_worker
+)
+controller.run(source, Settings(model='fixture'), TerminologyDictionary())
+controller.close()
+""".format(
+        source=tmp_path / "original.wav",
+        data=tmp_path / "data",
+        cache=tmp_path / "cache",
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "PYTHONPATH": str(Path.cwd() / "src")},
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "resource_tracker" not in result.stderr
+    assert "leaked semaphore" not in result.stderr
 
 
 def cleanup_worker(requests: Any, results: Any, _cache: str, _models: str) -> None:
