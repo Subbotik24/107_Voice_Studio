@@ -90,6 +90,156 @@ def local_model(path: Path) -> Path:
     return path
 
 
+def snapshot_tree(root: Path) -> tuple[dict[str, tuple[bytes, int]], dict[str, tuple[str, ...]]]:
+    files: dict[str, tuple[bytes, int]] = {}
+    entries: dict[str, tuple[str, ...]] = {}
+    try:
+        root.lstat()
+    except OSError:
+        return files, entries
+    if not os.path.isdir(root) or os.path.islink(root):
+        return files, entries
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(directory) as iterator:
+            scanned = list(iterator)
+        entries[str(directory.relative_to(root))] = tuple(
+            sorted(entry.name for entry in scanned)
+        )
+        for entry in scanned:
+            path = Path(entry.path)
+            entry_stat = entry.stat(follow_symlinks=False)
+            if entry.is_dir(follow_symlinks=False):
+                pending.append(path)
+            elif entry.is_file(follow_symlinks=False):
+                files[str(path.relative_to(root))] = (path.read_bytes(), entry_stat.st_mtime_ns)
+    return files, entries
+
+
+def assert_inspection_is_read_only(root: Path, expected: dict) -> None:
+    before = snapshot_tree(root)
+    assert ModelCatalog.inspect(root) == expected
+    assert snapshot_tree(root) == before
+
+
+def test_inspect_absent_root_is_pass_and_does_not_create_it(tmp_path):
+    root = tmp_path / "not-created"
+
+    assert_inspection_is_read_only(
+        root,
+        {
+            "status": "PASS",
+            "manifest": "absent",
+            "missing": [],
+            "orphans": [],
+            "blocked": [],
+            "staging": [],
+            "residue": [],
+        },
+    )
+    assert not root.exists()
+
+
+def test_inspect_reports_catalog_drift_and_staging_without_writing(tmp_path, monkeypatch):
+    root = tmp_path / "managed"
+    root.mkdir()
+    (root / "catalog.json").write_text(
+        '{"version": 1, "models": [{"id": "tiny", "path": "tiny"}]}',
+        encoding="utf-8",
+    )
+    local_model(root / "small")
+    (root / "broken").mkdir()
+    (root / "broken" / "config.json").write_text("{}", encoding="utf-8")
+    stale_staging = root / ".downloads" / ("tiny-" + "a" * 32)
+    fresh_staging = root / ".downloads" / ("small-" + "b" * 32)
+    for path in (stale_staging, fresh_staging):
+        path.mkdir(parents=True)
+        (path / "partial").write_bytes(b"x")
+    old = time.time() - 3 * 24 * 60 * 60
+    os.utime(stale_staging / "partial", (old, old))
+    os.utime(stale_staging, (old, old))
+    stale_residue = root / "catalog.json.tmp"
+    fresh_residue = root / ("catalog.json." + "c" * 32 + ".tmp")
+    stale_residue.write_bytes(b"old")
+    fresh_residue.write_bytes(b"fresh")
+    os.utime(stale_residue, (old, old))
+    monkeypatch.setattr(model_catalog_module.time, "time", lambda: old + 3 * 24 * 60 * 60)
+
+    before = snapshot_tree(root)
+    result = ModelCatalog.inspect(root)
+
+    assert result["status"] == "ATTENTION"
+    assert result["manifest"] == "valid"
+    assert result["missing"] == [
+        {"id": "tiny", "path": str(root / "tiny"), "reason": "catalogued model is absent"}
+    ]
+    assert result["orphans"] == [
+        {"id": "broken", "path": str(root / "broken"), "complete": False},
+        {"id": "small", "path": str(root / "small"), "complete": True},
+    ]
+    assert result["staging"] == [
+        {"name": fresh_staging.name, "pattern_valid": True, "stale": False, "safe": True},
+        {"name": stale_staging.name, "pattern_valid": True, "stale": True, "safe": True},
+    ]
+    assert result["residue"] == [
+        {"name": fresh_residue.name, "stale": False, "safe": True},
+        {"name": stale_residue.name, "stale": True, "safe": True},
+    ]
+    assert snapshot_tree(root) == before
+
+
+@pytest.mark.parametrize(
+    "payload", [b"{not-json", b'{"version":999,"models":[]}', b'{"version":1}']
+)
+def test_inspect_invalid_manifest_fails_without_writing(tmp_path, payload):
+    root = tmp_path / "managed"
+    root.mkdir()
+    (root / "catalog.json").write_bytes(payload)
+    before = snapshot_tree(root)
+
+    result = ModelCatalog.inspect(root)
+
+    assert result == {
+        "status": "FAIL",
+        "manifest": "invalid",
+        "missing": [],
+        "orphans": [],
+        "blocked": [],
+        "staging": [],
+        "residue": [],
+    }
+    assert snapshot_tree(root) == before
+
+
+def test_inspect_blocks_model_symlink_without_following_or_writing(tmp_path):
+    root = tmp_path / "managed"
+    root.mkdir()
+    target = local_model(tmp_path / "outside")
+    link = root / "linked-model"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+
+    before = snapshot_tree(root)
+    result = ModelCatalog.inspect(root)
+
+    assert result["status"] == "ATTENTION"
+    assert result["blocked"] == [
+        {
+            "id": "linked-model",
+            "path": str(link),
+            "reason": "model path is a symlink",
+        }
+    ]
+    assert result["orphans"] == []
+    assert snapshot_tree(root) == before
+    assert target.joinpath("model.bin").read_bytes() == b"fixture model"
+
+
 def make_junction(link: Path, target: Path) -> None:
     if os.name != "nt":
         pytest.skip("Windows junctions are unavailable")

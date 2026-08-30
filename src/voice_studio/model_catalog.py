@@ -230,6 +230,327 @@ class ModelCatalog:
             else:
                 result["staging_removed"].append(entry.name)
 
+    @classmethod
+    def inspect(cls, root: Path) -> dict[str, Any]:
+        """Inspect managed model state without constructing or modifying a catalog."""
+        root = Path(root).expanduser()
+        result: dict[str, Any] = {
+            "status": "PASS",
+            "manifest": "absent",
+            "missing": [],
+            "orphans": [],
+            "blocked": [],
+            "staging": [],
+            "residue": [],
+        }
+
+        def blocked(model_id: str, path: Path, reason: str) -> None:
+            result["blocked"].append(
+                {"id": model_id, "path": str(path), "reason": reason}
+            )
+
+        try:
+            root_stat = root.lstat()
+        except FileNotFoundError:
+            return result
+        except OSError as exc:
+            result["status"] = "FAIL"
+            blocked("<root>", root, f"model root could not be inspected safely: {exc}")
+            return result
+
+        if cls._is_reparse_point(root, root_stat):
+            reason = "model root is a symlink" if stat.S_ISLNK(root_stat.st_mode) else (
+                "model root is a reparse point"
+            )
+            blocked("<root>", root, reason)
+            result["status"] = "ATTENTION"
+            return result
+        if not stat.S_ISDIR(root_stat.st_mode):
+            blocked("<root>", root, "model root is not a real directory")
+            result["status"] = "ATTENTION"
+            return result
+
+        catalog_path = root / "catalog.json"
+        payload: dict[str, Any] | None = None
+        try:
+            catalog_stat = catalog_path.lstat()
+        except FileNotFoundError:
+            catalog_stat = None
+        except OSError:
+            result["manifest"] = "invalid"
+            result["status"] = "FAIL"
+        if catalog_stat is not None:
+            if cls._is_reparse_point(catalog_path, catalog_stat) or not stat.S_ISREG(
+                catalog_stat.st_mode
+            ):
+                result["manifest"] = "invalid"
+                result["status"] = "FAIL"
+            else:
+                try:
+                    payload_candidate = json.loads(catalog_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    result["manifest"] = "invalid"
+                    result["status"] = "FAIL"
+                else:
+                    if (
+                        not isinstance(payload_candidate, dict)
+                        or payload_candidate.get("version") != CATALOG_VERSION
+                        or not isinstance(payload_candidate.get("models"), list)
+                    ):
+                        result["manifest"] = "invalid"
+                        result["status"] = "FAIL"
+                    else:
+                        result["manifest"] = "valid"
+                        payload = payload_candidate
+
+        try:
+            with os.scandir(root) as iterator:
+                root_entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as exc:
+            result["status"] = "FAIL"
+            blocked("<root>", root, f"model root could not be scanned safely: {exc}")
+            return result
+
+        catalogued_ids: set[str] = set()
+        if payload is not None:
+            for item in payload["models"]:
+                if not isinstance(item, dict):
+                    blocked("<invalid>", catalog_path, "invalid manifest entry")
+                    continue
+                model_id = item.get("id")
+                relative_path = item.get("path")
+                if not isinstance(model_id, str) or not MODEL_ID_PATTERN.fullmatch(model_id):
+                    blocked(
+                        str(model_id),
+                        catalog_path,
+                        "manifest entry has an invalid model id",
+                    )
+                    continue
+                catalogued_ids.add(model_id)
+                relative = Path(relative_path) if isinstance(relative_path, str) else None
+                if (
+                    relative is None
+                    or not relative_path
+                    or relative.is_absolute()
+                    or bool(relative.anchor)
+                    or any(part in {"", ".", ".."} for part in relative.parts)
+                ):
+                    target = root / str(relative_path)
+                    blocked(
+                        model_id,
+                        target,
+                        "manifest entry has an invalid model path",
+                    )
+                    continue
+                target = root.joinpath(*relative.parts)
+                parent = root
+                unsafe_parent = False
+                for component in relative.parts[:-1]:
+                    parent = parent / component
+                    try:
+                        parent_stat = parent.lstat()
+                    except FileNotFoundError:
+                        break
+                    except OSError:
+                        blocked(
+                            model_id,
+                            parent,
+                            "model path could not be inspected safely",
+                        )
+                        unsafe_parent = True
+                        break
+                    if cls._is_reparse_point(parent, parent_stat):
+                        blocked(
+                            model_id,
+                            parent,
+                            "model path is a symlink"
+                            if stat.S_ISLNK(parent_stat.st_mode)
+                            else "model path is a reparse point",
+                        )
+                        unsafe_parent = True
+                        break
+                    if not stat.S_ISDIR(parent_stat.st_mode):
+                        blocked(model_id, parent, "model path is not a real directory")
+                        unsafe_parent = True
+                        break
+                if unsafe_parent:
+                    continue
+                try:
+                    target_stat = target.lstat()
+                except FileNotFoundError:
+                    result["missing"].append(
+                        {
+                            "id": model_id,
+                            "path": str(target),
+                            "reason": "catalogued model is absent",
+                        }
+                    )
+                    continue
+                except OSError:
+                    blocked(
+                        model_id,
+                        target,
+                        "model path could not be inspected safely",
+                    )
+                    continue
+                if cls._is_reparse_point(target, target_stat):
+                    blocked(
+                        model_id,
+                        target,
+                        "model path is a symlink"
+                        if stat.S_ISLNK(target_stat.st_mode)
+                        else "model path is a reparse point",
+                    )
+                    continue
+                if not stat.S_ISDIR(target_stat.st_mode):
+                    blocked(model_id, target, "model path is not a real directory")
+                    continue
+                if not cls._has_required_model_files(target):
+                    blocked(
+                        model_id,
+                        target,
+                        "model directory is incomplete; model.bin and config.json are required",
+                    )
+
+        for entry in root_entries:
+            if entry.name in {"catalog.json", ".downloads"}:
+                continue
+            if entry.name.startswith("catalog.json") and entry.name.endswith(".tmp"):
+                continue
+            if not MODEL_ID_PATTERN.fullmatch(entry.name):
+                continue
+            path = root / entry.name
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                blocked(entry.name, path, "model path could not be inspected safely")
+                continue
+            if cls._is_reparse_point(path, entry_stat):
+                blocked(
+                    entry.name,
+                    path,
+                    "model path is a symlink"
+                    if stat.S_ISLNK(entry_stat.st_mode)
+                    else "model path is a reparse point",
+                )
+                continue
+            if not stat.S_ISDIR(entry_stat.st_mode) or entry.name in catalogued_ids:
+                continue
+            result["orphans"].append(
+                {
+                    "id": entry.name,
+                    "path": str(path),
+                    "complete": cls._has_required_model_files(path),
+                }
+            )
+
+        downloads = root / ".downloads"
+        try:
+            downloads_stat = downloads.lstat()
+        except FileNotFoundError:
+            downloads_stat = None
+        except OSError:
+            downloads_stat = None
+            blocked("<downloads>", downloads, "staging directory could not be inspected safely")
+        if downloads_stat is not None:
+            if cls._is_reparse_point(downloads, downloads_stat):
+                blocked(
+                    "<downloads>",
+                    downloads,
+                    "staging directory is a symlink"
+                    if stat.S_ISLNK(downloads_stat.st_mode)
+                    else "staging directory is a reparse point",
+                )
+            elif stat.S_ISDIR(downloads_stat.st_mode):
+                try:
+                    with os.scandir(downloads) as iterator:
+                        staging_entries = sorted(iterator, key=lambda entry: entry.name)
+                except OSError:
+                    staging_entries = []
+                    blocked(
+                        "<downloads>",
+                        downloads,
+                        "staging directory could not be scanned safely",
+                    )
+                cutoff = time.time() - STAGING_MAX_AGE_SECONDS
+                for entry in staging_entries:
+                    path = downloads / entry.name
+                    try:
+                        entry_stat = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        result["staging"].append(
+                            {
+                                "name": entry.name,
+                                "pattern_valid": bool(STAGING_PATTERN.fullmatch(entry.name)),
+                                "stale": False,
+                                "safe": False,
+                            }
+                        )
+                        continue
+                    pattern_valid = bool(STAGING_PATTERN.fullmatch(entry.name))
+                    safe = not cls._is_reparse_point(path, entry_stat) and (
+                        stat.S_ISDIR(entry_stat.st_mode) or stat.S_ISREG(entry_stat.st_mode)
+                    )
+                    newest = cls._newest_mtime(path) if stat.S_ISDIR(entry_stat.st_mode) else (
+                        entry_stat.st_mtime if safe else None
+                    )
+                    result["staging"].append(
+                        {
+                            "name": entry.name,
+                            "pattern_valid": pattern_valid,
+                            "stale": bool(safe and newest is not None and newest < cutoff),
+                            "safe": safe
+                            and (
+                                newest is not None
+                                if stat.S_ISDIR(entry_stat.st_mode)
+                                else True
+                            ),
+                        }
+                    )
+
+        cutoff = time.time() - CATALOG_RESIDUE_MAX_AGE_SECONDS
+        for entry in root_entries:
+            if entry.name != "catalog.json.tmp" and not (
+                entry.name.startswith("catalog.json.") and entry.name.endswith(".tmp")
+            ):
+                continue
+            path = root / entry.name
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                safe = False
+                stale = False
+            else:
+                safe = stat.S_ISREG(entry_stat.st_mode) and not cls._is_reparse_point(
+                    path, entry_stat
+                )
+                stale = bool(safe and entry_stat.st_mtime < cutoff)
+            result["residue"].append(
+                {"name": entry.name, "stale": stale, "safe": safe}
+            )
+
+        for key in ("missing", "orphans", "blocked", "staging", "residue"):
+            result[key].sort(key=lambda item: tuple(str(item[field]) for field in sorted(item)))
+        if result["manifest"] == "invalid":
+            result["status"] = "FAIL"
+        elif any(result[key] for key in ("missing", "orphans", "blocked", "staging", "residue")):
+            result["status"] = "ATTENTION"
+        return result
+
+    @staticmethod
+    def _has_required_model_files(directory: Path) -> bool:
+        for name in ("model.bin", "config.json"):
+            try:
+                path_stat = (directory / name).lstat()
+            except OSError:
+                return False
+            if (
+                not stat.S_ISREG(path_stat.st_mode)
+                or ModelCatalog._is_reparse_point(directory / name, path_stat)
+            ):
+                return False
+        return True
+
     def reconcile(self) -> dict[str, Any]:
         result = _reconcile_result()
         quarantined = False
