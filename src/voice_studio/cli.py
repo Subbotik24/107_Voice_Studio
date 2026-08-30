@@ -163,6 +163,13 @@ def build_parser() -> argparse.ArgumentParser:
     storage = sub.add_parser("storage", help="audit managed local storage")
     storage_commands = storage.add_subparsers(dest="storage_command", required=True)
     storage_commands.add_parser("audit", help="check SQLite and managed sources")
+    storage_repair = storage_commands.add_parser(
+        "repair-missing",
+        help="detach a transcript from a confirmed missing managed source",
+    )
+    storage_repair.add_argument("transcript_id")
+    storage_repair.add_argument("--expected-path")
+    storage_repair.add_argument("--yes", action="store_true")
     storage_cleanup = storage_commands.add_parser(
         "cleanup-orphans",
         help="remove verified unreferenced managed copies",
@@ -353,6 +360,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "storage":
             if args.storage_command == "audit":
                 _json(store.audit())
+                return 0
+            if args.storage_command == "repair-missing":
+                _json(
+                    store.repair_missing_source(
+                        args.transcript_id,
+                        confirmed=args.yes,
+                        expected_path=args.expected_path,
+                    )
+                )
                 return 0
             if args.storage_command == "cleanup-orphans":
                 _json(store.cleanup_orphans(confirmed=args.yes))

@@ -17,6 +17,133 @@ def _write_model(path: Path) -> Path:
     return path
 
 
+def _storage_profile(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(data))
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+    return LocalStore(data)
+
+
+def _stored_missing_cli_source(tmp_path, monkeypatch):
+    store = _storage_profile(tmp_path, monkeypatch)
+    original = tmp_path / "recording.wav"
+    original.write_bytes(b"user-owned-original")
+    managed, digest = store.import_source(original)
+    item = Transcript(
+        id="12345678-1234-5678-1234-567812345678",
+        created_at="2026-08-30T00:00:00+00:00",
+        source_name=original.name,
+        source_sha256=digest,
+        language="uk",
+        engine="faster-whisper",
+        model="small",
+        raw_text="raw transcript",
+        corrected_text="corrected transcript",
+        source_path=str(managed),
+    )
+    store.save(item)
+    managed.unlink()
+    return store, item, original, managed
+
+
+def test_storage_audit_drift_outputs_additive_sections(tmp_path, capsys, monkeypatch):
+    store, item, _original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
+    (store.models / "catalog.json").write_text(
+        '{"version": 1, "models": [{"id": "tiny", "path": "tiny"}]}',
+        encoding="utf-8",
+    )
+    stale_export = "87654321-4321-8765-4321-876543218765.srt"
+    (store.exports / stale_export).write_text("stale", encoding="utf-8")
+    orphan = store.sources / "orphan.wav"
+    orphan.write_bytes(b"managed orphan")
+
+    assert main(["storage", "audit"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["missing_records"] == [
+        {"id": item.id, "path": str(managed.resolve())}
+    ]
+    assert payload["model_catalog"]["missing"] == [
+        {
+            "id": "tiny",
+            "path": str(store.models / "tiny"),
+            "reason": "catalogued model is absent",
+        }
+    ]
+    assert payload["exports"]["canonical_stale"] == [stale_export]
+    assert orphan.read_bytes() == b"managed orphan"
+
+
+def test_storage_repair_missing_cli_requires_confirmation(tmp_path, capsys, monkeypatch):
+    store, item, original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
+
+    assert main(["storage", "repair-missing", item.id]) == 2
+
+    assert "missing-source repair requires --yes" in capsys.readouterr().err
+    assert store.get(item.id).source_path == str(managed)
+    assert original.read_bytes() == b"user-owned-original"
+
+
+def test_storage_repair_missing_cli_refuses_wrong_expected_path_without_mutation(
+    tmp_path, capsys, monkeypatch
+):
+    store, item, original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
+
+    assert (
+        main(
+            [
+                "storage",
+                "repair-missing",
+                item.id,
+                "--expected-path",
+                str(tmp_path / "other.wav"),
+                "--yes",
+            ]
+        )
+        == 2
+    )
+
+    assert "expected path does not match" in capsys.readouterr().err
+    persisted = store.get(item.id)
+    assert persisted.source_path == str(managed)
+    assert persisted.audio_retained is True
+    assert original.read_bytes() == b"user-owned-original"
+
+
+def test_storage_repair_missing_cli_detaches_exact_missing_source(
+    tmp_path, capsys, monkeypatch
+):
+    store, item, original, managed = _stored_missing_cli_source(tmp_path, monkeypatch)
+
+    assert (
+        main(
+            [
+                "storage",
+                "repair-missing",
+                item.id,
+                "--expected-path",
+                str(managed),
+                "--yes",
+            ]
+        )
+        == 0
+    )
+
+    assert json.loads(capsys.readouterr().out) == {
+        "repaired": True,
+        "id": item.id,
+        "path": str(managed),
+        "action": "detached_missing_source",
+    }
+    repaired = store.get(item.id)
+    assert repaired.source_path is None
+    assert repaired.audio_retained is False
+    assert repaired.raw_text == "raw transcript"
+    assert repaired.corrected_text == "corrected transcript"
+    assert original.read_bytes() == b"user-owned-original"
+
+
 def test_models_reconcile_outputs_json_and_models_list_reports_repair(
     tmp_path, capsys, monkeypatch
 ):
