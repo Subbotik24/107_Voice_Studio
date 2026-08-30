@@ -1,6 +1,7 @@
 import builtins
 import hashlib
 import io
+import json
 import os
 import sqlite3
 import subprocess
@@ -1008,3 +1009,189 @@ def test_storage_audit_normalizes_uppercase_export_uuid_and_suffix(tmp_path):
     assert result["exports"]["files"] == [existing_name, stale_name]
     assert result["exports"]["canonical_stale"] == [stale_name]
     assert result["exports"]["unmanaged"] == [existing_name]
+
+
+def _stored_missing_source(store: LocalStore, tmp_path: Path, item_id: str = "missing"):
+    original = tmp_path / f"{item_id}.wav"
+    original.write_bytes(b"original-audio")
+    managed, digest = store.import_source(original)
+    item = transcript()
+    item.id = item_id
+    item.source_path = str(managed)
+    item.source_sha256 = digest
+    store.save(item)
+    managed.unlink()
+    return item, original, managed
+
+
+def test_repair_missing_source_requires_confirmation_before_db_access(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    with pytest.raises(ValueError, match="--yes"):
+        store.repair_missing_source("unknown")
+
+
+def test_repair_missing_source_detaches_only_missing_managed_reference(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item, original, managed = _stored_missing_source(store, tmp_path)
+    before = item.to_dict()
+
+    result = store.repair_missing_source(
+        item.id, confirmed=True, expected_path=str(managed)
+    )
+
+    assert result == {
+        "repaired": True,
+        "id": item.id,
+        "path": str(managed),
+        "action": "detached_missing_source",
+    }
+    repaired = store.get(item.id)
+    assert repaired is not None
+    assert repaired.source_path is None
+    assert repaired.audio_retained is False
+    after = repaired.to_dict()
+    for key in before:
+        if key not in {"source_path", "audio_retained"}:
+            assert after[key] == before[key]
+    assert original.exists()
+    assert not managed.exists()
+
+
+def test_repair_missing_source_second_attempt_is_refused_idempotently(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item, _original, managed = _stored_missing_source(store, tmp_path)
+    store.repair_missing_source(item.id, confirmed=True, expected_path=str(managed))
+
+    with pytest.raises(ValueError, match="no source"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+
+def test_repair_missing_source_refuses_reappeared_file(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item, _original, managed = _stored_missing_source(store, tmp_path)
+    managed.write_bytes(b"replacement")
+
+    with pytest.raises(ValueError, match="reappeared"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    assert managed.read_bytes() == b"replacement"
+    assert store.get(item.id).source_path == str(managed)
+
+
+def test_repair_missing_source_refuses_final_symlink(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item, _original, managed = _stored_missing_source(store, tmp_path)
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"external")
+    try:
+        managed.symlink_to(outside)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+
+    with pytest.raises(ValueError, match="unsafe"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    assert outside.exists()
+    assert store.get(item.id).source_path == str(managed)
+
+
+def test_repair_missing_source_refuses_unknown_filesystem_error(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    item, _original, managed = _stored_missing_source(store, tmp_path)
+    real_lstat = Path.lstat
+
+    def deny_target(path):
+        if path == managed:
+            raise OSError("simulated access denial")
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", deny_target)
+    with pytest.raises(ValueError, match="inspected safely"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    assert store.get(item.id).source_path == str(managed)
+
+
+@pytest.mark.parametrize("case", ["unknown", "no_source", "outside", "mismatch"])
+def test_repair_missing_source_refuses_invalid_requests(tmp_path, case):
+    store = LocalStore(tmp_path / "data")
+    if case == "unknown":
+        with pytest.raises(KeyError, match="transcript not found"):
+            store.repair_missing_source("unknown", confirmed=True)
+        return
+    if case == "no_source":
+        item = transcript()
+        store.save(item)
+        with pytest.raises(ValueError, match="no source"):
+            store.repair_missing_source(item.id, confirmed=True)
+        return
+    item, _original, managed = _stored_missing_source(store, tmp_path)
+    if case == "outside":
+        outside = tmp_path / "outside.wav"
+        with store._connect() as db:
+            payload = item.to_dict()
+            payload["source_path"] = str(outside)
+            db.execute(
+                "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+                (json.dumps(payload), item.id),
+            )
+        with pytest.raises(ValueError, match="managed sources"):
+            store.repair_missing_source(item.id, confirmed=True)
+    else:
+        with pytest.raises(ValueError, match="expected path"):
+            store.repair_missing_source(
+                item.id, confirmed=True, expected_path=str(tmp_path / "other.wav")
+            )
+    expected = managed if case == "mismatch" else tmp_path / "outside.wav"
+    assert store.get(item.id).source_path == str(expected)
+
+
+def test_cleanup_orphans_rechecks_db_reference_inside_write_transaction(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "orphan.wav"
+    source.write_bytes(b"referenced-at-cleanup")
+    managed, digest = store.import_source(source)
+    item = transcript()
+    item.id = "late-reference"
+    item.source_path = str(managed)
+    item.source_sha256 = digest
+
+    monkeypatch.setattr(
+        store,
+        "audit",
+        lambda: {"orphans": [str(managed.resolve())]},
+    )
+    store.save(item)
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result == {"removed": [], "count": 0}
+    assert managed.exists()
+
+
+def test_cleanup_orphans_only_removes_real_direct_child_files(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    regular = store.sources / "regular.wav"
+    regular.write_bytes(b"regular")
+    nested = store.sources / "nested"
+    nested.mkdir()
+    (nested / "nested.wav").write_bytes(b"nested")
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"outside")
+    link = store.sources / "linked.wav"
+    try:
+        link.symlink_to(outside)
+    except OSError as exc:
+        if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 1314:
+            pytest.skip(f"symlink creation denied: {exc}")
+        raise
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result["removed"] == [str(regular)]
+    assert not regular.exists()
+    assert (nested / "nested.wav").exists()
+    assert link.is_symlink()
+    assert outside.exists()

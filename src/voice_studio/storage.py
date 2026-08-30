@@ -641,20 +641,190 @@ class LocalStore:
             "exports": exports,
         }
 
+    @staticmethod
+    def _absolute_lexical_path(value: str | os.PathLike[str]) -> Path:
+        """Normalize a path without resolving links in any component."""
+
+        return Path(os.path.abspath(os.fspath(Path(value).expanduser())))
+
+    def _managed_missing_path(self, value: str) -> Path:
+        """Validate a managed path without following links and return its lexical path."""
+
+        try:
+            source_entry = self.sources.lstat()
+            if _is_reparse_point(source_entry) or not stat.S_ISDIR(source_entry.st_mode):
+                raise ValueError("managed sources directory is not a real directory")
+            source_root = self.sources.resolve(strict=True)
+            root_info = source_root.lstat()
+        except OSError as exc:
+            raise ValueError(f"managed sources could not be inspected safely: {exc}") from exc
+        if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
+            raise ValueError("managed sources directory is not a real directory")
+
+        target = self._absolute_lexical_path(value)
+        root_text = os.path.normcase(os.path.normpath(os.fspath(source_root)))
+        target_text = os.path.normcase(os.path.normpath(os.fspath(target)))
+        try:
+            contained = os.path.commonpath((root_text, target_text)) == root_text
+        except ValueError:
+            contained = False
+        if not contained or target_text == root_text:
+            raise ValueError("managed source path is outside managed sources")
+        relative = os.path.relpath(target_text, root_text)
+        parts = Path(relative).parts
+        if not parts or parts[0] == os.pardir or os.pardir in parts:
+            raise ValueError("managed source path is outside managed sources")
+        target = source_root.joinpath(*parts)
+
+        parent = source_root
+        for part in parts[:-1]:
+            parent /= part
+            try:
+                info = parent.lstat()
+            except FileNotFoundError as exc:
+                raise ValueError("managed source path has a missing parent") from exc
+            except OSError as exc:
+                raise ValueError(
+                    f"managed source path could not be inspected safely: {exc}"
+                ) from exc
+            if _is_reparse_point(info):
+                raise ValueError("managed source path has an unsafe link or reparse ancestor")
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("managed source path has a non-directory ancestor")
+        return target
+
+    def repair_missing_source(
+        self,
+        transcript_id: str,
+        *,
+        confirmed: bool = False,
+        expected_path: str | None = None,
+    ) -> dict[str, object]:
+        """Detach one transcript from a confirmed missing managed source."""
+
+        if not confirmed:
+            raise ValueError("missing-source repair requires --yes")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload_json FROM transcripts WHERE id = ?", (transcript_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"transcript not found: {transcript_id}")
+            transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            old_path = transcript.source_path
+            if not old_path:
+                raise ValueError("transcript has no source to repair")
+            if expected_path is not None:
+                try:
+                    expected = self._absolute_lexical_path(expected_path)
+                    actual = self._absolute_lexical_path(old_path)
+                except (OSError, TypeError, ValueError) as exc:
+                    raise ValueError("expected path does not match stored source path") from exc
+                if os.path.normcase(os.path.normpath(os.fspath(expected))) != os.path.normcase(
+                    os.path.normpath(os.fspath(actual))
+                ):
+                    raise ValueError("expected path does not match stored source path")
+
+            target = self._managed_missing_path(old_path)
+            try:
+                info = target.lstat()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                raise ValueError(
+                    f"managed source could not be inspected safely: {exc}"
+                ) from exc
+            else:
+                if _is_reparse_point(info):
+                    raise ValueError("managed source path is an unsafe link or reparse point")
+                raise ValueError("managed source has reappeared; repair was refused")
+
+            transcript.source_path = None
+            transcript.audio_retained = False
+            payload = json.dumps(transcript.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            db.execute(
+                "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+                (payload, transcript_id),
+            )
+        return {
+            "repaired": True,
+            "id": transcript_id,
+            "path": old_path,
+            "action": "detached_missing_source",
+        }
+
     def cleanup_orphans(self, *, confirmed: bool = False) -> dict[str, object]:
         if not confirmed:
             raise ValueError("orphan cleanup requires --yes")
         audit = self.audit()
         removed: list[str] = []
-        source_root = self.sources.resolve()
-        for value in audit["orphans"]:
-            target = Path(value)
-            try:
-                target.resolve().relative_to(source_root)
-            except (OSError, ValueError):
-                continue
-            target.unlink(missing_ok=True)
-            removed.append(str(target))
+        try:
+            source_entry = self.sources.lstat()
+            if _is_reparse_point(source_entry) or not stat.S_ISDIR(source_entry.st_mode):
+                return {"removed": removed, "count": len(removed)}
+            source_root = self.sources.resolve(strict=True)
+            root_info = source_root.lstat()
+        except OSError:
+            return {"removed": removed, "count": len(removed)}
+        if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
+            return {"removed": removed, "count": len(removed)}
+        candidates = audit.get("orphans", [])
+        if not isinstance(candidates, list):
+            candidates = []
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT payload_json FROM transcripts").fetchall()
+            referenced: set[Path] = set()
+            for row in rows:
+                try:
+                    source_path = Transcript.from_dict(json.loads(row["payload_json"])).source_path
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if not source_path:
+                    continue
+                try:
+                    referenced.add(Path(source_path).expanduser().resolve())
+                except OSError:
+                    continue
+
+            for value in candidates:
+                if not isinstance(value, str):
+                    continue
+                try:
+                    lexical = self._absolute_lexical_path(value)
+                    root_text = os.path.normcase(os.path.normpath(os.fspath(source_root)))
+                    candidate_text = os.path.normcase(os.path.normpath(os.fspath(lexical)))
+                    relative = os.path.relpath(candidate_text, root_text)
+                    parts = Path(relative).parts
+                    if (
+                        not parts
+                        or len(parts) != 1
+                        or parts[0] in {".", os.pardir}
+                        or os.pardir in parts
+                    ):
+                        continue
+                    target = source_root / parts[0]
+                    info = target.lstat()
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError):
+                    continue
+                if _is_reparse_point(info) or not stat.S_ISREG(info.st_mode):
+                    continue
+                try:
+                    resolved = target.resolve(strict=True)
+                except OSError:
+                    continue
+                if resolved in referenced:
+                    continue
+                try:
+                    target.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    continue
+                removed.append(str(target))
         return {"removed": removed, "count": len(removed)}
 
     def delete(self, transcript_id: str, *, delete_audio: bool = False) -> bool:
