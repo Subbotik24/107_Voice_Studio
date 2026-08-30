@@ -18,7 +18,12 @@
 - `verify_backup(path)` and `restore_backup(path, data_root, *, settings_target)` signatures do not change.
 - Journal version and exact field set do not change; no transcript text, settings payload, dictionary content, key material, or secrets enter the journal.
 - A `*.recovery-*` tree is never recursively deleted; rollback may rename it back to `data_root` as the existing contract already permits.
-- Symlinks, Windows junctions/reparse points, and special files are never followed or copied as local restore state.
+- Every observed symlink, Windows junction/reparse point, and special file is rejected;
+  ordinary concurrent tree changes are detected and abort before swap. A malicious
+  same-account actor replacing a path between filesystem syscalls is outside this
+  local/private product's threat boundary because that actor can already modify the
+  user's private data directly; the implementation must not claim kernel-handle-level
+  atomicity against that actor.
 - Every code change is test-first and each task ends with compile, Ruff, focused pytest, and a commit; no push.
 
 ---
@@ -206,4 +211,3 @@ git diff e379b42..HEAD --check
 ```
 
 It also verifies that archive fixtures contain no `models/` or `exports/`, no user-specific absolute paths or model weights entered Git, and local `main` remains unpushed.
-
