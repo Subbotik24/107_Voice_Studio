@@ -652,16 +652,22 @@ class LocalStore:
 
         try:
             source_entry = self.sources.lstat()
-            if _is_reparse_point(source_entry) or not stat.S_ISDIR(source_entry.st_mode):
-                raise ValueError("managed sources directory is not a real directory")
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise ValueError(f"managed sources could not be inspected safely: {exc}") from exc
+        if _is_reparse_point(source_entry) or not stat.S_ISDIR(source_entry.st_mode):
+            raise ValueError("managed sources directory is not a real directory")
+        try:
             source_root = self.sources.resolve(strict=True)
             root_info = source_root.lstat()
-        except OSError as exc:
+        except (OSError, ValueError, UnicodeError) as exc:
             raise ValueError(f"managed sources could not be inspected safely: {exc}") from exc
         if _is_reparse_point(root_info) or not stat.S_ISDIR(root_info.st_mode):
             raise ValueError("managed sources directory is not a real directory")
 
-        target = self._absolute_lexical_path(value)
+        try:
+            target = self._absolute_lexical_path(value)
+        except (OSError, ValueError, UnicodeError) as exc:
+            raise ValueError(f"managed source path could not be inspected safely: {exc}") from exc
         root_text = os.path.normcase(os.path.normpath(os.fspath(source_root)))
         target_text = os.path.normcase(os.path.normpath(os.fspath(target)))
         try:
@@ -683,7 +689,7 @@ class LocalStore:
                 info = parent.lstat()
             except FileNotFoundError as exc:
                 raise ValueError("managed source path has a missing parent") from exc
-            except OSError as exc:
+            except (OSError, ValueError, UnicodeError) as exc:
                 raise ValueError(
                     f"managed source path could not be inspected safely: {exc}"
                 ) from exc
@@ -731,7 +737,7 @@ class LocalStore:
                 info = target.lstat()
             except FileNotFoundError:
                 pass
-            except OSError as exc:
+            except (OSError, ValueError, UnicodeError) as exc:
                 raise ValueError(
                     f"managed source could not be inspected safely: {exc}"
                 ) from exc

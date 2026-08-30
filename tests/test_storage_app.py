@@ -1114,6 +1114,27 @@ def test_repair_missing_source_refuses_unknown_filesystem_error(tmp_path, monkey
     assert store.get(item.id).source_path == str(managed)
 
 
+@pytest.mark.parametrize("invalid_suffix", ["bad\x00.wav", "bad\x00/child.wav"])
+def test_repair_missing_source_refuses_invalid_path_without_mutation(tmp_path, invalid_suffix):
+    store = LocalStore(tmp_path / "data")
+    item = transcript()
+    store.save(item)
+    payload = item.to_dict()
+    payload["source_path"] = str(store.sources / invalid_suffix)
+    with store._connect() as db:
+        db.execute(
+            "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+            (json.dumps(payload), item.id),
+        )
+
+    with pytest.raises(ValueError, match="could not be inspected safely"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    persisted = store.get(item.id)
+    assert persisted.source_path == payload["source_path"]
+    assert persisted.audio_retained is True
+
+
 @pytest.mark.parametrize("case", ["unknown", "no_source", "outside", "mismatch"])
 def test_repair_missing_source_refuses_invalid_requests(tmp_path, case):
     store = LocalStore(tmp_path / "data")
@@ -1171,13 +1192,23 @@ def test_cleanup_orphans_rechecks_db_reference_inside_write_transaction(tmp_path
     assert managed.exists()
 
 
-def test_cleanup_orphans_only_removes_real_direct_child_files(tmp_path):
+def test_cleanup_orphans_removes_regular_direct_child_and_preserves_nested(tmp_path):
     store = LocalStore(tmp_path / "data")
     regular = store.sources / "regular.wav"
     regular.write_bytes(b"regular")
     nested = store.sources / "nested"
     nested.mkdir()
     (nested / "nested.wav").write_bytes(b"nested")
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result["removed"] == [str(regular)]
+    assert not regular.exists()
+    assert (nested / "nested.wav").exists()
+
+
+def test_cleanup_orphans_refuses_symlink_candidate(tmp_path):
+    store = LocalStore(tmp_path / "data")
     outside = tmp_path / "outside.wav"
     outside.write_bytes(b"outside")
     link = store.sources / "linked.wav"
@@ -1190,8 +1221,103 @@ def test_cleanup_orphans_only_removes_real_direct_child_files(tmp_path):
 
     result = store.cleanup_orphans(confirmed=True)
 
-    assert result["removed"] == [str(regular)]
-    assert not regular.exists()
-    assert (nested / "nested.wav").exists()
+    assert result == {"removed": [], "count": 0}
     assert link.is_symlink()
     assert outside.exists()
+
+
+def test_cleanup_orphans_recheck_race_preserves_reference_committed_before_lock(
+    tmp_path,
+):
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "concurrent.wav"
+    source.write_bytes(b"concurrent-reference")
+    managed, digest = store.import_source(source)
+    item = transcript()
+    item.id = "concurrent-reference"
+    item.source_path = str(managed)
+    item.source_sha256 = digest
+    audit_ready = threading.Event()
+    release_audit = threading.Event()
+
+    def gated_audit():
+        audit_ready.set()
+        assert release_audit.wait(timeout=5)
+        return {"orphans": [str(managed.resolve())]}
+
+    store.audit = gated_audit
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        cleanup_future = pool.submit(store.cleanup_orphans, confirmed=True)
+        assert audit_ready.wait(timeout=5)
+        LocalStore(store.root).save(item)
+        release_audit.set()
+        result = cleanup_future.result(timeout=5)
+
+    assert result == {"removed": [], "count": 0}
+    assert managed.exists()
+
+
+def test_repair_missing_source_refuses_sources_root_junction(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item = transcript()
+    store.save(item)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    original_sources = store.sources
+    original_sources.rmdir()
+    _make_storage_junction(original_sources, outside)
+    payload = item.to_dict()
+    payload["source_path"] = str(original_sources / "missing.wav")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+            (json.dumps(payload), item.id),
+        )
+
+    with pytest.raises(ValueError, match="managed sources directory"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    assert sentinel.read_bytes() == b"external"
+
+
+def test_repair_missing_source_refuses_ancestor_junction(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    item = transcript()
+    store.save(item)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    ancestor = store.sources / "nested"
+    _make_storage_junction(ancestor, outside)
+    payload = item.to_dict()
+    payload["source_path"] = str(ancestor / "missing.wav")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+            (json.dumps(payload), item.id),
+        )
+
+    with pytest.raises(ValueError, match="unsafe link"):
+        store.repair_missing_source(item.id, confirmed=True)
+
+    assert sentinel.read_bytes() == b"external"
+
+
+def test_cleanup_orphans_refuses_final_junction_without_touching_target(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    candidate = store.sources / "junction"
+    _make_storage_junction(candidate, outside)
+    store.audit = lambda: {"orphans": [str(candidate.resolve())]}
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result == {"removed": [], "count": 0}
+    assert sentinel.read_bytes() == b"external"
+    assert candidate.exists()
