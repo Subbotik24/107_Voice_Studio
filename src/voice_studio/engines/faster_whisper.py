@@ -71,8 +71,12 @@ class FasterWhisperEngine:
             raise RuntimeError(
                 f"CTranslate2 compute-type detection failed for {runtime_device}: {exc}"
             ) from exc
-        if self.compute_type not in set(supported):
-            allowed = ", ".join(str(item) for item in supported)
+        supported_values = {str(item) for item in supported}
+        if self.compute_type not in supported_values and self.compute_type not in {
+            "auto",
+            "default",
+        }:
+            allowed = ", ".join(sorted(supported_values))
             raise RuntimeError(
                 f"compute_type '{self.compute_type}' is not supported on "
                 f"{runtime_device}; runtime supports: {allowed or 'none'}"

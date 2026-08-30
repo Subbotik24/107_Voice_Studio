@@ -48,3 +48,22 @@ def test_engine_rejects_runtime_unsupported_pair_before_whisper_model_load(
 
     with pytest.raises(RuntimeError, match=message):
         engine._load()
+
+
+def test_engine_allows_selector_compute_types_when_runtime_reports_concrete_types(
+    monkeypatch,
+):
+    fake_ctranslate2 = SimpleNamespace(
+        get_cuda_device_count=lambda: 0,
+        get_supported_compute_types=lambda _device=None: ("int8",),
+    )
+    model = object()
+    monkeypatch.setitem(sys.modules, "ctranslate2", fake_ctranslate2)
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=lambda *_args, **_kwargs: model),
+    )
+
+    assert FasterWhisperEngine("tiny", compute_type="default")._load() is model
+    assert FasterWhisperEngine("tiny", compute_type="auto")._load() is model
