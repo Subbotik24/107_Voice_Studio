@@ -117,6 +117,8 @@ rm -rf "$STAGE_DIRECTORY/pyinstaller-dist" "$STAGE_DIRECTORY/pyinstaller-work"
     > SHA256SUMS.txt
 )
 
-mv "$STAGE_DIRECTORY" "$FINAL_DIRECTORY"
+"$PYTHON_BIN" scripts/release_filesystem.py promote \
+  --source "$STAGE_DIRECTORY" \
+  --destination "$FINAL_DIRECTORY"
 trap - EXIT
 echo "Created Test RC: $FINAL_DIRECTORY"

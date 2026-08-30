@@ -191,7 +191,7 @@ This artifact must pass a real Windows 10/11 x64 microphone, hotkey and
     $ChecksumLines | Set-Content -Path (Join-Path $StageDirectory "SHA256SUMS.txt") `
         -Encoding ASCII
 
-    Move-Item -Path $StageDirectory -Destination $FinalDirectory
+    Invoke-Checked $Python scripts/release_filesystem.py promote --source $StageDirectory --destination $FinalDirectory
     Write-Host "Created verified unsigned Windows copy: $FinalDirectory"
     Write-Host "Executable: $FinalDirectory\VOICE Studio\VOICE Studio.exe"
     Write-Host "Archive: $FinalDirectory\$ArchiveName"

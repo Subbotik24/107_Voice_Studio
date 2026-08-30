@@ -267,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        lock_text = args.lock.read_text(encoding="utf-8")
+        lock_text = args.lock.read_bytes().decode("utf-8")
         document = build_sbom(
             lock_text, project_name=args.project_name, project_version=args.project_version
         )

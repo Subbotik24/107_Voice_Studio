@@ -46,6 +46,30 @@ def write_sbom(path, *, project_version="0.3.0rc1"):
     return path
 
 
+def _make_directory_redirect(link: Path, target: Path) -> None:
+    if sys.platform == "win32":
+        result = subprocess.run(
+            ["cmd.exe", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            pytest.skip("directory junction creation is unavailable")
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pytest.skip("directory symlink creation is unavailable")
+
+
+def _remove_directory_redirect(link: Path) -> None:
+    if sys.platform == "win32":
+        os.rmdir(link)
+    else:
+        link.unlink()
+
+
 def test_release_manifest_has_relative_artifacts_and_acceptance_evidence(tmp_path):
     release = tmp_path / "release"
     release.mkdir()
@@ -281,6 +305,138 @@ def test_release_manifest_rejects_sbom_path_swap_during_read(tmp_path, monkeypat
         )
     assert target_lstat_calls == 2
     assert str(tmp_path) not in str(error.value)
+
+
+def test_release_manifest_rejects_in_place_mutation_after_descriptor_close(
+    tmp_path, monkeypatch
+):
+    release = tmp_path / "release"
+    release.mkdir()
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    result = acceptance(tmp_path / "acceptance.json")
+    sbom = write_sbom(release / "voice-studio-sbom.cdx.json")
+    replacement = json.dumps(
+        build_sbom(
+            "bravo==1\n",
+            project_name="voice-studio",
+            project_version="0.3.0rc1",
+        )
+    ).encode("utf-8")
+    assert len(replacement) == sbom.stat().st_size
+
+    original_close = os.close
+    mutated = False
+
+    def close_then_mutate(descriptor):
+        nonlocal mutated
+        original_close(descriptor)
+        if not mutated:
+            mutated = True
+            with sbom.open("r+b") as stream:
+                stream.write(replacement)
+                stream.flush()
+
+    monkeypatch.setattr(manifest_module.os, "close", close_then_mutate)
+    with pytest.raises(ValueError, match="changed") as error:
+        create_manifest(
+            release,
+            [artifact],
+            sbom,
+            release_label="0.2.0-test-rc1",
+            acceptance_result=result,
+            repository_root=tmp_path,
+        )
+    assert mutated
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_release_manifest_rejects_release_root_swap_before_open(
+    tmp_path, monkeypatch
+):
+    release = tmp_path / "release"
+    release.mkdir()
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    sbom = write_sbom(release / "voice-studio-sbom.cdx.json")
+    result = acceptance(tmp_path / "acceptance.json")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.link(sbom, outside / sbom.name)
+    os.link(artifact, outside / artifact.name)
+    parked = tmp_path / "parked-release"
+    original_lstat = os.lstat
+    swapped = False
+
+    def swap_root_after_target_inspection(path):
+        nonlocal swapped
+        info = original_lstat(path)
+        if not swapped and Path(path) == sbom:
+            release.rename(parked)
+            _make_directory_redirect(release, outside)
+            swapped = True
+        return info
+
+    monkeypatch.setattr(manifest_module.os, "lstat", swap_root_after_target_inspection)
+    try:
+        with pytest.raises(ValueError, match="changed|safe|reparse") as error:
+            create_manifest(
+                release,
+                [artifact],
+                sbom,
+                release_label="0.2.0-test-rc1",
+                acceptance_result=result,
+                repository_root=tmp_path,
+            )
+        assert swapped
+        assert str(tmp_path) not in str(error.value)
+    finally:
+        if swapped:
+            _remove_directory_redirect(release)
+            parked.rename(release)
+
+
+def test_release_manifest_rejects_ancestor_swap_before_open(tmp_path, monkeypatch):
+    release = tmp_path / "release"
+    nested = release / "nested"
+    nested.mkdir(parents=True)
+    artifact = release / "app.whl"
+    artifact.write_bytes(b"wheel")
+    sbom = write_sbom(nested / "voice-studio-sbom.cdx.json")
+    result = acceptance(tmp_path / "acceptance.json")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    os.link(sbom, outside / sbom.name)
+    parked = release / "parked-nested"
+    original_lstat = os.lstat
+    swapped = False
+
+    def swap_ancestor_after_target_inspection(path):
+        nonlocal swapped
+        info = original_lstat(path)
+        if not swapped and Path(path) == sbom:
+            nested.rename(parked)
+            _make_directory_redirect(nested, outside)
+            swapped = True
+        return info
+
+    monkeypatch.setattr(manifest_module.os, "lstat", swap_ancestor_after_target_inspection)
+    try:
+        with pytest.raises(ValueError, match="changed|safe|reparse") as error:
+            create_manifest(
+                release,
+                [artifact],
+                sbom,
+                release_label="0.2.0-test-rc1",
+                acceptance_result=result,
+                repository_root=tmp_path,
+            )
+        assert swapped
+        assert str(tmp_path) not in str(error.value)
+    finally:
+        if swapped:
+            _remove_directory_redirect(nested)
+            parked.rename(nested)
 
 
 def test_release_manifest_rejects_sbom_symlink_without_private_path(tmp_path):

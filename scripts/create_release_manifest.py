@@ -13,8 +13,10 @@ from typing import Any
 
 if __package__:
     from scripts.generate_sbom import validate_sbom_document
+    from scripts.release_filesystem import file_fingerprint, read_file_within_root
 else:
     from generate_sbom import validate_sbom_document
+    from release_filesystem import file_fingerprint, read_file_within_root
 
 _PROJECT_VERSION = "0.3.0rc1"
 _FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
@@ -85,22 +87,6 @@ def _is_reparse_point(info: os.stat_result) -> bool:
     )
 
 
-def _file_fingerprint(info: os.stat_result) -> tuple[int, ...]:
-    return (
-        getattr(info, "st_dev", 0),
-        getattr(info, "st_ino", 0),
-        stat.S_IFMT(info.st_mode),
-        info.st_size,
-        getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
-        getattr(info, "st_ctime_ns", int(info.st_ctime * 1_000_000_000)),
-        getattr(info, "st_file_attributes", 0),
-    )
-
-
-def _file_identity(info: os.stat_result) -> tuple[int, int]:
-    return (getattr(info, "st_dev", 0), getattr(info, "st_ino", 0))
-
-
 def _sbom_stat(path: Path) -> os.stat_result:
     try:
         return os.lstat(path)
@@ -137,53 +123,27 @@ def _read_sbom_bytes(release_directory: Path, sbom: Path) -> tuple[bytes, str]:
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("release manifest SBOM must be a regular file")
 
-    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor: int | None = None
     try:
-        descriptor = os.open(target, flags)
+        content, secure_relative, fingerprint = read_file_within_root(root, target)
     except FileNotFoundError as exc:
         raise FileNotFoundError("release manifest SBOM does not exist") from exc
+    except ValueError as exc:
+        if "changed" in str(exc):
+            raise ValueError("release manifest SBOM changed during read") from exc
+        raise ValueError("release manifest SBOM could not be opened safely") from exc
     except OSError as exc:
         raise ValueError("release manifest SBOM could not be opened safely") from exc
     try:
-        opened = os.fstat(descriptor)
-        if (
-            _is_reparse_point(opened)
-            or not stat.S_ISREG(opened.st_mode)
-            or _file_identity(opened) != _file_identity(info)
-            or opened.st_size != info.st_size
-        ):
-            raise ValueError("release manifest SBOM changed while opening")
-        try:
-            with os.fdopen(descriptor, "rb", closefd=False) as stream:
-                content = stream.read()
-        except OSError as exc:
-            raise ValueError("release manifest SBOM could not be read safely") from exc
-        after_open = os.fstat(descriptor)
-        if (
-            _is_reparse_point(after_open)
-            or not stat.S_ISREG(after_open.st_mode)
-            or _file_fingerprint(after_open) != _file_fingerprint(opened)
-        ):
-            raise ValueError("release manifest SBOM changed during read")
-        os.close(descriptor)
-        descriptor = None
-        try:
-            after_path = os.lstat(target)
-        except OSError as exc:
-            raise ValueError("release manifest SBOM changed during read") from exc
-        if (
-            _is_reparse_point(after_path)
-            or not stat.S_ISREG(after_path.st_mode)
-            or _file_identity(after_path) != _file_identity(opened)
-        ):
-            raise ValueError("release manifest SBOM changed during read")
-        return content, relative.as_posix()
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        after_path = os.lstat(target)
+    except OSError as exc:
+        raise ValueError("release manifest SBOM changed during read") from exc
+    if (
+        _is_reparse_point(after_path)
+        or not stat.S_ISREG(after_path.st_mode)
+        or file_fingerprint(after_path) != fingerprint
+    ):
+        raise ValueError("release manifest SBOM changed during read")
+    return content, secure_relative
 
 
 def create_manifest(

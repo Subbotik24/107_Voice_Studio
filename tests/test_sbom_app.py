@@ -197,6 +197,35 @@ def test_cli_preserves_existing_output_when_input_is_invalid(tmp_path):
     assert output.read_text(encoding="utf-8") == "keep me\n"
 
 
+def test_cli_rejects_bare_carriage_return_without_replacing_output(tmp_path):
+    lock = tmp_path / "bare-cr.lock"
+    output = tmp_path / "sbom.json"
+    lock.write_bytes(b"alpha==1\rbeta==2\n")
+    output.write_bytes(b"keep me\n")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/generate_sbom.py",
+            "--lock",
+            str(lock),
+            "--project-name",
+            "voice-studio",
+            "--project-version",
+            "0.3.0rc1",
+            "--output",
+            str(output),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "unsupported line separator" in result.stderr
+    assert output.read_bytes() == b"keep me\n"
+
+
 def test_repository_lock_contains_exact_58_components():
     lock_path = Path(__file__).parents[1] / "requirements-windows.lock"
     components = parse_locked_components(lock_path.read_text(encoding="utf-8"))

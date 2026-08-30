@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+import scripts.release_filesystem as release_filesystem
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -76,7 +81,7 @@ def test_test_rc_build_is_atomic_and_refuses_overwrite() -> None:
     assert 'RELEASE_LABEL="0.3.0-test-rc1"' in build_script
     assert "refusing to overwrite existing Test RC" in build_script
     assert "mktemp -d" in build_script
-    assert 'mv "$STAGE_DIRECTORY" "$FINAL_DIRECTORY"' in build_script
+    assert "scripts/release_filesystem.py promote" in build_script
     assert "VOICE_STUDIO_ACCEPTANCE_RESULT" in build_script
     assert 'codesign --force --deep --sign - "$FINAL_APP"' in build_script
     assert '"$PYTHON_BIN" -m build' in build_script
@@ -99,11 +104,17 @@ def test_release_staging_generates_sbom_from_repository_lock(script_name: str) -
     assert "voice-studio-sbom.cdx.json" in build_script
     assert "--project-name" in build_script
     assert "--project-version" in build_script
-    assert "--output" in build_script
     assert "pip freeze" not in build_script
     assert "pip list" not in build_script
     assert "https://" not in build_script
     assert "http://" not in build_script
+
+    if script_name == "build_windows.ps1":
+        assert '$SBOM = Join-Path $StageDirectory "voice-studio-sbom.cdx.json"' in build_script
+        assert re.search(r"--output[ \t]+\$SBOM(?:\r?\n|$)", build_script)
+    else:
+        assert 'SBOM="$STAGE_DIRECTORY/voice-studio-sbom.cdx.json"' in build_script
+        assert '--output "$SBOM"' in build_script
 
 
 def test_windows_release_checksums_the_staged_sbom() -> None:
@@ -114,6 +125,137 @@ def test_windows_release_checksums_the_staged_sbom() -> None:
     assert "$ChecksumTargets" in build_script
     assert "$SBOM" in build_script
     assert "$ChecksumTargets = @($ArchivePath, $RuntimeProbe, $ReadmePath, $SBOM)" in build_script
+
+
+def test_release_promotion_helper_moves_exact_directory_without_clobber(tmp_path) -> None:
+    stage = tmp_path / "stage"
+    final = tmp_path / "final"
+    stage.mkdir()
+    (stage / "artifact.txt").write_text("staged", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/release_filesystem.py",
+            "promote",
+            "--source",
+            str(stage),
+            "--destination",
+            str(final),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert not stage.exists()
+    assert (final / "artifact.txt").read_text(encoding="utf-8") == "staged"
+
+
+def test_release_promotion_helper_refuses_existing_destination_without_nesting(
+    tmp_path,
+) -> None:
+    stage = tmp_path / "stage"
+    final = tmp_path / "final"
+    stage.mkdir()
+    final.mkdir()
+    (stage / "staged.txt").write_text("staged", encoding="utf-8")
+    (final / "existing.txt").write_text("existing", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/release_filesystem.py",
+            "promote",
+            "--source",
+            str(stage),
+            "--destination",
+            str(final),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "destination already exists" in result.stderr
+    assert (stage / "staged.txt").read_text(encoding="utf-8") == "staged"
+    assert (final / "existing.txt").read_text(encoding="utf-8") == "existing"
+    assert not (final / stage.name).exists()
+    assert str(tmp_path) not in result.stderr
+
+
+def test_release_promotion_primitive_refuses_destination_created_after_precheck(
+    tmp_path, monkeypatch
+) -> None:
+    stage = tmp_path / "stage"
+    final = tmp_path / "final"
+    stage.mkdir()
+    (stage / "staged.txt").write_text("staged", encoding="utf-8")
+    original_lstat = release_filesystem.os.lstat
+    raced = False
+
+    def create_destination_during_precheck(path):
+        nonlocal raced
+        if Path(path) == final and not raced:
+            raced = True
+            final.mkdir()
+            (final / "existing.txt").write_text("existing", encoding="utf-8")
+            raise FileNotFoundError
+        return original_lstat(path)
+
+    monkeypatch.setattr(release_filesystem.os, "lstat", create_destination_during_precheck)
+    with pytest.raises(FileExistsError, match="destination already exists") as error:
+        release_filesystem.promote_directory_no_replace(stage, final)
+
+    assert raced
+    assert (stage / "staged.txt").read_text(encoding="utf-8") == "staged"
+    assert (final / "existing.txt").read_text(encoding="utf-8") == "existing"
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_release_promotion_refuses_unsupported_platform_without_moving(
+    tmp_path, monkeypatch
+) -> None:
+    stage = tmp_path / "stage"
+    final = tmp_path / "final"
+    stage.mkdir()
+    (stage / "staged.txt").write_text("staged", encoding="utf-8")
+    monkeypatch.setattr(release_filesystem.sys, "platform", "unsupported-os")
+
+    with pytest.raises(ValueError, match="platform is unsupported") as error:
+        release_filesystem.promote_directory_no_replace(stage, final)
+
+    assert (stage / "staged.txt").read_text(encoding="utf-8") == "staged"
+    assert not final.exists()
+    assert str(tmp_path) not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "script_name, expected_call",
+    [
+        (
+            "build_windows.ps1",
+            "scripts/release_filesystem.py promote --source $StageDirectory "
+            "--destination $FinalDirectory",
+        ),
+        (
+            "build_test_rc.sh",
+            "scripts/release_filesystem.py promote \\\n"
+            '  --source "$STAGE_DIRECTORY" \\\n'
+            '  --destination "$FINAL_DIRECTORY"',
+        ),
+    ],
+)
+def test_release_builders_use_atomic_no_replace_promotion(
+    script_name: str, expected_call: str
+) -> None:
+    build_script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+
+    assert expected_call in build_script
+    assert 'mv "$STAGE_DIRECTORY" "$FINAL_DIRECTORY"' not in build_script
+    assert "Move-Item -Path $StageDirectory -Destination $FinalDirectory" not in build_script
 
 
 def test_windows_build_is_atomic_and_runtime_verified() -> None:
@@ -130,7 +272,7 @@ def test_windows_build_is_atomic_and_runtime_verified() -> None:
     assert "Compress-Archive" in build_script
     assert "Security.Cryptography.SHA256" in build_script
     assert "Get-FileHash" not in build_script
-    assert "Move-Item" in build_script
+    assert "scripts/release_filesystem.py promote" in build_script
     assert '".wheel-source"' in build_script
     assert "all(n.split('/', 1)[0].startswith('voice_studio')" in build_script
     assert "RequiredWheelSuffixes" in build_script
