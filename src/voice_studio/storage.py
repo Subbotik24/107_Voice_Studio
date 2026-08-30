@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import string
 import uuid
 from collections.abc import Iterator
@@ -28,6 +29,8 @@ IMMUTABLE_TRANSCRIPT_FIELDS = (
 SCHEMA_VERSION = 1
 MAX_MANAGED_TARGET_ATTEMPTS = 16
 _UUID_ALPHABET = string.ascii_letters + string.digits + "!#$%&'()+,-.;=@[]^_{}~`"
+_FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+_SUPPORTED_EXPORT_SUFFIXES = {".txt", ".md", ".json", ".srt", ".vtt"}
 
 
 def _compact_uuid(value: uuid.UUID) -> str:
@@ -47,6 +50,12 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _is_reparse_point(info: os.stat_result) -> bool:
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & _FILE_ATTRIBUTE_REPARSE_POINT
+    )
 
 
 class LocalStore:
@@ -506,11 +515,14 @@ class LocalStore:
         integrity = [str(row[0]) for row in integrity_rows]
         referenced: set[Path] = set()
         missing: list[str] = []
+        missing_records: list[dict[str, str]] = []
         mismatched: list[str] = []
         unsafe: list[str] = []
+        transcript_ids: set[str] = set()
         source_root = self.sources.resolve()
         for row in rows:
             transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            transcript_ids.add(transcript.id)
             if not transcript.source_path:
                 continue
             target = Path(transcript.source_path).expanduser()
@@ -523,6 +535,7 @@ class LocalStore:
             referenced.add(resolved)
             if not resolved.is_file():
                 missing.append(str(resolved))
+                missing_records.append({"id": transcript.id, "path": str(resolved)})
             elif sha256_file(resolved) != transcript.source_sha256:
                 mismatched.append(str(resolved))
         orphans = [
@@ -530,6 +543,55 @@ class LocalStore:
             for path in self.sources.iterdir()
             if path.is_file() and path.resolve() not in referenced
         ]
+        from .model_catalog import ModelCatalog
+
+        model_catalog = ModelCatalog.inspect(self.models)
+        exports = {
+            "files": [],
+            "canonical_stale": [],
+            "unmanaged": [],
+            "blocked": [],
+        }
+        try:
+            with os.scandir(self.exports) as iterator:
+                export_entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as exc:
+            exports["blocked"].append(
+                {"name": ".", "reason": f"export directory could not be inspected safely: {exc}"}
+            )
+            export_entries = []
+        for entry in export_entries:
+            name = entry.name
+            path = self.exports / name
+            try:
+                entry_stat = entry.stat(follow_symlinks=False)
+            except OSError:
+                exports["blocked"].append(
+                    {"name": name, "reason": "export entry could not be inspected safely"}
+                )
+                continue
+            if _is_reparse_point(entry_stat):
+                reason = "export entry is a symlink" if stat.S_ISLNK(entry_stat.st_mode) else (
+                    "export entry is a reparse point"
+                )
+                exports["blocked"].append({"name": name, "reason": reason})
+                continue
+            if not stat.S_ISREG(entry_stat.st_mode):
+                exports["blocked"].append(
+                    {"name": name, "reason": "export entry is not a regular file"}
+                )
+                continue
+            exports["files"].append(name)
+            if path.suffix in _SUPPORTED_EXPORT_SUFFIXES:
+                try:
+                    uuid.UUID(path.stem)
+                except (ValueError, AttributeError):
+                    pass
+                else:
+                    if path.stem not in transcript_ids:
+                        exports["canonical_stale"].append(name)
+                        continue
+            exports["unmanaged"].append(name)
         passed = integrity == ["ok"] and not missing and not mismatched and not unsafe
         return {
             "status": "PASS" if passed else "FAIL",
@@ -538,8 +600,11 @@ class LocalStore:
             "records": len(rows),
             "orphans": sorted(orphans),
             "missing": sorted(missing),
+            "missing_records": sorted(missing_records, key=lambda item: (item["path"], item["id"])),
             "hash_mismatches": sorted(mismatched),
             "unsafe_paths": sorted(unsafe),
+            "model_catalog": model_catalog,
+            "exports": exports,
         }
 
     def cleanup_orphans(self, *, confirmed: bool = False) -> dict[str, object]:

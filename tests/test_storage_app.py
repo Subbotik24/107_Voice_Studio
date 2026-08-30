@@ -754,3 +754,73 @@ def test_storage_audit_and_explicit_orphan_cleanup(tmp_path):
     result = store.cleanup_orphans(confirmed=True)
     assert result["count"] == 1
     assert not orphan.exists()
+
+
+def test_storage_audit_reports_structured_missing_records(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    missing = []
+    for item_id in ("row-a", "row-b"):
+        original = tmp_path / f"{item_id}.wav"
+        original.write_bytes(item_id.encode())
+        managed, digest = store.import_source(original)
+        item = transcript()
+        item.id = item_id
+        item.source_path = str(managed)
+        item.source_sha256 = digest
+        store.save(item)
+        managed.unlink()
+        missing.append((item_id, str(managed.resolve())))
+
+    result = store.audit()
+
+    assert result["missing"] == sorted(path for _, path in missing)
+    assert result["missing_records"] == [
+        {"id": item_id, "path": path}
+        for item_id, path in sorted(missing, key=lambda value: value[1])
+    ]
+
+
+def test_storage_audit_reports_model_and_export_drift_without_writing(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    model_manifest = store.models / "catalog.json"
+    model_manifest.write_text(
+        '{"version": 1, "models": [{"id": "tiny", "path": "tiny"}]}',
+        encoding="utf-8",
+    )
+    existing_id = "12345678-1234-5678-1234-567812345678"
+    stale_id = "87654321-4321-8765-4321-876543218765"
+    existing = transcript()
+    existing.id = existing_id
+    store.save(existing)
+    (store.exports / f"{existing_id}.txt").write_bytes(b"existing")
+    (store.exports / f"{stale_id}.srt").write_bytes(b"stale")
+    (store.exports / "custom-name.md").write_bytes(b"custom")
+    (store.exports / "nested").mkdir()
+    before = {
+        path.relative_to(store.root): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in [model_manifest, *store.exports.iterdir()]
+        if path.is_file()
+    }
+
+    result = store.audit()
+
+    assert result["status"] == "PASS"
+    assert result["model_catalog"]["missing"] == [
+        {
+            "id": "tiny",
+            "path": str(store.models / "tiny"),
+            "reason": "catalogued model is absent",
+        }
+    ]
+    assert result["exports"] == {
+        "files": [f"{existing_id}.txt", f"{stale_id}.srt", "custom-name.md"],
+        "canonical_stale": [f"{stale_id}.srt"],
+        "unmanaged": [f"{existing_id}.txt", "custom-name.md"],
+        "blocked": [{"name": "nested", "reason": "export entry is not a regular file"}],
+    }
+    after = {
+        path.relative_to(store.root): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in [model_manifest, *store.exports.iterdir()]
+        if path.is_file()
+    }
+    assert after == before
