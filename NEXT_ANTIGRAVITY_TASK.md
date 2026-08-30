@@ -388,7 +388,7 @@ Task 2 lifecycle/concurrency tests, model-download escalation tests and the
 resource-tracker subprocess regression passed. Complete Windows `.venv` source
 verification, wheel build and `pip check` evidence are recorded in
 `VERIFICATION.md`; the detailed handoff is
-`.superpowers/sdd/2026-08-30-worker-process-queue-shutdown/task-3-report.md`.
+`docs/verification/2026-08-30-w2-s1-process-shutdown.md`.
 
 **НАСТУПНИЙ ІНКРЕМЕНТ:** implement the separate app/recorder/hotkey/maintenance
 thread lifecycle plan in
