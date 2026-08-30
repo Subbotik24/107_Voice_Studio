@@ -13,7 +13,9 @@ worker construction, checks explicit runtime pairs in the worker before
 The focused tests cover CPU-only and CUDA capability payloads, runtime import
 failure, malformed response, child start failure, timeout cleanup, parent
 runtime import boundaries, CLI `hardware detect --json`, readonly GUI choices,
-single-worker serialization, off-Tk probing, and no settings mutation.
+single-worker serialization, off-Tk probing, no settings mutation, job-boundary
+validation before source preparation, CTranslate2 `auto` device selection, and
+broken CTranslate2 import ordering/error handling.
 The normal windowed bundle's launcher does not dispatch CLI arguments. A fresh
 temporary console-only PyInstaller detector probe was built separately and
 completed the cold spawn round-trip; exact evidence is in

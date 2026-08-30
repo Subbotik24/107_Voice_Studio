@@ -32,7 +32,7 @@ release evidence remains in `VERIFICATION.md`.
 | W2-C3 stable audit snapshot | `7e7f8e0` | full pytest, focused storage/model/backup/CLI, compile, Ruff, diff check | 531 passed, 8 Windows symlink-privilege skips; focused 148 passed, 8 skipped | root replacement and temp containment changed at `b7ba7fd` |
 | W2-C3 final read-only audit | `b7ba7fd` | full pytest, focused storage/model/backup/CLI, focused independent review, compile, Ruff, diff check | 533 passed, 8 Windows symlink-privilege skips; related 150 passed, 8 skipped; final review CLEAN | storage/audit/CLI production code or corresponding tests change |
 | W2-C3 final docs/artifact | `1c0f471` | Help validation, wheel rebuild, pip check, diff check | 13 Help files PASS; wheel 700,821 bytes, SHA-256 `33441D2FB1932501241DA09E205C566EB6BD7DB392666ECAD29AFD0FEADBFCC8`; dependencies PASS | Help/package inputs or release metadata change |
-| W3-H1 hardware settings and advisory detection | `2819ecc` (docs: pending) | focused config/engine/hardware/CLI/GUI/runtime-boundary/i18n tests; one final source gate; temporary frozen console detector probe | Focused `151 passed`; final compileall + pytest `605 passed, 9 skipped in 45.68s`; cold no-parent-preload frozen child returned `ok` with CPU+CUDA and 7 compute types under 5 s | Any production change to hardware validation/detection, faster-whisper preflight, CLI hardware dispatch, GUI settings worker/event handling, i18n catalogs, or packaging launcher/spec; docs-only edits require Help validation and `git diff --check` |
+| W3-H1 hardware settings and advisory detection | `04c26a6` (docs: pending) | RED/GREEN review regressions; focused config/engine/hardware/CLI/GUI/runtime-boundary/i18n tests; one final source gate; temporary frozen console detector probe | Focused `154 passed in 3.73s`; final compileall + pytest `609 passed, 9 skipped in 41.75s`; cold no-parent-preload frozen child returned `ok` with CPU+CUDA and 7 compute types under 5 s | Any production change to hardware validation/detection, faster-whisper preflight, job settings boundary, CLI hardware dispatch, GUI settings worker/event handling, i18n catalogs, or packaging launcher/spec; docs-only edits require Help validation and `git diff --check` |
 | W4-B1 reproducible SBOM final fix | `3e85aaf1ab6e8505925ef12a5a822181d6b0a4df` | RED/GREEN release boundary regressions, two lock-root generators, one post-fix full quality gate, wheel, pip check | SBOM 11,159 bytes, SHA-256 `0e1d420fadbdcc4c78e8130c00b5f217c3a6374853f045d3c4cd73d22f300377`; 58 components; focused 60 passed / 1 skipped; full 583 passed / 9 Windows symlink-privilege skips; wheel 701,107 bytes, SHA-256 `dadf53304aca7a31d297cc31c031f62b37cb53cf3e85d02b43e8d1c072a31a7a` | production generator/manifest/release-filesystem/staging code or corresponding tests change |
 
 ## W3-H1 exact verification commands and rerun triggers
@@ -58,6 +58,14 @@ process run reported `elapsed=6,329s exit=0`. Instrumented comparison logged
 parent import `3.783s` and parent-preloaded child import `0.121s`. The normal
 windowed bundle remains GUI-only for CLI dispatch. Rerun the frozen probe after
 packaging spec/launcher changes or on a host with a fresh packaged runtime.
+
+The final review findings are resolved at production commit `04c26a6`:
+full `Settings.validate()` now runs before source preparation and worker
+startup; `auto` runtime preflight validates against CTranslate2's CUDA-or-CPU
+selection; and CTranslate2 import/preflight precedes `faster_whisper` import
+with a concrete broken-runtime error. The invalidated focused suite passed
+154 tests, and the final source gate passed 609 tests with 9 documented
+Windows symlink-privilege skips.
 
 Rerun the focused command for changes within the verified scope; rerun one full
 source gate after any production-code change outside this scope or after a
