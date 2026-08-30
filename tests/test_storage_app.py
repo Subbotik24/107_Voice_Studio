@@ -1257,6 +1257,27 @@ def test_cleanup_orphans_recheck_race_preserves_reference_committed_before_lock(
     assert managed.exists()
 
 
+def test_cleanup_orphans_skips_corrupt_nul_reference_row(tmp_path):
+    store = LocalStore(tmp_path / "data")
+    candidate = store.sources / "orphan.wav"
+    candidate.write_bytes(b"must survive")
+    item = transcript()
+    store.save(item)
+    payload = item.to_dict()
+    payload["source_path"] = str(store.sources / "bad\x00.wav")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+            (json.dumps(payload), item.id),
+        )
+    store.audit = lambda: {"orphans": [str(candidate)]}
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result == {"removed": [], "count": 0}
+    assert candidate.read_bytes() == b"must survive"
+
+
 def test_repair_missing_source_refuses_sources_root_junction(tmp_path):
     store = LocalStore(tmp_path / "data")
     item = transcript()
@@ -1314,7 +1335,7 @@ def test_cleanup_orphans_refuses_final_junction_without_touching_target(tmp_path
     sentinel.write_bytes(b"external")
     candidate = store.sources / "junction"
     _make_storage_junction(candidate, outside)
-    store.audit = lambda: {"orphans": [str(candidate.resolve())]}
+    store.audit = lambda: {"orphans": [str(candidate)]}
 
     result = store.cleanup_orphans(confirmed=True)
 

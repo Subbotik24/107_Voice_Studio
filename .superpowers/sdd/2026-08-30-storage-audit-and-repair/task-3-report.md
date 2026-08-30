@@ -44,3 +44,14 @@ The skipped tests are Windows symlink-creation privilege boundaries; real
 junction cases ran successfully. No cloud behavior, user originals, or
 external files are mutated by this increment. Changes remain local on `main`
 and were not pushed.
+
+## REVIEW ROUND 2
+
+- Corrupt transcript rows with NUL-containing source paths are now treated as
+  uninspectable references; orphan cleanup skips all deletion for that
+  transaction, preserving candidates without crashing. Path resolution catches
+  `OSError`, `ValueError` and `UnicodeError`.
+- The final Windows junction regression now supplies the lexical candidate path,
+  exercising containment, no-follow lstat and reparse rejection directly.
+- Storage/takeover/backup suite: 89 passed, 6 skipped; focused repair/orphan
+  selector: 15 passed, 1 skipped.

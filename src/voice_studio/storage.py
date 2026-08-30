@@ -782,17 +782,26 @@ class LocalStore:
             db.execute("BEGIN IMMEDIATE")
             rows = db.execute("SELECT payload_json FROM transcripts").fetchall()
             referenced: set[Path] = set()
+            uninspectable_reference = False
             for row in rows:
                 try:
                     source_path = Transcript.from_dict(json.loads(row["payload_json"])).source_path
-                except (TypeError, ValueError, json.JSONDecodeError):
+                except (TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+                    uninspectable_reference = True
                     continue
                 if not source_path:
                     continue
+                if not isinstance(source_path, str) or "\x00" in source_path:
+                    uninspectable_reference = True
+                    continue
                 try:
                     referenced.add(Path(source_path).expanduser().resolve())
-                except OSError:
+                except (OSError, ValueError, UnicodeError):
+                    uninspectable_reference = True
                     continue
+
+            if uninspectable_reference:
+                return {"removed": removed, "count": len(removed)}
 
             for value in candidates:
                 if not isinstance(value, str):
