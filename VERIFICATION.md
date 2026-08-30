@@ -32,13 +32,27 @@ ends it with the process.
 | `.\\.venv\\Scripts\\python.exe -m pip check` | PASS; `No broken requirements found.` |
 | `git diff --check` | PASS; no whitespace errors |
 
-Clean-profile source GUI smoke: with all three `VOICE_STUDIO_*_DIR`
-overrides under disposable `build\\w2-s1-thread-smoke`, verified PID `16356`
-started the GUI, received a controlled Tk `app._close` callback, and exited
-code `0` in `2232 ms` (<15 s), with empty stdout/stderr. This does not verify
-the frozen executable, physical microphone or native macOS event tap,
-antivirus/removable-media behavior, clean-machine installation, real power
-loss/forced termination, or the 50-task physical-device matrix.
+Clean-profile source GUI smoke used a fresh disposable run under
+`build\\w2-s1-thread-smoke\\run-r1\\{config,data,cache}`. The parent set all
+three `VOICE_STUDIO_*_DIR` overrides plus `PYTHONPATH=src`, then used
+`System.Diagnostics.ProcessStartInfo` to launch the resolved repository
+`.venv\\Scripts\\python.exe`. Its exact inline Python was
+`from voice_studio.app import VoiceStudioApp; app=VoiceStudioApp(); app.after(1000, app._close); app.mainloop()`.
+The child therefore instantiated `VoiceStudioApp`, entered Tk `mainloop()`,
+and requested normal close through `after(1000, app._close)`.
+
+The parent captured PID `23088`, verified before waiting that
+`Win32_Process.ExecutablePath` exactly matched the resolved repository `.venv`
+Python and that its command line contained `voice_studio.app`, then called
+`WaitForExit(15000)`. It redirected stdout/stderr to
+`build\\w2-s1-thread-smoke\\run-r1\\gui.stdout.log` and
+`gui.stderr.log`. Result: identity verified, controlled close `True`, exit
+code `0`, elapsed `1924 ms` (<15 s), stdout `0` bytes and stderr `0` bytes.
+The exact-PID-only timeout termination fallback was implemented and was not
+needed. This does not verify the frozen executable, physical microphone or
+native macOS event tap, antivirus/removable-media behavior, clean-machine
+installation, real power loss/forced termination, or the 50-task physical-
+device matrix.
 
 ## W2-S1 coordinated worker shutdown — process/queue half — 2026-08-30
 

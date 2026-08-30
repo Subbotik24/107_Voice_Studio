@@ -53,12 +53,34 @@ clean-machine, or broader R0 acceptance.
 
 ## Clean-profile source GUI smoke
 
-The source GUI was launched with `VOICE_STUDIO_CONFIG_DIR`,
-`VOICE_STUDIO_DATA_DIR`, and `VOICE_STUDIO_CACHE_DIR` under disposable
-`build\\w2-s1-thread-smoke` directories. A controlled Tk callback invoked
-`app._close` after startup. Verified PID `16356` exited with code `0` in
-`2232 ms`; stdout and stderr were empty. The disposable profile created only
-local settings/store directories and no user audio or model data.
+The reproducible launch/control method was a PowerShell parent using
+`System.Diagnostics.ProcessStartInfo`. It created the fresh disposable run
+directory `build\\w2-s1-thread-smoke\\run-r1\\{config,data,cache}`, set
+`VOICE_STUDIO_CONFIG_DIR`, `VOICE_STUDIO_DATA_DIR`, `VOICE_STUDIO_CACHE_DIR`,
+and `PYTHONPATH=src`, then launched the repository `.venv` interpreter. The
+inline Python passed to that child was exactly:
+
+```python
+from voice_studio.app import VoiceStudioApp; app=VoiceStudioApp(); app.after(1000, app._close); app.mainloop()
+```
+
+The exact parent command was:
+
+```powershell
+$smoke=Join-Path (Get-Location) 'build\\w2-s1-thread-smoke\\run-r1'; foreach($d in @('config','data','cache')){ $p=Join-Path $smoke $d; if(!(Test-Path -LiteralPath $p)){ New-Item -ItemType Directory -Path $p | Out-Null } }; $env:VOICE_STUDIO_CONFIG_DIR=Join-Path $smoke 'config'; $env:VOICE_STUDIO_DATA_DIR=Join-Path $smoke 'data'; $env:VOICE_STUDIO_CACHE_DIR=Join-Path $smoke 'cache'; $env:PYTHONPATH='src'; $pythonExe=((Resolve-Path '.\\.venv\\Scripts\\python.exe').Path); $pythonCode='from voice_studio.app import VoiceStudioApp; app=VoiceStudioApp(); app.after(1000, app._close); app.mainloop()'; $stdoutPath=Join-Path $smoke 'gui.stdout.log'; $stderrPath=Join-Path $smoke 'gui.stderr.log'; $psi=[Diagnostics.ProcessStartInfo]::new(); $psi.FileName=$pythonExe; $psi.Arguments='-c "'+$pythonCode+'"'; $psi.WorkingDirectory=(Get-Location).Path; $psi.RedirectStandardOutput=$true; $psi.RedirectStandardError=$true; $psi.UseShellExecute=$false; $proc=[Diagnostics.Process]::new(); $proc.StartInfo=$psi; $clock=[Diagnostics.Stopwatch]::StartNew(); [void]$proc.Start(); $processId=$proc.Id; $identity=Get-CimInstance Win32_Process -Filter "ProcessId=$processId"; $verified=[bool]($identity -and $identity.ExecutablePath -eq $pythonExe -and $identity.CommandLine -like '*voice_studio.app*'); Write-Output ('LAUNCH_COMMAND='+$pythonExe+' '+$psi.Arguments); Write-Output ('PID='+$processId); Write-Output ('IDENTITY_VERIFIED='+$verified); Write-Output ('IDENTITY_EXECUTABLE='+$identity.ExecutablePath); Write-Output ('IDENTITY_COMMANDLINE='+$identity.CommandLine); if(!$verified){ throw 'refusing to wait/terminate: PID identity did not match repository .venv Python and voice_studio.app' }; $completed=$proc.WaitForExit(15000); $clock.Stop(); $stdout=$proc.StandardOutput.ReadToEnd(); $stderr=$proc.StandardError.ReadToEnd(); [IO.File]::WriteAllText($stdoutPath,$stdout); [IO.File]::WriteAllText($stderrPath,$stderr); Write-Output ('CONTROLLED_CLOSE='+$completed); Write-Output ('ELAPSED_MS='+$clock.ElapsedMilliseconds); Write-Output ('EXIT_CODE='+$proc.ExitCode); Write-Output ('STDOUT_BYTES='+([Text.Encoding]::UTF8.GetByteCount($stdout))); Write-Output ('STDERR_BYTES='+([Text.Encoding]::UTF8.GetByteCount($stderr))); if(!$completed){ $still=Get-CimInstance Win32_Process -Filter "ProcessId=$processId"; $stillVerified=[bool]($still -and $still.ExecutablePath -eq $pythonExe -and $still.CommandLine -like '*voice_studio.app*'); Write-Output ('FALLBACK_PID_RECHECK='+$stillVerified); if($stillVerified){ Stop-Process -Id $processId -Force; Write-Output 'EXACT_PID_TERMINATED=TRUE' } else { Write-Output 'EXACT_PID_TERMINATED=FALSE' }; exit 1 }
+```
+
+The parent captured PID and checked `Win32_Process.ExecutablePath` against the
+resolved repository `.venv\\Scripts\\python.exe` and command line for
+`voice_studio.app` before waiting. It used `WaitForExit(15000)` and redirected
+stdout/stderr to `gui.stdout.log` and `gui.stderr.log`. Actual result: PID
+`23088`, identity verified, `CONTROLLED_CLOSE=True`, exit code `0`, elapsed
+`1924 ms`, `STDOUT_BYTES=0`, `STDERR_BYTES=0`. The timeout fallback was not
+needed; if it had been needed, it would have rechecked the same exact PID
+identity and force-terminated only that verified PID.
+
+The disposable profile created only local settings/store directories and no
+user audio or model data.
 
 This is source-only evidence. It does not cover a frozen executable,
 clean-machine install, physical microphone, native macOS event tap,
