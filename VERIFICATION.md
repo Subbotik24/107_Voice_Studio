@@ -14,8 +14,10 @@ The focused tests cover CPU-only and CUDA capability payloads, runtime import
 failure, malformed response, child start failure, timeout cleanup, parent
 runtime import boundaries, CLI `hardware detect --json`, readonly GUI choices,
 single-worker serialization, off-Tk probing, and no settings mutation.
-The packaged Windows detector round-trip is recorded separately if a fresh
-PyInstaller build is available; the existing frozen artifact predates W3-H1.
+The normal windowed bundle's launcher does not dispatch CLI arguments. A fresh
+temporary console-only PyInstaller detector probe was built separately and
+completed the cold spawn round-trip; exact evidence is in
+`docs/verification/2026-08-30-w3-h1-hardware.md`.
 
 ## W4-B1 reproducible SBOM — 2026-08-30
 
