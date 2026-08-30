@@ -44,6 +44,11 @@ def parse_locked_components(text: str) -> list[LockedComponent]:
     """Parse comments/blanks and only exact ``name==version`` lock rows."""
     if not isinstance(text, str):
         raise TypeError("lock text must be a string")
+    if any(
+        (ord(char) < 0x20 and char not in "\r\n") or 0x7F <= ord(char) <= 0x9F
+        for char in text
+    ):
+        raise ValueError("lock text contains a control character")
 
     components: list[LockedComponent] = []
     seen: set[str] = set()
@@ -71,6 +76,8 @@ def _purl(component: LockedComponent) -> str:
 
 def build_sbom(lock_text: str, *, project_name: str, project_version: str) -> dict[str, object]:
     components = parse_locked_components(lock_text)
+    project_name = _normalise_name(_require_string(project_name, "project name"))
+    project_version = _validate_version(_require_string(project_version, "project version"))
     canonical_lock = "".join(
         f"{item.name}=={item.version}\n" for item in components
     ).encode("utf-8")
@@ -82,10 +89,17 @@ def build_sbom(lock_text: str, *, project_name: str, project_version: str) -> di
         "version": 1,
         "metadata": {
             "component": {
+                "bom-ref": _purl(LockedComponent(project_name, project_version)),
                 "name": project_name,
+                "purl": _purl(LockedComponent(project_name, project_version)),
                 "type": "application",
                 "version": project_version,
-            }
+            },
+            "properties": [
+                {"name": "voice-studio:dependency-set-sha256", "value": lock_digest},
+                {"name": "voice-studio:sbom-scope", "value": _SCOPE},
+                {"name": "voice-studio:source-lock", "value": _SOURCE_LOCK},
+            ],
         },
         "components": [
             {
@@ -96,11 +110,6 @@ def build_sbom(lock_text: str, *, project_name: str, project_version: str) -> di
                 "version": item.version,
             }
             for item in components
-        ],
-        "properties": [
-            {"name": "voice-studio:lock-sha256", "value": lock_digest},
-            {"name": "voice-studio:sbom-scope", "value": _SCOPE},
-            {"name": "voice-studio:source-lock", "value": _SOURCE_LOCK},
         ],
     }
     validate_sbom_document(document)
@@ -115,6 +124,8 @@ def _reject_path_string(value: str) -> None:
 def _require_string(value: object, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{label} must be a non-empty string")
+    if value != value.strip():
+        raise ValueError(f"{label} must not contain leading or trailing whitespace")
     _reject_path_string(value)
     return value
 
@@ -123,9 +134,7 @@ def validate_sbom_document(document: object) -> None:
     """Validate the exact deterministic profile emitted by :func:`build_sbom`."""
     if not isinstance(document, dict):
         raise ValueError("SBOM must be an object")
-    expected_top = {
-        "$schema", "bomFormat", "specVersion", "version", "metadata", "components", "properties"
-    }
+    expected_top = {"$schema", "bomFormat", "specVersion", "version", "metadata", "components"}
     if set(document) != expected_top:
         raise ValueError("SBOM has unexpected or missing top-level fields")
     if (
@@ -138,17 +147,22 @@ def validate_sbom_document(document: object) -> None:
         raise ValueError("SBOM version must be integer 1")
 
     metadata = document["metadata"]
-    if not isinstance(metadata, dict) or set(metadata) != {"component"}:
-        raise ValueError("metadata must contain only component")
+    if not isinstance(metadata, dict) or set(metadata) != {"component", "properties"}:
+        raise ValueError("metadata must contain only component and properties")
     app = metadata["component"]
-    if not isinstance(app, dict) or set(app) != {"name", "type", "version"}:
+    if not isinstance(app, dict) or set(app) != {"bom-ref", "name", "purl", "type", "version"}:
         raise ValueError("metadata component fields are invalid")
-    _require_string(app["name"], "metadata component name")
-    _require_string(app["version"], "metadata component version")
+    app_name = _require_string(app["name"], "metadata component name")
+    app_version = _require_string(app["version"], "metadata component version")
+    if _normalise_name(app_name) != app_name or not _VERSION_RE.fullmatch(app_version):
+        raise ValueError("metadata component name/version is invalid")
     if app["type"] != "application":
         raise ValueError("metadata component type must be application")
+    expected_app_ref = _purl(LockedComponent(app_name, app_version))
+    if app["bom-ref"] != expected_app_ref or app["purl"] != expected_app_ref:
+        raise ValueError("metadata component purl or bom-ref is invalid")
 
-    properties = document["properties"]
+    properties = metadata["properties"]
     if not isinstance(properties, list) or len(properties) != 3:
         raise ValueError("properties must contain exactly three entries")
     property_names: list[str] = []
@@ -163,12 +177,12 @@ def validate_sbom_document(document: object) -> None:
             raise ValueError(f"duplicate property: {name}")
         property_map[name] = value
     if property_names != sorted(property_names) or property_names != [
-        "voice-studio:lock-sha256",
+        "voice-studio:dependency-set-sha256",
         "voice-studio:sbom-scope",
         "voice-studio:source-lock",
     ]:
         raise ValueError("properties are not the exact sorted profile")
-    if not _SHA256_RE.fullmatch(property_map["voice-studio:lock-sha256"]):
+    if not _SHA256_RE.fullmatch(property_map["voice-studio:dependency-set-sha256"]):
         raise ValueError("lock digest must be a lowercase SHA-256 value")
     if (
         property_map["voice-studio:sbom-scope"] != _SCOPE
@@ -204,6 +218,13 @@ def validate_sbom_document(document: object) -> None:
         seen.add(key)
         seen_names.add(name)
         previous = key
+
+    canonical_components = "".join(
+        f"{name}=={version}\n" for name, version in sorted(seen)
+    ).encode("utf-8")
+    expected_digest = hashlib.sha256(canonical_components).hexdigest()
+    if property_map["voice-studio:dependency-set-sha256"] != expected_digest:
+        raise ValueError("dependency-set digest does not match components")
 
 
 def _write_atomically(document: dict[str, object], output: Path) -> None:

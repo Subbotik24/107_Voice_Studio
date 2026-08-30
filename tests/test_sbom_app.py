@@ -50,6 +50,12 @@ def test_parser_rejects_non_exact_requirement_rows(row):
         parse_locked_components(row + "\n")
 
 
+@pytest.mark.parametrize("control", ["\x00", "\x0b", "\x7f", "\x85"])
+def test_parser_rejects_control_characters_anywhere_in_lock_text(control):
+    with pytest.raises(ValueError, match="control"):
+        parse_locked_components(f"# comment{control}\nalpha==1\n")
+
+
 def test_parser_returns_sorted_frozen_components():
     components = parse_locked_components("Zeta_pkg==1\nalpha.pkg==2\n# comment\n")
     assert [(item.name, item.version) for item in components] == [
@@ -70,13 +76,27 @@ def test_sbom_has_exact_profile_and_lock_digest():
     assert document["version"] == 1
     assert document["metadata"] == {
         "component": {
+            "bom-ref": "pkg:pypi/voice-studio@0.3.0rc1",
             "name": "voice-studio",
+            "purl": "pkg:pypi/voice-studio@0.3.0rc1",
             "type": "application",
             "version": "0.3.0rc1",
-        }
+        },
+        "properties": [
+            {
+                "name": "voice-studio:dependency-set-sha256",
+                "value": hashlib.sha256(canonical).hexdigest(),
+            },
+            {"name": "voice-studio:sbom-scope", "value": "windows-x64-release-environment"},
+            {"name": "voice-studio:source-lock", "value": "requirements-windows.lock"},
+        ],
     }
-    assert document["properties"] == [
-        {"name": "voice-studio:lock-sha256", "value": hashlib.sha256(canonical).hexdigest()},
+    assert "properties" not in document
+    assert document["metadata"]["properties"] == [
+        {
+            "name": "voice-studio:dependency-set-sha256",
+            "value": hashlib.sha256(canonical).hexdigest(),
+        },
         {"name": "voice-studio:sbom-scope", "value": "windows-x64-release-environment"},
         {"name": "voice-studio:source-lock", "value": "requirements-windows.lock"},
     ]
@@ -114,11 +134,26 @@ def test_validator_rejects_extra_keys_unsorted_and_paths():
         validate_sbom_document(unsorted)
 
     pathful = dict(document)
-    pathful["metadata"] = {
-        "component": {"name": "C:\\secret", "type": "application", "version": "1"}
-    }
+    pathful["metadata"] = dict(document["metadata"])
+    pathful["metadata"]["component"] = dict(document["metadata"]["component"])
+    pathful["metadata"]["component"]["name"] = "  C:\\secret"
     with pytest.raises(ValueError):
         validate_sbom_document(pathful)
+
+
+def test_validator_rejects_tampered_dependency_digest():
+    document = build_sbom("alpha==1\n", project_name="voice-studio", project_version="0.3.0rc1")
+    document["metadata"]["properties"][0]["value"] = "0" * 64
+    with pytest.raises(ValueError, match="digest"):
+        validate_sbom_document(document)
+
+
+@pytest.mark.parametrize("field", ["name", "version"])
+def test_build_rejects_whitespace_prefixed_project_fields(field):
+    values = {"name": "voice-studio", "version": "0.3.0rc1"}
+    values[field] = " " + values[field]
+    with pytest.raises(ValueError, match="whitespace"):
+        build_sbom("alpha==1\n", project_name=values["name"], project_version=values["version"])
 
 
 def test_cli_preserves_existing_output_when_input_is_invalid(tmp_path):
