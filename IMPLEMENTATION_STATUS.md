@@ -76,7 +76,10 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 - W2-S1 native physical and packaged acceptance (the process/queue and
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);
-- all W3 VAD/timestamp/hardware/editor work;
+- R0 W3-H1 hardware `device`/`compute_type` validation and bounded detection;
+- R0 W3-V1 configurable VAD with the current enabled default preserved;
+- R0 W3-E1 minimal subtitle consistency for existing exports;
+- R1-excluded word-level timestamps and the full split/retime subtitle editor;
 - W4 signed/notarized installers and updater (the reproducible SBOM increment is complete; native signing remains open);
 - W5 physical 50-task acceptance per OS;
 - W6 independent release go/no-go.

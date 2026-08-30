@@ -27,9 +27,11 @@ Windows release environment, не frozen-runtime contents, і не є доказ
   including one SBOM symlink test; junction/reparse coverage ran where
   available.
 
-**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W5` — фізичне 50-task acceptance на
-підтримуваних ОС (Windows permissions/manual Accessibility delivery and
-macOS/Windows Test RC evidence), з окремим release go/no-go after the gates.
+**НАСТУПНИЙ IN-REPO ІНКРЕМЕНТ:** `W3-H1` — валідація і bounded detection
+`device`/`compute_type` для hardware/compute settings. W3-H1 має передувати
+R0.6 configurable VAD, R0.7 minimal subtitle consistency, R0.9 encrypted
+backup v2 та будь-якому W5 physical acceptance; release go/no-go залишається
+після code-complete R0.
 
 ---
 
