@@ -341,3 +341,39 @@ def test_encrypt_handles_valid_short_reads_without_creating_short_nonfinal_chunk
         chunk_count=chunks,
     )
     assert decrypted.getvalue() == plaintext
+
+
+class _PlaintextWindowGuard:
+    """Reject more than one chunk plus finality lookahead before a write."""
+
+    def __init__(self, data: bytes):
+        self._buffer = io.BytesIO(data)
+        self.returned_since_write = 0
+
+    def read(self, size: int = -1) -> bytes:
+        assert size >= 0, "unbounded read() on backup member source"
+        block = self._buffer.read(size)
+        self.returned_since_write += len(block)
+        assert self.returned_since_write <= CHUNK + 1
+        return block
+
+
+class _PlaintextWindowWriter(io.BytesIO):
+    def __init__(self, source: _PlaintextWindowGuard):
+        super().__init__()
+        self._source = source
+
+    def write(self, data: bytes) -> int:
+        self._source.returned_since_write = 0
+        return super().write(data)
+
+
+def test_encrypt_limits_plaintext_window_to_one_chunk_plus_lookahead():
+    plaintext = bytes(2 * CHUNK + 5)
+    source = _PlaintextWindowGuard(plaintext)
+    encrypted = _PlaintextWindowWriter(source)
+
+    size, chunks = bc.encrypt_member(MEMBER, _member_key(), source, encrypted)
+
+    assert size == len(plaintext)
+    assert chunks == 3

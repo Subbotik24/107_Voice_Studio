@@ -139,8 +139,8 @@ def encrypt_member(
 ) -> tuple[int, int]:
     """Encrypt ``source`` into ``dest`` as chunked AES-256-GCM.
 
-    Streams in 1 MiB plaintext chunks with at most one chunk of bounded
-    lookahead; ``source`` is only ever read with an explicit size, so the
+    Streams in 1 MiB plaintext chunks with one byte of finality lookahead;
+    ``source`` is only ever read with an explicit size, so the
     working set stays independent of member size. Returns
     ``(plaintext_size, chunk_count)`` for the authenticated manifest.
     Empty plaintext is represented by one final empty chunk (16 bytes of
@@ -152,8 +152,8 @@ def encrypt_member(
     chunk_index = 0
     current = _read_up_to(source, CHUNK_SIZE)
     while True:
-        following = _read_up_to(source, CHUNK_SIZE)
-        is_final = not following
+        lookahead = _read_up_to(source, 1)
+        is_final = not lookahead
         ciphertext = aead.encrypt(
             _chunk_nonce(chunk_index),
             current,
@@ -164,7 +164,8 @@ def encrypt_member(
         chunk_index += 1
         if is_final:
             return plaintext_size, chunk_index
-        current = following
+        current = b""
+        current = lookahead + _read_up_to(source, CHUNK_SIZE - len(lookahead))
 
 
 def decrypt_member(
