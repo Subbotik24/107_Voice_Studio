@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from string import Formatter
+
 import pytest
 
 from voice_studio.i18n import _CATALOGS, UI_LANGUAGE_CHOICES, translate
@@ -109,3 +111,21 @@ def test_model_catalog_messages_exist_in_every_locale() -> None:
         assert translate(language, "model_catalog_attention", details="broken")
         assert translate(language, "model_catalog_rebuilt", path="catalog.json.corrupt")
         assert translate(language, "model_catalog_repair_failed", error="disk")
+
+
+def test_model_catalog_messages_use_exact_format_variables_in_every_locale() -> None:
+    expected = {
+        "model_catalog_repaired": {"adopted", "dropped"},
+        "model_catalog_attention": {"details"},
+        "model_catalog_rebuilt": {"path"},
+        "model_catalog_repair_failed": {"error"},
+    }
+    formatter = Formatter()
+    for catalog in _CATALOGS.values():
+        for key, fields in expected.items():
+            actual = {
+                field
+                for _literal, field, _format_spec, _conversion in formatter.parse(catalog[key])
+                if field is not None
+            }
+            assert actual == fields

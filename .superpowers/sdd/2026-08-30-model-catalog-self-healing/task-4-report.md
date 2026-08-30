@@ -40,3 +40,10 @@ rebuilt/quarantined and failed catalog recovery outcomes.
 - Warning dialogs are deferred with Tk's existing startup scheduling pattern.
 - Recovery details are rendered from structured blocked entries and remain
   local; no network or telemetry path was added.
+
+## Fix round 1
+
+Added test-only coverage for the exact single startup call, the complete
+healthy/repaired/attention/quarantine/failure decision matrix (including
+deferred warning callbacks), and exact format-variable sets for all four new
+messages in every locale.

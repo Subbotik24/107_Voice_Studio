@@ -158,6 +158,7 @@ def test_startup_settles_model_catalog_after_restore_report_before_history() -> 
     restore = source.index("self._report_restore_recovery()")
     models = source.index("self._settle_model_catalog()")
     history = source.index("self._refresh_history()")
+    assert source.count("self._settle_model_catalog()") == 1
     assert restore < models < history
     assert "_first_run_model_prompt" not in source
 
@@ -197,6 +198,119 @@ def test_model_catalog_failure_does_not_abort_startup(monkeypatch) -> None:
     )
     result = VoiceStudioApp._settle_model_catalog.__get__(stub)()
     assert result == {"status": "FAIL", "action": "attention", "error": "disk"}
+
+
+@pytest.mark.parametrize(
+    ("outcome", "reconcile_result", "expected_key", "warning", "needle"),
+    [
+        (
+            "healthy",
+            {"status": "PASS", "action": "none"},
+            None,
+            False,
+            None,
+        ),
+        (
+            "repaired",
+            {
+                "status": "PASS",
+                "action": "repaired",
+                "adopted": ["tiny"],
+                "dropped": ["missing"],
+                "catalog_quarantined": None,
+            },
+            "model_catalog_repaired",
+            False,
+            "tiny",
+        ),
+        (
+            "attention",
+            {
+                "status": "PASS",
+                "action": "attention",
+                "blocked": [{"id": "broken", "reason": "incomplete"}],
+                "catalog_quarantined": None,
+            },
+            "model_catalog_attention",
+            True,
+            "broken",
+        ),
+        (
+            "quarantine",
+            {
+                "status": "PASS",
+                "action": "repaired",
+                "catalog_quarantined": "catalog.json.corrupt-1",
+            },
+            "model_catalog_rebuilt",
+            False,
+            "catalog.json.corrupt-1",
+        ),
+        (
+            "attention with quarantine",
+            {
+                "status": "PASS",
+                "action": "attention",
+                "blocked": [{"id": "broken", "reason": "incomplete"}],
+                "catalog_quarantined": "catalog.json.corrupt-2",
+            },
+            "model_catalog_rebuilt",
+            True,
+            "catalog.json.corrupt-2",
+        ),
+        (
+            "failure",
+            {"status": "FAIL", "action": "attention", "error": "disk"},
+            "model_catalog_repair_failed",
+            True,
+            "disk",
+        ),
+    ],
+)
+def test_model_catalog_startup_reports_every_outcome(
+    monkeypatch,
+    outcome,
+    reconcile_result,
+    expected_key,
+    warning,
+    needle,
+) -> None:
+    recorded: list[str] = []
+    scheduled: list[object] = []
+    shown: list[tuple[str, str]] = []
+    stub = SimpleNamespace(
+        store=SimpleNamespace(models=Path("models")),
+        status=SimpleNamespace(set=recorded.append),
+        _t=lambda key, **values: f"{key}:{values}",
+        after=lambda _delay, callback: scheduled.append(callback),
+    )
+    monkeypatch.setattr(
+        app_module.ModelCatalog,
+        "reconcile",
+        lambda _self: reconcile_result,
+    )
+    monkeypatch.setattr(
+        app_module.messagebox,
+        "showwarning",
+        lambda title, message, **_kwargs: shown.append((title, message)),
+    )
+
+    result = VoiceStudioApp._settle_model_catalog.__get__(stub)()
+
+    assert result == reconcile_result
+    if expected_key is None:
+        assert recorded == []
+        assert scheduled == []
+        assert shown == []
+        return
+    assert recorded and recorded[0].startswith(expected_key)
+    assert len(scheduled) == (1 if warning else 0), outcome
+    if warning:
+        scheduled[0]()
+        assert len(shown) == 1
+        assert needle in shown[0][1]
+    else:
+        assert shown == []
 
 
 def test_close_is_blocked_while_backup_or_restore_is_running(monkeypatch) -> None:
