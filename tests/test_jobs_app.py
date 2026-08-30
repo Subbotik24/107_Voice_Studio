@@ -333,6 +333,7 @@ def test_close_between_loading_checkpoint_and_worker_creation_cancels_run(
     assert not thread.is_alive()
     assert len(outcome) == 1
     assert isinstance(outcome[0], JobCancelled)
+    assert context.queues == []
     assert context.processes == []
     assert controller._generation is None
     assert list(store.sources.iterdir()) == []

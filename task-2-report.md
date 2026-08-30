@@ -61,6 +61,12 @@ passed (`84 passed`).
 - Focused lifecycle selector: `7 passed, 14 deselected`; integration suite:
   `86 passed`; full quality gate: `452 passed, 3 skipped`.
 
+## REVIEW ROUND 3
+
+- Strengthened the checkpoint-to-ensure regression to assert that zero queues,
+  as well as zero processes, are allocated after close.
+- Focused job selector plus Ruff, compileall and diff checks: PASS.
+
 ## KNOWN ISSUES
 
 - The bare global Python 3.13 command required by the repository start
