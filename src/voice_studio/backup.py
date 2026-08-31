@@ -2021,12 +2021,13 @@ def _restore_backup_v2(
 ) -> dict[str, Any]:
     """Restore an encrypted backup v2 archive.
 
-    The archive is fully authenticated before the first filesystem
-    mutation, the ``staging_building`` journal exists before the first
-    plaintext byte is written, and the two-phase swap happens only after
-    every payload decrypted exactly once, the record count matches and
-    the staging store audits clean. When settings recovery is requested
-    and possible, the config ciphertext is parked in an encrypted
+    Archive structure, the manifest and the private index are authenticated
+    before the first filesystem mutation. The ``staging_building`` journal
+    exists before the first plaintext byte is written; each payload chunk is
+    authenticated before it is written into contained staging. The two-phase
+    swap happens only after every payload decrypted exactly once, the record
+    count matches and the staging store audits clean. When settings recovery
+    is requested and possible, the config ciphertext is parked in an encrypted
     ``.restore-settings-v2`` sidecar inside staging before the swap and
     applied after ``swap_completed``; a hard process death
     (KeyboardInterrupt/SystemExit) leaves sidecar and journal for
@@ -2037,8 +2038,9 @@ def _restore_backup_v2(
     path = path.expanduser()
     data_root = data_root.expanduser()
 
-    # --- Authenticate the archive before any mutation. The private index
-    # lives only in bounded memory at this point.
+    # --- Authenticate structure, manifest and private index before mutation.
+    # Non-index payloads are authenticated later, per chunk into staging; the
+    # private index lives only in bounded memory at this point.
     inspection = inspect_zip(path, BACKUP_ZIP_BUDGET)
     member_sizes = {member.name: member.expanded_bytes for member in inspection.members}
     with zipfile.ZipFile(path) as archive:

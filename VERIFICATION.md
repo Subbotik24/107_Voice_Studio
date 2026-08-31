@@ -391,3 +391,25 @@ Local Whisper; the application never switches engines silently.
   VOICE Studio accuracy claim.
 - Production WER/CER, long-recording and high-DPI multi-monitor matrices were
   not run.
+
+## W2-E1 encrypted backup v2 — 2026-08-31
+
+Source/headless implementation is complete; packaged/native acceptance stays
+pending for R0.10. No production or signed release PASS is claimed here.
+
+| Check | Result |
+| --- | --- |
+| D1 full gate (controller, `00d7592`) | PASS; 849 passed, 9 Windows symlink-privilege skips |
+| D2b final full gate after controller corrections | PASS; 859 passed, 9 Windows symlink-privilege skips |
+| D2a focused security/proof gate (controller) | PASS; 237 passed |
+| D2a proof/packaging/crypto subset re-run | PASS; 234 passed, 0 skipped |
+| Secret-hygiene cycle proof | PASS; passphrase/master/manifest/member key bytes absent from settings, restore journal, encrypted sidecar, diagnostics, CLI stdout/stderr and JSON results; plaintext settings/dictionary markers absent from journal and sidecar |
+| Frozen-style crypto source probe | PASS; cryptography 50.0.1 AESGCM/Argon2id/HKDF/HMAC/SHA256 import and round-trip at source level |
+| SBOM determinism | PASS; byte-identical across two temporary directories, 59 components including exact `cryptography==50.0.1`, no absolute/private paths; 11,348 bytes, SHA-256 `5f60473d50bff64a0a56036b0d3ab3f7fc8b6a68c4613ea1af0f44f866252e7a` |
+| v2 structure contract | PASS; identical schema/member/chunk structure with differing salt and ciphertext; chunk sizing 0 B/1 B/1 MiB/1 MiB+1 → 1/1/1/2 chunks |
+| Real PyInstaller packaged probe | NOT RUN (R0.10 physical acceptance scope) |
+
+Note on the SBOM component count: the W4-B1 record above (58 components,
+SHA-256 `0e1d420f…`) describes the lock before W2-E1 Slice 0 added
+`cryptography==50.0.1`; the current locked dependency set has 59 components
+and supersedes it as the current state.

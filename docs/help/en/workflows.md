@@ -65,7 +65,17 @@ is never changed. OpenAI text cleanup requires separate consent.
 - **Delete** asks separately about the managed audio copy. The user's original
   file is never deleted.
 - **Backup** creates, verifies, or restores `.voice-backup`. Ollama/Whisper
-  models and external originals are not included.
+  models and external originals are not included. Managed audio copies are
+  included by default; clear the include-audio option (or use CLI
+  `--without-audio`) to omit them. By default a plaintext v1 backup is
+  created. The **Encrypt with passphrase** checkbox opts into an
+  encrypted v2 backup: after choosing the file, the app asks for the
+  passphrase twice in masked fields. **A lost passphrase cannot be
+  recovered** — without it the archive is unreadable. The passphrase is never
+  stored in settings, the restore journal, or diagnostics. Verifying or
+  restoring an encrypted archive prompts once; a wrong passphrase is an
+  authentication error with no plaintext reading, and cancelling the prompt
+  changes no data and deletes no recovery state.
 
 If a restore is interrupted by power loss or forced process termination, VOICE
 Studio completes it or rolls it back on the next launch and reports the result

@@ -68,7 +68,42 @@ report and asks for a private channel — no details.
 - The global hotkey depends on OS Accessibility permissions.
 - Active-app insertion is disabled.
 - There is no sandbox process isolation for the model runtime.
-- There is no encrypted-at-rest storage.
+- There is no encrypted-at-rest storage for the live data directory; the
+  only encrypted-at-rest artifact is the opt-in encrypted backup v2 (below).
+
+### Encrypted backup v2 properties
+
+- Threat scope: a v2 archive protects history, settings, dictionary and
+  managed audio copies at rest inside `.voice-backup` against offline
+  disclosure and tampering. It does not protect the live `data/` root.
+- A wrong passphrase or authenticated-content tampering is a hard
+  authentication error; structural or member-set violations are hard
+  validation errors. Neither path has a plaintext fallback.
+- Payload authentication is streaming and per chunk: plaintext from an
+  authenticated chunk may be written only into the journaled, contained
+  restore staging area before later chunks are checked. The live data root is
+  not swapped until every payload has authenticated and the restored store has
+  passed its audit. An ordinary later authentication failure removes staging;
+  interruption recovery discards an incomplete `staging_building` directory.
+- Only approved `cryptography` primitives are used: Argon2id (KDF), HKDF
+  (key separation), chunked AES-256-GCM (payloads), HMAC-SHA-256 (manifest).
+  No custom cryptography exists.
+- KDF parameters are pinned to one profile with validated bounds
+  (1-10 iterations, 1-256 MiB memory, 1-4 lanes), bounding KDF DoS.
+- Secret material (passphrase, master/manifest/member keys) is never written
+  to settings, the restore journal, the encrypted sidecar, logs or
+  diagnostics; CPython cannot guarantee memory zeroization, so key bytes may
+  persist in process memory until collection.
+- A weak passphrase stays weak: Argon2id raises the cost of guessing but
+  cannot make a short or reused passphrase safe.
+- The plaintext manifest intentionally leaks the member count and member
+  sizes. Fixed outer names (`manifest.json`, opaque `payload/NNNNNNNN.enc`)
+  are visible; private logical member names and contents stay encrypted.
+- AEAD/HMAC tags authenticate content against the passphrase-derived keys;
+  they are not a publisher signature and prove nothing about who created an
+  archive.
+- v1 plaintext backup remains the default compatibility format; encryption
+  is always an explicit opt-in.
 - There is no structured runtime logging or audit event schema.
 
 Unsigned Test RCs are not a trust or provenance guarantee. Verify release

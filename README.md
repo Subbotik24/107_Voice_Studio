@@ -146,8 +146,9 @@ artifacts.
 The reproducible SBOM is generated only from the pinned
 `requirements-windows.lock` file and is staged beside the Test RC release
 manifest and checksums as `voice-studio-sbom.cdx.json`. The verified artifact
-contains 58 normalized components and is byte-identical when generated from
-lock copies in different temporary roots. Its scope is the pinned Windows x64
+contains 59 normalized components after W2-E1 added `cryptography==50.0.1`
+and is byte-identical when generated from lock copies in different temporary
+roots. Its scope is the pinned Windows x64
 release environment, not necessarily the contents of a frozen runtime. It is
 not license evidence, vulnerability evidence, or a publisher signature; the
 Test RC remains unsigned, and native Windows/macOS and physical-device gates
@@ -202,6 +203,25 @@ guarantee is claimed.
 
 Use `voice-studio diagnostics --export report.json` for a redacted forum report.
 Do not share private audio, transcripts, databases, API keys, or full user paths.
+
+## Backups and restore
+
+`voice-studio backup create out.voice-backup` writes a plaintext v1 backup by
+default: history, settings, the dictionary and, unless `--without-audio`,
+managed audio copies. v1 stays the default compatibility format and remains
+readable as a plain ZIP.
+
+Encryption is an explicit opt-in: `voice-studio backup create out.voice-backup
+--encrypt` (or the GUI "Encrypt with passphrase" checkbox) creates an
+encrypted v2 backup. The passphrase is asked interactively (twice on create,
+once on verify/restore and on startup recovery after an interrupted restore);
+it is never accepted via command-line arguments or environment variables and
+is never written to settings, the restore journal, the backup sidecar,
+diagnostics or logs. **A lost passphrase cannot be recovered** — without it
+the v2 archive is unreadable. `backup verify` and `backup restore` detect v2
+archives automatically and prompt once; a wrong passphrase is a hard error
+with no plaintext fallback. The GUI follows the same contract with masked
+dialogs; cancelling a prompt never deletes the recovery state.
 
 ## Project layout
 

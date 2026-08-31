@@ -106,3 +106,9 @@ journal obnovení, operaci deterministicky dokončí nebo vrátí zpět a výsle
 zobrazí ve stavovém řádku. Při varování o journalu nic ručně nemažte a vytvořte
 redacted diagnostics report. Adresář `*.recovery-*` se automaticky nemaže;
 odstraňte jej až po kontrole historie.
+
+Pokud se přerušené obnovení týkalo zašifrované zálohy v2 a nastavení ještě
+nebyla použita, aplikace se při spuštění jednou zeptá na heslo v maskovaném
+poli. Správné heslo obnovení dokončí. Zrušení nebo špatné heslo nic nemaže:
+encrypted sidecar a journal zůstávají na místě a aplikace dál startuje;
+spusťte znovu a zadejte správné heslo.

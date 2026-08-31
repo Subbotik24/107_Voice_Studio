@@ -109,3 +109,9 @@ and reports the result in the status bar. If a journal warning appears, do not
 delete anything manually; create a redacted diagnostics report. A
 `*.recovery-*` directory is never removed automatically and should be deleted
 only after history has been checked.
+
+If the interrupted restore was for an encrypted v2 backup and the settings had
+not been applied yet, the app asks for the passphrase once in a masked field
+during startup. The correct passphrase completes the restore. Cancelling or a
+wrong passphrase deletes nothing: the encrypted sidecar and journal stay in
+place and the app keeps starting; relaunch and enter the correct passphrase.

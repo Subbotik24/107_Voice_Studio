@@ -43,7 +43,10 @@ R1/R2 capabilities are not part of the current completion scope.
    - versioned schema;
    - export/import backup;
    - recovery test після пошкодження DB.
-   - стан: schema, audit, backup verify та reversible restore реалізовано.
+   - стан: schema, audit, backup verify, reversible restore і encrypted backup v2
+     (opt-in `--encrypt`, Argon2id → HKDF → AES-256-GCM, sidecar/journal recovery,
+     CLI/GUI prompts) реалізовано source/headless; packaged/native acceptance —
+     R0.10.
 
 6. **Benchmark**
    - фіксований набір uk/cs/en записів;

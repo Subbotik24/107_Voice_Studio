@@ -96,6 +96,19 @@ SQLite використовує `PRAGMA user_version`. `.voice-backup` міст�
 JSONL records, SHA‑256 inventory та опційні managed copies. Restore зберігає попереднє
 сховище в recovery directory.
 
+Backup має version dispatch за `manifest.json`: v1 — plaintext сумісний формат за
+замовчуванням; v2 — explicit opt-in encryption. У v2 лише `manifest.json` лишається
+plaintext і автентифікується HMAC; приватний index і всі payloads зашифровані й лежать
+під opaque `payload/NNNNNNNN.enc` членами ZIP (ZIP_STORED). Криптографія — лише
+`cryptography` primitives, без custom crypto: Argon2id (passphrase → master key) →
+HKDF (domain-separated manifest/member keys) → chunked AES‑256‑GCM (1 MiB чанки).
+Create/verify/restore є streaming з bounded buffers. Restore пише config ciphertext в
+encrypted settings sidecar `.restore-settings-v2` усередині staging до swap, а journal
+(`staging_building` → `swap_started` → `swap_completed`) дозволяє
+`recover_interrupted_restore` детерміновано завершити або скасувати перерваний restore;
+для pending v2 settings потрібен той самий passphrase. Неправильний пароль або
+tampering — hard error без plaintext fallback.
+
 Ручне збереження встановлює один редагований текстовий шар для документа й
 субтитрів. Правка всередині сегмента зберігає його interval і metadata; правка
 через межі зливає лише охоплені сусідні сегменти в їхній наявний зовнішній

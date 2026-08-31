@@ -37,6 +37,7 @@ in the supported flow.
 | W1.5 evidence base | PASS | suite cannot hang (`pytest-timeout`, 120 s/test); CI compiles and lints the same `src tests scripts packaging` surface as the local gate; both workflow jobs bounded at 20 minutes |
 | R0 W3-H1 hardware settings and advisory detection (2026-08-30) | PASS source/headless + temporary frozen probe | `device`/`compute_type` lexical validation fails at the job boundary before source preparation or worker startup; runtime CTranslate2 preflight selects the runtime device for `auto`, rejects unavailable CUDA and unsupported concrete pairs before WhisperModel load, and reports broken runtime imports concretely; bounded spawn detection returns immutable capabilities with `auto/default` fallback; GUI detection uses the retained worker registry and never mutates saved settings; a fresh console-only PyInstaller probe completed the cold no-parent-preload round-trip, while the normal windowed launcher remains GUI-only |
 | R0 W3-V1 configurable VAD (2026-08-30) | PASS source/headless | enabled remains the migration-compatible default; Settings, GUI and mutually exclusive CLI flags preserve the explicit choice; only Faster Whisper receives `vad_filter`; focused 13 tests and the prior full gate passed |
+| W2-E1 encrypted backup v2 (2026-08-31) | PASS source/headless | explicit opt-in `cryptography>=50,<51` dependency; Argon2id → HKDF → chunked AES-256-GCM (1 MiB chunks) with an HMAC-authenticated plaintext manifest, encrypted private index and opaque `payload/NNNNNNNN.enc` ZIP_STORED members; version-dispatched create/verify/restore with streaming budgets; encrypted `.restore-settings-v2` sidecar and passphrase-aware journal recovery; CLI `--encrypt` plus interactive getpass flows and GUI masked-prompt flows; wrong passphrase/tampering is a hard error with no plaintext fallback; secret-hygiene, frozen-style crypto probe, deterministic SBOM and structure proofs passed; packaged/native acceptance remains open for R0.10 |
 | R0 W3-E1 minimal subtitle consistency (2026-08-30) | PASS source/headless | manual saves synchronize the editable segment layer without creating, splitting or moving timestamps; cross-boundary edits merge into existing outer intervals, empty cues disappear while their raw wording is absorbed into an adjacent honest outer interval, one bounded validated undo snapshot is retained, and dictionary correction derives consistently from segment results; focused 21 tests passed and the final compile/Ruff/pytest gate passed 643 tests with 9 Windows symlink-privilege skips |
 | Integrated source compilation | PASS | `python -m compileall -q src tests scripts packaging` |
 | Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
@@ -75,7 +76,6 @@ These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
 ## Not implemented yet
 
-- `cryptography` dependency and encrypted backup v2;
 - W2-S1 native physical and packaged acceptance (the process/queue and
   app/recorder/hotkey/maintenance thread halves are verified source/headless
   above);

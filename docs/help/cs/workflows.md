@@ -58,7 +58,16 @@ potvrďte. Funkce **Vrátit AI úpravu** obnoví předchozí opravený text. Nem
 - **Odstranit** se samostatně ptá na spravovanou kopii zvuku; původní soubor
   uživatele nikdy nemaže.
 - **Záloha** vytváří, ověřuje a obnovuje `.voice-backup`. Ollama/Whisper modely
-  a externí originály se do archivu nevkládají.
+  a externí originály se do archivu nevkládají. Spravované kopie zvuku jsou ve
+  výchozím stavu zahrnuty; zrušte volbu zahrnutí zvuku (nebo použijte CLI
+  `--without-audio`), pokud je nechcete přidat. Ve výchozím stavu vzniká
+  plaintext záloha v1. Zaškrtávací pole **Zašifrovat heslem** zapíná
+  encrypted backup v2: po výběru souboru se aplikace dvakrát zeptá na heslo
+  v maskovaných polích. **Ztracené heslo nelze obnovit** — bez něj je archiv
+  nečitelný. Heslo se nikdy neukládá do nastavení, journalu obnovení ani
+  diagnostics. Ověření nebo obnovení zašifrovaného archivu se zeptá jednou;
+  špatné heslo je chyba autentizace bez čtení plaintext a zrušení dotazu
+  nemění data ani nemaže recovery state.
 
 Pokud obnovení přeruší výpadek napájení nebo nucené ukončení procesu, VOICE
 Studio je při příštím spuštění dokončí nebo vrátí zpět a výsledek zobrazí ve
