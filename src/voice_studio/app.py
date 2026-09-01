@@ -33,11 +33,14 @@ from .dictionary import DictionaryMergePreview, DictionaryRule, TerminologyDicti
 from .dictionary_store import DictionaryRepository
 from .editor_state import snapshot_editor
 from .editor_tools import (
+    ConfidenceEntry,
     FillerMatch,
     TextMatch,
+    confidence_entries,
     find_filler_matches,
     find_matches,
     remove_matches,
+    segment_spans,
 )
 from .exporters import export_transcript
 from .hardware import HardwareDetectionResult, detect_hardware
@@ -60,6 +63,7 @@ from .models import (
     SUPPORTED_DEVICES,
     SUPPORTED_ENGINES,
     SUPPORTED_LANGUAGES,
+    Segment,
     Settings,
     Transcript,
 )
@@ -70,11 +74,15 @@ from .profiles import (
 )
 from .recorder import AudioRecorder
 from .storage import LocalStore
+from .subtitles import editable_text
 
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
 
 EDITOR_FIND_TAG = "editor_find"
+EDITOR_CONFIDENCE_TAG = "editor_confidence"
 FILLER_CONTEXT_WIDTH = 30
+CONFIDENCE_SNIPPET_WIDTH = 48
+DEFAULT_CONFIDENCE_THRESHOLD = "0.60"
 
 MEDIA_FILETYPES = [
     ("Audio/video", "*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.aac *.mp4 *.mov *.mkv *.webm"),
@@ -891,6 +899,12 @@ class VoiceStudioApp(tk.Tk):
             command=self._open_filler_dialog,
         )
         self.editor_filler_button.pack(side="left", padx=(6, 0))
+        self.editor_confidence_button = ttk.Button(
+            format_bar,
+            text=self._t("editor_confidence_button"),
+            command=self._toggle_confidence_panel,
+        )
+        self.editor_confidence_button.pack(side="left", padx=(6, 0))
         self.editor = tk.Text(
             corrected_frame,
             wrap="word",
@@ -911,6 +925,9 @@ class VoiceStudioApp(tk.Tk):
         self.editor.tag_configure("italic", font=(theme.ui_font, 11, "italic"))
         self.editor.tag_configure(
             EDITOR_FIND_TAG, background=theme.selection, foreground=theme.ink
+        )
+        self.editor.tag_configure(
+            EDITOR_CONFIDENCE_TAG, background=theme.accent_soft, foreground=theme.ink
         )
         self.editor.bind("<Return>", self._insert_editor_newline)
         self.editor.bind("<Control-Return>", self._insert_editor_newline)
@@ -967,6 +984,70 @@ class VoiceStudioApp(tk.Tk):
             button = ttk.Button(find_actions, text=self._t(key), command=command)
             button.pack(side="left", padx=(0, 5))
             self._editor_find_button_keys[button] = key
+
+        self.confidence_panel = ttk.Frame(
+            corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame"
+        )
+        self.confidence_panel_visible = False
+        self.confidence_panel.grid_columnconfigure(2, weight=1)
+        self._confidence_entries: tuple[ConfidenceEntry, ...] = ()
+        self.editor_confidence_caption = ttk.Label(
+            self.confidence_panel,
+            text=self._t("editor_confidence_threshold"),
+            style="CardMuted.TLabel",
+        )
+        self.editor_confidence_caption.grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.confidence_threshold_var = tk.StringVar(value=DEFAULT_CONFIDENCE_THRESHOLD)
+        threshold_spin = ttk.Spinbox(
+            self.confidence_panel,
+            from_=0.0,
+            to=1.0,
+            increment=0.05,
+            width=6,
+            textvariable=self.confidence_threshold_var,
+            command=self._refresh_confidence_panel,
+        )
+        threshold_spin.grid(row=0, column=1, sticky="w")
+        threshold_spin.bind("<Return>", lambda _event: self._refresh_confidence_panel())
+        self.confidence_count_var = tk.StringVar()
+        ttk.Label(
+            self.confidence_panel,
+            textvariable=self.confidence_count_var,
+            style="CardMuted.TLabel",
+        ).grid(row=0, column=2, sticky="e", padx=(10, 0))
+        confidence_list_frame = ttk.Frame(self.confidence_panel, style="Card.TFrame")
+        confidence_list_frame.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.confidence_list = tk.Listbox(
+            confidence_list_frame,
+            height=5,
+            activestyle="dotbox",
+            background=theme.surface,
+            foreground=theme.ink,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            highlightbackground=theme.border,
+            highlightcolor=theme.accent,
+            relief="flat",
+            borderwidth=1,
+            font=(theme.ui_font, 10),
+        )
+        confidence_scrollbar = ttk.Scrollbar(
+            confidence_list_frame, orient="vertical", command=self.confidence_list.yview
+        )
+        self.confidence_list.configure(yscrollcommand=confidence_scrollbar.set)
+        self.confidence_list.pack(side="left", fill="both", expand=True)
+        confidence_scrollbar.pack(side="right", fill="y")
+        self.confidence_list.bind("<<ListboxSelect>>", self._select_confidence_entry)
+        confidence_actions = ttk.Frame(self.confidence_panel, style="Card.TFrame")
+        confidence_actions.grid(row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self._editor_confidence_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("editor_confidence_play", self._play_selected_segment),
+            ("editor_confidence_close", self._close_confidence_panel),
+        ):
+            button = ttk.Button(confidence_actions, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._editor_confidence_button_keys[button] = key
         self.raw_editor = tk.Text(
             raw_frame,
             wrap="word",
@@ -2036,6 +2117,7 @@ class VoiceStudioApp(tk.Tk):
         self._refresh_history_filter_ui_text()
         self._refresh_dictionary_ui_text()
         self._refresh_editor_tools_ui_text()
+        self._refresh_confidence_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -2108,6 +2190,16 @@ class VoiceStudioApp(tk.Tk):
             self._find_in_editor()
         else:
             self.editor_find_count_var.set("")
+
+    def _refresh_confidence_ui_text(self) -> None:
+        self.editor_confidence_button.configure(text=self._t("editor_confidence_button"))
+        self.editor_confidence_caption.configure(text=self._t("editor_confidence_threshold"))
+        for button, key in self._editor_confidence_button_keys.items():
+            button.configure(text=self._t(key))
+        if self.confidence_panel_visible:
+            self._refresh_confidence_panel()
+        else:
+            self.confidence_count_var.set("")
 
     def _refresh_dictionary_ui_text(self) -> None:
         self.dictionary_title_label.configure(text=self._t("dictionary_title"))
@@ -2839,6 +2931,8 @@ class VoiceStudioApp(tk.Tk):
                 rtf=rtf,
             )
         )
+        if self.confidence_panel_visible:
+            self._refresh_confidence_panel()
         if refresh:
             self._refresh_history(select_id=transcript.id)
             self._refresh_dashboard()
@@ -3098,6 +3192,100 @@ class VoiceStudioApp(tk.Tk):
         ).pack(side="left", padx=(6, 0))
         window.grab_set()
         window.wait_window()
+
+    def _toggle_confidence_panel(self) -> None:
+        if self.confidence_panel_visible:
+            self._close_confidence_panel()
+            return
+        self.confidence_panel.pack(fill="x")
+        self.confidence_panel_visible = True
+        self._refresh_confidence_panel()
+
+    def _close_confidence_panel(self) -> None:
+        self.confidence_panel.pack_forget()
+        self.confidence_panel_visible = False
+        self.editor.tag_remove(EDITOR_CONFIDENCE_TAG, "1.0", "end")
+        self.confidence_count_var.set("")
+
+    def _confidence_threshold(self) -> float | None:
+        try:
+            value = float(str(self.confidence_threshold_var.get()).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return value if 0.0 <= value <= 1.0 else None
+
+    def _confidence_segments(self) -> Sequence[Segment]:
+        return self.current.segments if self.current else ()
+
+    def _confidence_row(self, entry: ConfidenceEntry, segments: Sequence[Segment]) -> str:
+        text = editable_text(segments[entry.index]) if entry.index < len(segments) else ""
+        snippet = text.replace("\n", " ").strip()
+        if len(snippet) > CONFIDENCE_SNIPPET_WIDTH:
+            snippet = snippet[:CONFIDENCE_SNIPPET_WIDTH].rstrip() + "…"
+        score = (
+            self._t("editor_confidence_no_score")
+            if entry.confidence is None
+            else f"{entry.confidence:.2f}"
+        )
+        return f"{score} · {snippet}"
+
+    def _refresh_confidence_panel(self) -> None:
+        threshold = self._confidence_threshold()
+        if threshold is None:
+            self.status.set(self._t("editor_confidence_threshold_invalid"))
+            return
+        segments = self._confidence_segments()
+        entries = confidence_entries(segments, threshold)
+        self._confidence_entries = entries
+        self.editor.tag_remove(EDITOR_CONFIDENCE_TAG, "1.0", "end")
+        self.confidence_list.delete(0, "end")
+        for entry in entries:
+            self.confidence_list.insert("end", self._confidence_row(entry, segments))
+        self.confidence_count_var.set(
+            self._t("editor_confidence_empty")
+            if not entries
+            else self._t("editor_confidence_count", count=len(entries))
+        )
+
+    def _selected_confidence_entry(self) -> ConfidenceEntry | None:
+        selection = self.confidence_list.curselection()
+        if not selection:
+            return None
+        index = int(selection[0])
+        if index >= len(self._confidence_entries):
+            return None
+        return self._confidence_entries[index]
+
+    def _select_confidence_entry(self, _event: Any = None) -> None:
+        entry = self._selected_confidence_entry()
+        if entry is not None:
+            self._focus_segment(entry.index)
+
+    def _focus_segment(self, segment_index: int) -> None:
+        spans = segment_spans(self._editor_text(), self._confidence_segments())
+        span = spans[segment_index] if segment_index < len(spans) else None
+        if span is None:
+            self.status.set(self._t("editor_confidence_focus_missing"))
+            return
+        start = self._editor_index(span[0])
+        self.editor.tag_remove(EDITOR_CONFIDENCE_TAG, "1.0", "end")
+        self.editor.tag_add(EDITOR_CONFIDENCE_TAG, start, self._editor_index(span[1]))
+        self.editor.mark_set("insert", start)
+        self.editor.see(start)
+        self.editor.focus_set()
+
+    def _play_selected_segment(self) -> None:
+        entry = self._selected_confidence_entry()
+        if entry is None:
+            self.status.set(self._t("editor_confidence_play_no_selection"))
+            return
+        self._segment_play_requested(entry.index)
+
+    def _segment_play_requested(self, segment_index: int) -> None:
+        """Hook for the local segment playback that a later increment adds."""
+
+        del segment_index
+        self.status.set(self._t("editor_confidence_play_unavailable"))
 
     def _copy_to_clipboard(self, text: str) -> None:
         self.clipboard_clear()

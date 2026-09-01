@@ -73,3 +73,13 @@ full gate, diff/secret checks, commit/push, and any explicit `NOT_RUN` items.
 - Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 1055 passed / 14 Linux junction skips; wheel build PASS (`voice_studio-0.3.0rc1`); `pip check` PASS.
 - `git diff --check` and changed-diff secret/private-path scan: PASS.
 - Physical Tk smoke and Windows/macOS packaged/native acceptance: NOT RUN.
+
+### Increment 6 — confidence review panel
+
+- Base: `db98ca5`; one increment, one controller gate, same Linux/CPython 3.12.3 environment.
+- Pure logic: `confidence_entries(segments, threshold)` in `editor_tools.py` — threshold validated 0.00–1.00 (bool rejected), scored entries strictly below the threshold sorted lowest-first with index tie-break, segments without a usable score (None, NaN, inf, bool, wrong type) listed after the scored ones in index order and never treated as 0.0. 14 focused tests including exact 0.00/1.00 boundaries.
+- Interface: a collapsible Studio panel behind an «Оцінка впевненості» toolbar button — threshold Spinbox as page state only (never written to Settings or disk, pinned by a test), count label, lowest-first segment list with 48-char snippets and a "no score" label, row selection highlights and focuses the corrected segment via `segment_spans` with a status message when the segment text is no longer locatable, and a Play-segment control that is a hook for the later local-playback task (today it reports playback as not yet available). `_show_result` refreshes the panel only while visible; no polling. 11 i18n keys in uk/cs/en; wording presents the value as the engine's own confidence score — no error-probability or accuracy claims in UI or help. Help `reference.md` (uk/cs/en) gained a "Confidence review" subsection. 20 headless GUI tests; two existing headless fixtures gained one initialization line each.
+- Linux Xvfb source smoke on a seeded 4-segment transcript (0.92/0.42/None/0.15): ordering, focus highlight, play placeholder, threshold refilter, invalid-threshold rejection, cs retranslation, no settings write (not the packaged or physical acceptance).
+- Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 1089 passed / 14 Linux junction skips; wheel build PASS (`voice_studio-0.3.0rc1`); `pip check` PASS.
+- `git diff --check` and changed-diff secret/private-path scan: PASS.
+- Physical Tk smoke and Windows/macOS packaged/native acceptance: NOT RUN.

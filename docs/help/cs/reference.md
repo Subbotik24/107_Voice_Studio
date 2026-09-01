@@ -60,12 +60,28 @@ jsou `--vad` a `--no-vad`. Profily Ollama a OpenAI toto nastavení ignorují.
 | **Hledat a nahradit** | Otevře panel pod editorem: hledání s ohledem na velikost písmen a celá slova, počet shod, „Nahradit“ a „Nahradit vše“. |
 | **Přidat do slovníku** | Z vybraného textu vytvoří pravidlo a uloží spravovaný slovník. |
 | **Výplňková slova** | Ukáže každou nalezenou shodu v kontextu; odstraní se jen zaškrtnuté. |
+| **Skóre jistoty** | Vypíše segmenty s nejnižším skóre jistoty k prohlédnutí. |
 
-Všechny tři nástroje mění pouze text v editoru. Do úložiště se změny dostanou
+Tyto nástroje mění pouze text v editoru. Do úložiště se změny dostanou
 až po „Uložit úpravy“; `raw_text` zůstává beze změny. „Přidat do slovníku“ je
 nedostupné, když je otevřený externí slovník jen ke čtení nebo když má stránka
 „Slovník“ neuložené změny. Výplňková slova se berou ze seznamu pro jazyk
 záznamu, a je-li `auto`, z jazyka rozpoznávání v nastavení.
+
+### Prohlídka podle skóre jistoty
+
+„Skóre jistoty“ otevře panel se seznamem segmentů, jejichž skóre je pod prahem;
+nejnižší jsou první. Skóre je vlastní signál jistoty rozpoznávacího modelu pro
+daný segment: není to pravděpodobnost chyby ani záruka přesnosti, seznam tedy
+udává pořadí prohlídky, ne verdikt. Segmenty, u kterých model skóre neuvedl,
+jsou vypsané za oskórovanými a označené jako „bez skóre“.
+
+Práh začíná na 0.60 a lze jej nastavit mezi 0.00 a 1.00. Patří jen otevřené
+stránce: nikdy se nezapisuje do nastavení ani na disk, takže další relace opět
+začíná na 0.60. Výběr řádku zvýrazní odpovídající segment v editoru a přesune
+tam kurzor; pokud je text segmentu už přepsaný k nepoznání, panel to oznámí
+místo skoku. „Přehrát segment“ je zástupné místo pro místní přehrávání v příští
+verzi a zatím hlásí, že přehrávání ještě není k dispozici.
 
 ## Formáty a soukromí
 

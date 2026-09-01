@@ -163,6 +163,7 @@ def _app(*, text: str = "original", fail: Exception | None = None) -> VoiceStudi
     app.status = SimpleNamespace(values=[], set=lambda value: app.status.values.append(value))
     app._editor_baseline = snapshot_editor(text, app.editor.tags)
     app.settings = SimpleNamespace(auto_copy=False, openai_cleanup_model="test-model")
+    app.confidence_panel_visible = False
     app._history_items = [transcript, _transcript("other")]
     app.history = FakeHistory(0)
     app.search_var = SimpleNamespace(get=lambda: "")

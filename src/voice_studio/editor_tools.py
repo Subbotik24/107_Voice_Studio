@@ -8,6 +8,7 @@ implemented in this module: the bounded manual-edit undo in
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -26,6 +27,12 @@ DEFAULT_FILLERS: dict[str, tuple[str, ...]] = {
 class TextMatch:
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class ConfidenceEntry:
+    index: int
+    confidence: float | None
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,35 @@ def segment_index_for_offset(
         if start <= offset < end:
             return index
     return None
+
+
+def _usable_confidence(value: object) -> float | None:
+    """Return the engine score as a float, or ``None`` when there is no score."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def confidence_entries(
+    segments: Sequence[Segment], threshold: float
+) -> tuple[ConfidenceEntry, ...]:
+    """List the segments to review: lowest score first, then the unscored ones."""
+
+    bound = _usable_confidence(threshold)
+    if bound is None or not 0.0 <= bound <= 1.0:
+        raise ValueError("confidence threshold must be a number between 0.0 and 1.0")
+    scored: list[ConfidenceEntry] = []
+    unscored: list[ConfidenceEntry] = []
+    for index, segment in enumerate(segments):
+        value = _usable_confidence(getattr(segment, "confidence", None))
+        if value is None:
+            unscored.append(ConfidenceEntry(index, None))
+        elif value < bound:
+            scored.append(ConfidenceEntry(index, value))
+    scored.sort(key=lambda entry: (entry.confidence, entry.index))
+    return tuple(scored) + tuple(unscored)
 
 
 def _filler_pattern(words: Sequence[str]) -> re.Pattern[str] | None:

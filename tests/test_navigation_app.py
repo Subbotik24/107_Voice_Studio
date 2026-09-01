@@ -134,6 +134,7 @@ def test_discarding_studio_edits_restores_persisted_editor_before_navigation(
     app.details = FakeReadonly()
     app.status = SimpleNamespace(set=lambda _value: None)
     app.settings = SimpleNamespace(auto_copy=False)
+    app.confidence_panel_visible = False
     app._editor_baseline = snapshot_editor("saved text", {"bold": [("1.0", "1.5")]})
     app._confirm_editor_transition = VoiceStudioApp._confirm_editor_transition.__get__(app)
     monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *_args, **_kwargs: False)

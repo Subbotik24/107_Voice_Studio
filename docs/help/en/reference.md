@@ -60,12 +60,30 @@ and `--no-vad`. The Ollama and OpenAI profiles ignore this setting.
 | **Find and replace** | Opens a panel under the editor: match case, whole word, a match count, **Replace** and **Replace all**. |
 | **Add to dictionary** | Turns the selection into a rule and saves the managed dictionary. |
 | **Filler words** | Shows every match with its context; only the checked ones are removed. |
+| **Confidence score** | Lists the segments with the lowest confidence score for review. |
 
-All three tools change only the text in the editor. Nothing reaches storage
+These tools change only the text in the editor. Nothing reaches storage
 until **Save edits**, and `raw_text` stays unchanged. **Add to dictionary** is
 refused while an external read-only dictionary is open or while the Dictionary
 page has unsaved changes. Filler words come from the list for the recording
 language, or, when that is `auto`, from the recognition language in Settings.
+
+### Confidence review
+
+**Confidence score** opens a panel that lists the segments whose score is below
+the threshold, the lowest score first. The score is the recognition engine's own
+confidence signal for that segment: it is not an error probability and not a
+guarantee of accuracy, so treat the list as a reading order, not a verdict.
+Segments the engine reported without a score are listed after the scored ones
+and marked **no score**.
+
+The threshold starts at 0.60 and can be set between 0.00 and 1.00. It belongs to
+the open page only: it is never written to settings or to disk, so the next
+session starts at 0.60 again. Selecting a row highlights the matching segment in
+the editor and moves the cursor there; when the segment text has already been
+edited beyond recognition, the panel says so instead of jumping. **Play segment**
+is a placeholder for the local segment playback of a later version and currently
+reports that playback is not available yet.
 
 ## Formats and limits
 
