@@ -132,7 +132,7 @@ def test_ollama_http_error_includes_bounded_server_detail(monkeypatch: pytest.Mo
             io.BytesIO(b'{"error":"Failed to load local model component"}'),
         )
 
-    monkeypatch.setattr("voice_studio.ollama_local.urlopen", fail)
+    monkeypatch.setattr("voice_studio.ollama_local._DIRECT_OPENER.open", fail)
 
     with pytest.raises(RuntimeError, match="Failed to load local model component"):
         OllamaClient().chat(model="broken-local-model")

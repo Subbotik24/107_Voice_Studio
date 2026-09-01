@@ -258,7 +258,7 @@ class VoiceStudioApp(tk.Tk):
         self._recording_residue_diagnostics: list[str] = []
         self._cancel_event = threading.Event()
         self._maintenance_thread: threading.Thread | None = None
-        self._help_window: tk.Toplevel | None = None
+        self._help_page_built = False
         self._help_images: list[tk.PhotoImage] = []
         self._installed_ollama_audio_models: list[str] = []
         self._installed_ollama_all_models: list[str] = []
@@ -269,6 +269,11 @@ class VoiceStudioApp(tk.Tk):
         self._settings_hardware_compute_combo: ttk.Combobox | None = None
         self._settings_info_var: tk.StringVar | None = None
         self._settings_ollama_status_var: tk.StringVar | None = None
+        self._settings_variables: dict[str, tk.Variable] = {}
+        self._settings_baseline: dict[str, Any] = {}
+        self._settings_save: Callable[[], bool] = lambda: False
+        self._settings_capture_binding: str | None = None
+        self._settings_return_page = "dashboard"
         self.dictionary_repository = DictionaryRepository(config_dir())
         self.dictionary = TerminologyDictionary()
         self.dictionary_read_only = False
@@ -625,14 +630,14 @@ class VoiceStudioApp(tk.Tk):
         self.settings_button = ttk.Button(
             navigation,
             text=self._t("settings"),
-            command=self._settings_dialog,
+            command=lambda: self._show_page("settings"),
             style="Sidebar.TButton",
         )
         self.settings_button.pack(fill="x", pady=6)
         self.help_button = ttk.Button(
             navigation,
             text=self._t("help"),
-            command=self._help_dialog,
+            command=lambda: self._show_page("help"),
             style="Sidebar.TButton",
         )
         self.help_button.pack(fill="x", pady=6)
@@ -641,6 +646,8 @@ class VoiceStudioApp(tk.Tk):
             "studio": self.studio_button,
             "dictionary": self.dictionary_button,
             "history": self.history_nav_button,
+            "settings": self.settings_button,
+            "help": self.help_button,
         }
         self._sidebar_buttons = (
             (self.dashboard_button, "dashboard", "⌂"),
@@ -1349,11 +1356,23 @@ class VoiceStudioApp(tk.Tk):
         ttk.Label(
             test_box, textvariable=self.dictionary_test_result_var, style="CardMuted.TLabel"
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.settings_page = ttk.Frame(self.page_host, style="Canvas.TFrame")
+        self.settings_page.grid(row=0, column=0, sticky="nsew")
+        self.settings_page.grid_rowconfigure(1, weight=1)
+        self.settings_page.grid_columnconfigure(0, weight=1)
+
+        self.help_page = ttk.Frame(self.page_host, style="Canvas.TFrame")
+        self.help_page.grid(row=0, column=0, sticky="nsew")
+        self.help_page.grid_rowconfigure(1, weight=1)
+        self.help_page.grid_columnconfigure(0, weight=1)
+
         self._page_frames = {
             "dashboard": self.dashboard_page,
             "studio": self.studio_page,
             "dictionary": self.dictionary_page,
             "history": self.history_page,
+            "settings": self.settings_page,
+            "help": self.help_page,
         }
 
         self.readiness_frame = ttk.Frame(
@@ -1438,7 +1457,7 @@ class VoiceStudioApp(tk.Tk):
         self._studio_layout: StudioLayout | None = None
         self._show_page("dashboard")
         self.bind("<Configure>", self._on_window_configure, add="+")
-        self.bind_all("<F1>", lambda _event: self._help_dialog(), add="+")
+        self.bind_all("<F1>", lambda _event: self._show_page("help"), add="+")
         self.after_idle(lambda: self._apply_studio_layout(self.winfo_width(), force=True))
         self._update_engine_label()
 
@@ -1478,17 +1497,31 @@ class VoiceStudioApp(tk.Tk):
     def _show_page(self, page: str) -> bool:
         if page not in self._page_frames:
             raise ValueError(f"unknown central page: {page}")
+        entering = self._current_page != page
+        if page == "settings" and entering and self.__dict__.get("_busy", False):
+            self.status.set(self._t("task_already_running"))
+            return False
         if self._current_page == "studio" and page != "studio":
             if not self._confirm_editor_transition():
                 return False
         if self._current_page == "dictionary" and page != "dictionary":
             if not self._confirm_dictionary_transition():
                 return False
-        if page == "dictionary" and self._current_page != "dictionary":
+        if self._current_page == "settings" and page != "settings":
+            if not self._confirm_settings_transition():
+                return False
+        if page == "dictionary" and entering:
             if not self._reload_dictionary():
                 return False
+        if page == "settings" and entering:
+            self._settings_return_page = self._current_page
+            self._build_settings_page()
+        if page == "help" and entering:
+            self._build_help_page()
         if self._current_page == "studio" and page != "studio":
             self._stop_playback()
+        if self._current_page == "settings" and page != "settings":
+            self._leave_settings_page()
         for page_id, frame in self._page_frames.items():
             if page_id == page:
                 frame.grid()
@@ -1663,6 +1696,24 @@ class VoiceStudioApp(tk.Tk):
         if choice:
             return self._save_dictionary()
         return self._reload_dictionary()
+
+    def _settings_page_is_dirty(self) -> bool:
+        baseline = self.__dict__.get("_settings_baseline") or {}
+        variables = self.__dict__.get("_settings_variables") or {}
+        return any(variable.get() != baseline.get(name) for name, variable in variables.items())
+
+    def _confirm_settings_transition(self) -> bool:
+        if not self._settings_page_is_dirty():
+            return True
+        choice = messagebox.askyesnocancel(
+            self._t("settings"), self._t("settings_unsaved"), parent=self
+        )
+        if choice is None:
+            return False
+        if choice:
+            return bool(self._settings_save())
+        self._build_settings_page()
+        return True
 
     def _apply_settings_update(self, updated: Settings) -> bool:
         previous_ui_language = self.settings.ui_language
@@ -2205,9 +2256,7 @@ class VoiceStudioApp(tk.Tk):
         self.readiness_ai_caption.configure(text=self._t("ai_cleanup_short"))
         self.privacy_note_label.configure(text=self._t("privacy_note"))
         self._apply_studio_layout(self.winfo_width(), force=True)
-        help_window = getattr(self, "_help_window", None)
-        if help_window is not None and help_window.winfo_exists():
-            help_window.title(self._t("help_title"))
+        if self._help_page_built:
             self._help_title_label.configure(text=self._t("help_title"))
             self._help_intro_label.configure(text=self._t("help_intro"))
             self._help_search_label.configure(text=self._t("help_search"))
@@ -3899,67 +3948,45 @@ class VoiceStudioApp(tk.Tk):
             export_transcript(self.current, fmt, Path(destination))
             self.status.set(self._t("exported", name=Path(destination).name))
 
-    def _raise_existing_help(self) -> bool:
-        window = getattr(self, "_help_window", None)
-        if window is None or not window.winfo_exists():
-            self._help_window = None
-            return False
-        window.deiconify()
-        window.lift()
-        window.focus_force()
-        return True
-
     def _localized_help_topics(self, help_root: Path) -> tuple[HelpTopic, ...]:
         return load_help_topics(help_root, self.settings.ui_language)
 
-    def _close_help_window(self) -> str:
-        window = getattr(self, "_help_window", None)
-        self._help_window = None
+    def _reset_help_page(self) -> None:
+        self._help_page_built = False
         self._help_images = []
-        if window is not None and window.winfo_exists():
-            window.destroy()
-        return "break"
+        for child in self.help_page.winfo_children():
+            child.destroy()
 
-    def _help_dialog(self) -> None:
-        if self._raise_existing_help():
+    def _build_help_page(self) -> None:
+        if self._help_page_built:
             return
+        self._reset_help_page()
         try:
             help_root = resolve_help_root()
             topics = self._localized_help_topics(help_root)
         except (OSError, ValueError) as exc:
-            messagebox.showerror(
-                self._t("help"), self._t("help_unavailable", error=exc), parent=self
-            )
+            message = self._t("help_unavailable", error=exc)
+            self.status.set(message)
+            ttk.Label(
+                self.help_page,
+                text=message,
+                style="CardMuted.TLabel",
+                wraplength=620,
+                justify="left",
+            ).grid(row=0, column=0, sticky="w", padx=28, pady=28)
             return
 
         theme = VOICE_STUDIO_THEME
-        dialog = tk.Toplevel(self)
-        self._help_window = dialog
-        self._help_images = []
-        dialog.title(self._t("help_title"))
-        dialog.geometry("1040x720")
-        dialog.minsize(820, 560)
-        dialog.transient(self)
-        dialog.configure(background=theme.canvas)
-        dialog.grid_rowconfigure(1, weight=1)
-        dialog.grid_columnconfigure(0, weight=1)
-
-        def close_help(_event: Any = None) -> str:
-            return self._close_help_window()
-
-        dialog.protocol("WM_DELETE_WINDOW", close_help)
-        dialog.bind("<Escape>", close_help)
-
-        header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="Topbar.TFrame")
+        header = ttk.Frame(self.help_page, padding=(28, 22, 28, 18), style="Canvas.TFrame")
         header.grid(row=0, column=0, sticky="ew")
         self._help_title_label = ttk.Label(header, text=self._t("help_title"), style="Title.TLabel")
         self._help_title_label.pack(anchor="w")
         self._help_intro_label = ttk.Label(
-            header, text=self._t("help_intro"), style="TopbarMuted.TLabel"
+            header, text=self._t("help_intro"), style="Subtitle.TLabel"
         )
         self._help_intro_label.pack(anchor="w", pady=(4, 0))
 
-        body = ttk.Frame(dialog, padding=(24, 20), style="Canvas.TFrame")
+        body = ttk.Frame(self.help_page, padding=(24, 20), style="Canvas.TFrame")
         body.grid(row=1, column=0, sticky="nsew")
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(1, weight=1)
@@ -4150,29 +4177,35 @@ class VoiceStudioApp(tk.Tk):
         search_entry.bind("<Return>", populate_topics)
         self._help_search_button.configure(command=populate_topics)
 
-        footer = ttk.Frame(dialog, padding=(24, 0, 24, 18), style="Canvas.TFrame")
+        footer = ttk.Frame(self.help_page, padding=(24, 0, 24, 18), style="Canvas.TFrame")
         footer.grid(row=2, column=0, sticky="ew")
-        self._help_close_button = ttk.Button(footer, text=self._t("help_close"), command=close_help)
+        self._help_close_button = ttk.Button(
+            footer,
+            text=self._t("help_close"),
+            command=lambda: self._show_page("dashboard"),
+        )
         self._help_close_button.pack(side="right")
         populate_topics()
         search_entry.focus_set()
+        self._help_page_built = True
 
-    def _close_settings_dialog(self, dialog: tk.Toplevel) -> None:
-        """Finish Tk teardown before starting the native keyboard listener."""
+    def _leave_settings_page(self) -> None:
+        """Release the settings page bindings before starting the native listener."""
 
         self._settings_ollama_combo = None
         self._settings_hardware_device_combo = None
         self._settings_hardware_compute_combo = None
         self._settings_info_var = None
         self._settings_ollama_status_var = None
-        dialog.grab_release()
-        dialog.destroy()
+        if self._settings_capture_binding is not None:
+            self.unbind("<KeyPress>", self._settings_capture_binding)
+            self._settings_capture_binding = None
         self.after_idle(self._start_hotkey)
 
     def _refresh_after_settings_save(self, previous_ui_language: str) -> None:
         self.job_controller.close()
         if previous_ui_language != self.settings.ui_language:
-            self._close_help_window()
+            self._reset_help_page()
         self._refresh_ui_text()
 
     def _start_hardware_detection(self) -> None:
@@ -4195,21 +4228,14 @@ class VoiceStudioApp(tk.Tk):
             if info is not None:
                 info.set(self._t("hardware_detection_busy"))
 
-    def _settings_dialog(self) -> None:
+    def _build_settings_page(self) -> None:
         # Do not let the currently configured global shortcut start a recording
-        # while the user is choosing a new shortcut in this modal dialog.
+        # while the user is choosing a new shortcut on this page.
         if self.hotkey is not None and self.hotkey.stop():
             self.hotkey = None
-        dialog = tk.Toplevel(self)
-        dialog.title(self._t("settings_title"))
-        dialog.transient(self)
-        dialog.grab_set()
-        dialog.geometry("980x700")
-        dialog.minsize(900, 620)
-        dialog.resizable(True, True)
-        dialog.configure(background=VOICE_STUDIO_THEME.canvas)
-        dialog.grid_rowconfigure(1, weight=1)
-        dialog.grid_columnconfigure(0, weight=1)
+        container = self.settings_page
+        for child in container.winfo_children():
+            child.destroy()
 
         language_labels = dict(UI_LANGUAGE_CHOICES)
         language_codes = {label: code for code, label in UI_LANGUAGE_CHOICES}
@@ -4252,12 +4278,14 @@ class VoiceStudioApp(tk.Tk):
             "cleanup_provider": tk.StringVar(value=self.settings.cleanup_provider),
             "ollama_model": tk.StringVar(value=selected_ollama_model),
         }
+        self._settings_variables = variables
+        self._settings_baseline = {name: value.get() for name, value in variables.items()}
         info = tk.StringVar(value=ollama_status)
         self._settings_info_var = info
         ollama_status_var = tk.StringVar(value=ollama_status)
         self._settings_ollama_status_var = ollama_status_var
 
-        header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="SettingsHeader.TFrame")
+        header = ttk.Frame(container, padding=(28, 22, 28, 18), style="SettingsHeader.TFrame")
         header.grid(row=0, column=0, sticky="ew")
         ttk.Label(header, text=self._t("settings_title"), style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(
@@ -4266,7 +4294,7 @@ class VoiceStudioApp(tk.Tk):
             style="CardMuted.TLabel",
         ).pack(anchor="w", pady=(4, 0))
 
-        notebook = ttk.Notebook(dialog)
+        notebook = ttk.Notebook(container)
         notebook.grid(row=1, column=0, sticky="nsew", padx=24, pady=(18, 12))
         profiles_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
         general_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
@@ -4399,7 +4427,7 @@ class VoiceStudioApp(tk.Tk):
         )
 
         def choose_dictionary() -> None:
-            path = filedialog.askopenfilename(parent=dialog, filetypes=[("JSON", "*.json")])
+            path = filedialog.askopenfilename(parent=self, filetypes=[("JSON", "*.json")])
             if path:
                 variables["dictionary_path"].set(path)
 
@@ -4425,9 +4453,11 @@ class VoiceStudioApp(tk.Tk):
             nonlocal capture_active
             capture_active = True
             info.set(self._t("hotkey_capture_prompt"))
-            dialog.focus_set()
+            self.focus_set()
 
-        dialog.bind("<KeyPress>", capture_hotkey)
+        if self._settings_capture_binding is not None:
+            self.unbind("<KeyPress>", self._settings_capture_binding)
+        self._settings_capture_binding = self.bind("<KeyPress>", capture_hotkey, add="+")
         ttk.Button(
             hotkey_row,
             text=self._t("capture_hotkey"),
@@ -4562,7 +4592,7 @@ class VoiceStudioApp(tk.Tk):
                 "OpenAI API key",
                 self._t("key_prompt"),
                 show="*",
-                parent=dialog,
+                parent=self,
             )
             if value is None:
                 return
@@ -4570,14 +4600,14 @@ class VoiceStudioApp(tk.Tk):
                 set_openai_api_key(value)
                 info.set(self._t("key_saved"))
             except Exception as exc:
-                messagebox.showerror("OpenAI", str(exc), parent=dialog)
+                messagebox.showerror("OpenAI", str(exc), parent=self)
 
         def delete_cloud_key() -> None:
             try:
                 removed = delete_openai_api_key()
                 info.set(self._t("key_removed") if removed else self._t("key_missing"))
             except Exception as exc:
-                messagebox.showerror("OpenAI", str(exc), parent=dialog)
+                messagebox.showerror("OpenAI", str(exc), parent=self)
 
         def test_cloud_key() -> None:
             try:
@@ -4613,7 +4643,7 @@ class VoiceStudioApp(tk.Tk):
 
         show_engine_page(str(variables["profile"].get()))
 
-        footer = ttk.Frame(dialog, padding=(24, 12, 24, 18), style="SettingsHeader.TFrame")
+        footer = ttk.Frame(container, padding=(24, 12, 24, 18), style="SettingsHeader.TFrame")
         footer.grid(row=2, column=0, sticky="ew")
         ttk.Label(
             footer,
@@ -4624,10 +4654,11 @@ class VoiceStudioApp(tk.Tk):
         footer_actions = ttk.Frame(footer, style="SettingsHeader.TFrame")
         footer_actions.pack(side="right", padx=(18, 0))
 
-        def close_without_saving() -> None:
-            self._close_settings_dialog(dialog)
+        def discard_and_leave() -> None:
+            self._build_settings_page()
+            self._show_page(self._settings_return_page)
 
-        def save() -> None:
+        def save() -> bool:
             try:
                 updated = replace(
                     self.settings,
@@ -4655,20 +4686,23 @@ class VoiceStudioApp(tk.Tk):
                 updated = apply_profile(updated, updated.profile)
                 updated.validate()
             except Exception as exc:
-                messagebox.showerror(self._t("settings"), str(exc), parent=dialog)
-                return
+                messagebox.showerror(self._t("settings"), str(exc), parent=self)
+                return False
             if not self._apply_settings_update(updated):
-                return
+                return False
             self.status.set(self._t("settings_saved"))
-            self._close_settings_dialog(dialog)
+            self._build_settings_page()
+            if self._settings_info_var is not None:
+                self._settings_info_var.set(self._t("settings_saved"))
+            return True
 
-        ttk.Button(footer_actions, text=self._t("cancel"), command=close_without_saving).pack(
+        self._settings_save = save
+        ttk.Button(footer_actions, text=self._t("cancel"), command=discard_and_leave).pack(
             side="left", padx=(0, 8)
         )
         ttk.Button(
             footer_actions, text=self._t("save"), command=save, style="Primary.TButton"
         ).pack(side="left")
-        dialog.protocol("WM_DELETE_WINDOW", close_without_saving)
 
     def _models_dialog(self) -> None:
         dialog = tk.Toplevel(self)

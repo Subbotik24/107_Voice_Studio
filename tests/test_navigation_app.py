@@ -73,7 +73,8 @@ def _page_app(current_page: str = "dashboard") -> VoiceStudioApp:
     app = object.__new__(VoiceStudioApp)
     app._current_page = current_page
     app._page_frames = {
-        page: FakeFrame() for page in ("dashboard", "studio", "dictionary", "history")
+        page: FakeFrame()
+        for page in ("dashboard", "studio", "dictionary", "history", "settings", "help")
     }
     app._page_buttons = {page: FakeButton() for page in app._page_frames}
     app.readiness_frame = FakeFrame()

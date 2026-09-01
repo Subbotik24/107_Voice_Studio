@@ -206,12 +206,12 @@ def test_cli_transcribe_without_vad_flags_keeps_the_saved_choice():
     assert settings.vad_filter is False
 
 
-def test_settings_dialog_exposes_a_vad_control_and_saves_it():
+def test_settings_page_exposes_a_vad_control_and_saves_it():
     import inspect
 
     from voice_studio.app import VoiceStudioApp
 
-    source = inspect.getsource(VoiceStudioApp._settings_dialog)
+    source = inspect.getsource(VoiceStudioApp._build_settings_page)
 
     assert '"vad_filter"' in source
     assert 'self._t("vad_filter")' in source

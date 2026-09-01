@@ -283,27 +283,32 @@ def test_help_fragments_match_ukrainian_headings_and_are_validated(tmp_path: Pat
     )
 
 
-def test_open_help_reuses_and_focuses_the_existing_window() -> None:
+def test_help_page_is_not_rebuilt_while_it_is_already_built() -> None:
     app = object.__new__(VoiceStudioApp)
-    actions: list[str] = []
+    app._help_page_built = True
+    app.help_page = SimpleNamespace(
+        winfo_children=lambda: pytest.fail("an already built help page must be reused")
+    )
 
-    class ExistingWindow:
-        def winfo_exists(self) -> bool:
-            return True
+    VoiceStudioApp._build_help_page(app)
 
-        def deiconify(self) -> None:
-            actions.append("deiconify")
+    assert app._help_page_built is True
 
-        def lift(self) -> None:
-            actions.append("lift")
 
-        def focus_force(self) -> None:
-            actions.append("focus")
+def test_resetting_the_help_page_clears_widgets_images_and_the_built_flag() -> None:
+    app = object.__new__(VoiceStudioApp)
+    destroyed: list[str] = []
+    app._help_page_built = True
+    app._help_images = ["image"]
+    app.help_page = SimpleNamespace(
+        winfo_children=lambda: [SimpleNamespace(destroy=lambda: destroyed.append("child"))]
+    )
 
-    app._help_window = ExistingWindow()
+    VoiceStudioApp._reset_help_page(app)
 
-    assert VoiceStudioApp._raise_existing_help(app) is True
-    assert actions == ["deiconify", "lift", "focus"]
+    assert app._help_page_built is False
+    assert app._help_images == []
+    assert destroyed == ["child"]
 
 
 def test_in_app_help_loads_the_selected_interface_language(monkeypatch, tmp_path) -> None:
@@ -327,9 +332,9 @@ def test_saving_a_new_interface_language_rebuilds_open_help_before_ui_refresh() 
     actions: list[str] = []
     app.settings = SimpleNamespace(ui_language="en")
     app.job_controller = SimpleNamespace(close=lambda: actions.append("close-worker"))
-    app._close_help_window = lambda: actions.append("close-help")
+    app._reset_help_page = lambda: actions.append("reset-help")
     app._refresh_ui_text = lambda: actions.append("refresh-ui")
 
     VoiceStudioApp._refresh_after_settings_save(app, "uk")
 
-    assert actions == ["close-worker", "close-help", "refresh-ui"]
+    assert actions == ["close-worker", "reset-help", "refresh-ui"]

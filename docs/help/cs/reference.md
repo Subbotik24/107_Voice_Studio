@@ -10,8 +10,12 @@
 | **Historie** | Hledání a kombinované filtry záznamů; otevře záznam ve Studiu. |
 | **Modely** | Správa pouze modelů Faster Whisper. |
 | **Záloha** | Vytvoření, ověření a obnovení zálohy. |
-| **Nastavení** | Profily, jazyky, Ollama, Whisper a OpenAI. |
-| **Nápověda** | Tento manuál; také klávesa F1. |
+| **Nastavení** | Centrální stránka: profily, jazyky, Ollama, Whisper a OpenAI. |
+| **Nápověda** | Centrální stránka s manuálem; také klávesa F1. |
+
+Nastavení a Nápověda se otevírají uvnitř hlavního okna, stejně jako Přehled nebo
+Studio. Odchod ze stránky Nastavení s neuloženými změnami se zeptá, zda uložit,
+zahodit, nebo zůstat. Modely a Záloha zůstávají samostatnými okny.
 
 ## Profily
 

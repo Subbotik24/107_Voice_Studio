@@ -125,29 +125,36 @@ def test_studio_icon_mask_forms_a_rounded_accent_square() -> None:
     assert studio_icon_pixel(31, 31) is False
 
 
-def test_settings_dialog_destroys_tk_window_before_restarting_global_hotkey() -> None:
-    """The native listener must start only after Tk has released the dialog.
+def test_leaving_the_settings_page_releases_its_bindings_before_the_global_hotkey() -> None:
+    """The native listener must start only after the page capture binding is gone.
 
-    Restarting the global hotkey while the modal still holds the grab lets the
-    old shortcut fire into a half-torn-down dialog.
+    Restarting the global hotkey while the settings page still captures key
+    presses lets the old shortcut fire into a page that is being left.
     """
 
     app = object.__new__(VoiceStudioApp)
     order: list[str] = []
     scheduled: list[object] = []
-    dialog = SimpleNamespace(
-        grab_release=lambda: order.append("grab_release"),
-        destroy=lambda: order.append("destroy"),
-    )
+    app._settings_ollama_combo = object()
+    app._settings_hardware_device_combo = object()
+    app._settings_hardware_compute_combo = object()
+    app._settings_info_var = object()
+    app._settings_ollama_status_var = object()
+    app._settings_capture_binding = "capture-1"
+    app.unbind = lambda sequence, funcid: order.append(f"unbind:{sequence}:{funcid}")
     app.after_idle = lambda callback: (
         order.append("after_idle"),
         scheduled.append(callback),
     )
 
-    VoiceStudioApp._close_settings_dialog(app, dialog)
+    VoiceStudioApp._leave_settings_page(app)
 
-    assert order == ["grab_release", "destroy", "after_idle"]
+    assert order == ["unbind:<KeyPress>:capture-1", "after_idle"]
     assert scheduled == [app._start_hotkey], "the real hotkey starter must be the deferred call"
+    assert app._settings_capture_binding is None
+    assert app._settings_ollama_combo is None
+    assert app._settings_info_var is None
+    assert app._settings_ollama_status_var is None
 
 
 class _FakeHotkey:
@@ -227,41 +234,38 @@ def test_start_hotkey_reports_localized_stubborn_listener_detail(
     assert app_module.translate(language, "hotkey_stop_retry") in statuses[0]
 
 
-def test_settings_dialog_retains_stubborn_listener_before_building_dialog(monkeypatch) -> None:
+class _PageBuildStarted(Exception):
+    pass
+
+
+def _settings_page_stub(app: VoiceStudioApp, on_build: object = None) -> None:
+    def winfo_children() -> list[object]:
+        if callable(on_build):
+            on_build()
+        raise _PageBuildStarted()
+
+    app.settings_page = SimpleNamespace(winfo_children=winfo_children)
+
+
+def test_settings_page_retains_stubborn_listener_before_building_the_page() -> None:
     existing = _FakeHotkey([False])
     app, _statuses = _hotkey_app_stub(existing)
+    _settings_page_stub(app)
 
-    class DialogBuildStarted(Exception):
-        pass
-
-    monkeypatch.setattr(
-        app_module.tk,
-        "Toplevel",
-        lambda _app: (_ for _ in ()).throw(DialogBuildStarted()),
-    )
-
-    with pytest.raises(DialogBuildStarted):
-        VoiceStudioApp._settings_dialog(app)
+    with pytest.raises(_PageBuildStarted):
+        VoiceStudioApp._build_settings_page(app)
 
     assert existing.stop_calls == 1
     assert app.hotkey is existing
 
 
-def test_settings_dialog_clears_stopped_listener_before_building_dialog(monkeypatch) -> None:
+def test_settings_page_clears_stopped_listener_before_building_the_page() -> None:
     existing = _FakeHotkey([True])
     app, _statuses = _hotkey_app_stub(existing)
+    _settings_page_stub(app, lambda: None if app.hotkey is None else pytest.fail("listener kept"))
 
-    class DialogBuildStarted(Exception):
-        pass
-
-    def build_dialog(_app: VoiceStudioApp) -> object:
-        assert app.hotkey is None
-        raise DialogBuildStarted()
-
-    monkeypatch.setattr(app_module.tk, "Toplevel", build_dialog)
-
-    with pytest.raises(DialogBuildStarted):
-        VoiceStudioApp._settings_dialog(app)
+    with pytest.raises(_PageBuildStarted):
+        VoiceStudioApp._build_settings_page(app)
 
     assert existing.stop_calls == 1
     assert app.hotkey is None
@@ -719,21 +723,21 @@ def test_backup_ui_is_declared_with_async_work_and_reversible_restore() -> None:
 
 def test_history_actions_continuous_recording_and_hotkey_capture_are_declared() -> None:
     build_ui = inspect.getsource(VoiceStudioApp._build_ui)
-    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+    settings_page = inspect.getsource(VoiceStudioApp._build_settings_page)
 
     assert 'self._t("continuous_record")' in build_ui
     assert 'self._t("rename")' in build_ui
     assert 'self._t("delete")' in build_ui
-    assert 'self._t("capture_hotkey")' in settings_dialog
-    assert "hotkey_from_tk_event" in settings_dialog
+    assert 'self._t("capture_hotkey")' in settings_page
+    assert "hotkey_from_tk_event" in settings_page
 
 
-def test_settings_dialog_declares_all_three_reusable_engine_profiles() -> None:
-    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+def test_settings_page_declares_all_three_reusable_engine_profiles() -> None:
+    settings_page = inspect.getsource(VoiceStudioApp._build_settings_page)
 
-    assert '"ollama-local"' in settings_dialog
-    assert '"whisper-local"' in settings_dialog
-    assert '"openai-cloud"' in settings_dialog
+    assert '"ollama-local"' in settings_page
+    assert '"whisper-local"' in settings_page
+    assert '"openai-cloud"' in settings_page
 
 
 class _FakeEnginePage:
@@ -766,22 +770,22 @@ def _engine_page_switch(profiles: list[str]) -> dict[str, _FakeEnginePage]:
     return pages
 
 
-def test_the_settings_dialog_switches_engine_pages_with_the_chosen_profile() -> None:
-    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+def test_the_settings_page_switches_engine_pages_with_the_chosen_profile() -> None:
+    settings_page = inspect.getsource(VoiceStudioApp._build_settings_page)
 
-    assert "engine_pages" in settings_dialog
-    assert "def show_engine_page" in settings_dialog
-    assert "show_engine_page(preset.profile)" in settings_dialog
-    assert 'show_engine_page(str(variables["profile"].get()))' in settings_dialog
-    assert "local_ai_page" not in settings_dialog
-    assert 'self._t("local_ai_settings")' not in settings_dialog
+    assert "engine_pages" in settings_page
+    assert "def show_engine_page" in settings_page
+    assert "show_engine_page(preset.profile)" in settings_page
+    assert 'show_engine_page(str(variables["profile"].get()))' in settings_page
+    assert "local_ai_page" not in settings_page
+    assert 'self._t("local_ai_settings")' not in settings_page
     for profile, needle in (
         ("ollama-local", 'self._t("ollama_model")'),
         ("whisper-local", 'self._t("compute_type")'),
         ("openai-cloud", 'self._t("openai_cleanup_model")'),
     ):
-        assert f'engine_pages["{profile}"]' in settings_dialog
-        assert needle in settings_dialog
+        assert f'engine_pages["{profile}"]' in settings_page
+        assert needle in settings_page
 
 
 def test_exactly_one_engine_page_is_gridded_for_the_selected_profile() -> None:
@@ -883,13 +887,13 @@ def test_an_unreachable_ollama_still_reports_its_error_in_the_settings_status() 
 
 
 def test_settings_hardware_controls_are_readonly_and_detection_is_explicit() -> None:
-    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+    settings_page = inspect.getsource(VoiceStudioApp._build_settings_page)
 
-    assert "SUPPORTED_DEVICES" in settings_dialog
-    assert "SUPPORTED_COMPUTE_TYPES" in settings_dialog
-    assert settings_dialog.count('state="readonly"') >= 4
-    assert 'text=self._t("hardware_detect")' in settings_dialog
-    assert "_start_hardware_detection" in settings_dialog
+    assert "SUPPORTED_DEVICES" in settings_page
+    assert "SUPPORTED_COMPUTE_TYPES" in settings_page
+    assert settings_page.count('state="readonly"') >= 4
+    assert 'text=self._t("hardware_detect")' in settings_page
+    assert "_start_hardware_detection" in settings_page
 
 
 def test_hardware_event_updates_advisory_choices_without_selecting_settings() -> None:

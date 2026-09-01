@@ -10,8 +10,12 @@
 | **History** | Search and combined record filters; opens a record in the Studio. |
 | **Models** | Manage Faster Whisper models only. |
 | **Backup** | Create, verify, and restore backups. |
-| **Settings** | Profiles, languages, Ollama, Whisper, and OpenAI. |
-| **Help** | Opens this manual; also F1. |
+| **Settings** | Central page: profiles, languages, Ollama, Whisper, and OpenAI. |
+| **Help** | Central page with this manual; also F1. |
+
+Settings and Help open inside the main window, like Dashboard or Studio. Leaving
+the Settings page with unsaved changes asks whether to save, discard, or stay.
+Models and Backup remain separate windows.
 
 ## Profiles
 

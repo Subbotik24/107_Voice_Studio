@@ -4,9 +4,13 @@ import base64
 import json
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+# The loopback runtime must never be reached through a system proxy: with
+# HTTP_PROXY/HTTPS_PROXY set (VPN, corporate proxy), urllib would route even
+# 127.0.0.1 through it and fail while `ollama run` keeps working directly.
+_DIRECT_OPENER = build_opener(ProxyHandler({}))
 MAX_OLLAMA_RESPONSE_BYTES = 16 * 1024**2
 MAX_OLLAMA_ERROR_BYTES = 4 * 1024
 MAX_OLLAMA_WAV_BYTES = 64 * 1024**2
@@ -40,7 +44,7 @@ class OllamaClient:
             method=method,
         )
         try:
-            with urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
+            with _DIRECT_OPENER.open(request, timeout=timeout) as response:  # noqa: S310 - fixed loopback URL
                 body = response.read(MAX_OLLAMA_RESPONSE_BYTES + 1)
         except HTTPError as exc:
             error_body = exc.read(MAX_OLLAMA_ERROR_BYTES + 1)

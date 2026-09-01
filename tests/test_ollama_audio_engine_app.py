@@ -171,3 +171,46 @@ def test_engine_manager_uses_the_saved_ollama_model(monkeypatch, tmp_path):
 
     assert first is second
     assert created == ["gemma4:12b"]
+
+
+def test_loopback_client_bypasses_system_proxy_variables(monkeypatch):
+    import http.server
+    import json as json_module
+    import threading
+
+    from voice_studio import ollama_local
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - http.server API
+            payload = json_module.dumps({"models": [{"name": "gemma4:12b"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args):
+            return None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # A poisoned proxy environment must not affect the loopback client:
+        # with plain urlopen these variables would route 127.0.0.1 through the
+        # unreachable proxy and every call would fail.
+        for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY"):
+            monkeypatch.setenv(name, "http://127.0.0.1:9")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        monkeypatch.setattr(
+            ollama_local, "OLLAMA_BASE_URL", f"http://127.0.0.1:{server.server_port}"
+        )
+
+        result = ollama_local.OllamaClient().list_models()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert result == {"models": [{"name": "gemma4:12b"}]}
