@@ -38,15 +38,17 @@ def apply_profile(settings: Settings, profile: str) -> Settings:
     return updated
 
 
-def discover_ollama_audio_models(*, client: Any | None = None) -> list[str]:
-    """Return installed Ollama models that explicitly advertise audio input."""
+def discover_ollama_model_catalog(*, client: Any | None = None) -> dict[str, list[str]]:
+    """Return every installed Ollama model plus the audio-capable subset."""
 
     from .cloud_cleanup import list_ollama_models
     from .ollama_local import OllamaClient
 
     runtime = client or OllamaClient()
+    all_models: list[str] = []
     audio_models: list[str] = []
     for model in list_ollama_models(client=runtime):
+        all_models.append(model)
         try:
             details = runtime.show_model(model)
         except Exception:
@@ -54,7 +56,13 @@ def discover_ollama_audio_models(*, client: Any | None = None) -> list[str]:
         capabilities = details.get("capabilities") if isinstance(details, dict) else None
         if isinstance(capabilities, list) and "audio" in capabilities:
             audio_models.append(model)
-    return audio_models
+    return {"audio": audio_models, "all": all_models}
+
+
+def discover_ollama_audio_models(*, client: Any | None = None) -> list[str]:
+    """Return installed Ollama models that explicitly advertise audio input."""
+
+    return discover_ollama_model_catalog(client=client)["audio"]
 
 
 def with_preferred_ollama_model(settings: Settings, models: list[str]) -> Settings:

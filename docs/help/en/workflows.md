@@ -4,7 +4,7 @@
 
 1. Start Ollama.
 2. Select **Settings → Profiles → Local Ollama**.
-3. On **Local AI**, select an audio-capable model and save.
+3. Under the profile cards, select an audio-capable model and save.
 4. On **Studio**, choose **Transcribe file…** and select the file.
 
 Ollama returns plain text without trustworthy timestamps. VOICE Studio creates

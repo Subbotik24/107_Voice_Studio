@@ -13,7 +13,7 @@ neighboring **VOICE Studio** folder with the executable.
 1. Start Ollama in Windows.
 2. Open **Settings → Profiles**.
 3. Keep **Local Ollama** selected.
-4. On **Local AI**, check **Local Ollama model**.
+4. Under the profile cards, check **Local Ollama model**.
 5. If the list is empty, choose **Refresh**, then **Save**.
 
 On first launch, VOICE Studio finds only models that Ollama reports as accepting

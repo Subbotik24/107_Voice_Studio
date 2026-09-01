@@ -510,7 +510,9 @@ def test_immediate_discovery_worker_cannot_leave_a_dead_alias(monkeypatch) -> No
             return self._alive
 
     monkeypatch.setattr(app_module.threading, "Thread", ImmediateThread)
-    monkeypatch.setattr(app_module, "discover_ollama_audio_models", lambda: [])
+    monkeypatch.setattr(
+        app_module, "discover_ollama_model_catalog", lambda: {"audio": [], "all": []}
+    )
 
     VoiceStudioApp._start_ollama_model_discovery(app)
 
@@ -732,6 +734,152 @@ def test_settings_dialog_declares_all_three_reusable_engine_profiles() -> None:
     assert '"ollama-local"' in settings_dialog
     assert '"whisper-local"' in settings_dialog
     assert '"openai-cloud"' in settings_dialog
+
+
+class _FakeEnginePage:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def grid(self, **_kwargs) -> None:
+        self.calls.append("grid")
+
+    def grid_remove(self) -> None:
+        self.calls.append("grid_remove")
+
+    @property
+    def visible(self) -> bool:
+        return bool(self.calls) and self.calls[-1] == "grid"
+
+
+def _engine_page_switch(profiles: list[str]) -> dict[str, _FakeEnginePage]:
+    pages = {profile: _FakeEnginePage() for profile in profiles}
+
+    def show_engine_page(profile: str) -> None:
+        for name, page in pages.items():
+            if name == profile:
+                page.grid()
+            else:
+                page.grid_remove()
+
+    for profile in profiles:
+        show_engine_page(profile)
+    return pages
+
+
+def test_the_settings_dialog_switches_engine_pages_with_the_chosen_profile() -> None:
+    settings_dialog = inspect.getsource(VoiceStudioApp._settings_dialog)
+
+    assert "engine_pages" in settings_dialog
+    assert "def show_engine_page" in settings_dialog
+    assert "show_engine_page(preset.profile)" in settings_dialog
+    assert 'show_engine_page(str(variables["profile"].get()))' in settings_dialog
+    assert "local_ai_page" not in settings_dialog
+    assert 'self._t("local_ai_settings")' not in settings_dialog
+    for profile, needle in (
+        ("ollama-local", 'self._t("ollama_model")'),
+        ("whisper-local", 'self._t("compute_type")'),
+        ("openai-cloud", 'self._t("openai_cleanup_model")'),
+    ):
+        assert f'engine_pages["{profile}"]' in settings_dialog
+        assert needle in settings_dialog
+
+
+def test_exactly_one_engine_page_is_gridded_for_the_selected_profile() -> None:
+    pages = _engine_page_switch(["ollama-local", "whisper-local", "openai-cloud"])
+
+    assert [name for name, page in pages.items() if page.visible] == ["openai-cloud"]
+    assert pages["ollama-local"].calls == ["grid", "grid_remove", "grid_remove"]
+    assert pages["whisper-local"].calls == ["grid_remove", "grid", "grid_remove"]
+
+
+def _ollama_event_stub(settings) -> VoiceStudioApp:
+    app = _worker_registry_stub()
+    app.settings = settings
+    app._installed_ollama_audio_models = []
+    app._installed_ollama_all_models = []
+    app._ollama_discovery_error = ""
+    app._t = lambda key, **values: f"{key}:{values}" if values else key
+    app.after = lambda *_args: None
+    app._settings_hardware_device_combo = None
+    app._settings_hardware_compute_combo = None
+    app._settings_info_var = SimpleNamespace(
+        values=[],
+        set=lambda value: app._settings_info_var.values.append(value),
+    )
+    app._settings_ollama_status_var = SimpleNamespace(
+        values=[],
+        set=lambda value: app._settings_ollama_status_var.values.append(value),
+    )
+
+    class Combo:
+        def __init__(self):
+            self.values = ()
+            self.selected = ""
+
+        def winfo_exists(self):
+            return True
+
+        def configure(self, **kwargs):
+            self.values = kwargs["values"]
+
+        def set(self, value):
+            self.selected = value
+
+    app._settings_ollama_combo = Combo()
+    return app
+
+
+def test_installed_models_without_audio_capability_are_still_offered_with_a_warning() -> None:
+    app = _ollama_event_stub(app_module.Settings(ollama_model=""))
+    app.events.put(
+        ("ollama_models", {"models": [], "all_models": ["llama4:latest"], "error": ""})
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._installed_ollama_audio_models == []
+    assert app._installed_ollama_all_models == ["llama4:latest"]
+    assert app.settings.ollama_model == ""
+    assert app._settings_ollama_combo.values == ("llama4:latest",)
+    assert app._settings_info_var.values == ["ollama_no_audio_models"]
+    assert app._settings_ollama_status_var.values == ["ollama_no_audio_models"]
+
+
+def test_audio_capable_models_are_preferred_over_the_full_installed_list() -> None:
+    app = _ollama_event_stub(app_module.Settings(ollama_model="gemma4:12b"))
+    app.events.put(
+        (
+            "ollama_models",
+            {
+                "models": ["gemma4:12b"],
+                "all_models": ["llama4:latest", "gemma4:12b"],
+                "error": "",
+            },
+        )
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._settings_ollama_combo.values == ("gemma4:12b",)
+    assert app._settings_ollama_combo.selected == "gemma4:12b"
+    assert app._settings_info_var.values == ["ollama_found:{'count': 1}"]
+    assert app._settings_ollama_status_var.values == ["ollama_found:{'count': 1}"]
+
+
+def test_an_unreachable_ollama_still_reports_its_error_in_the_settings_status() -> None:
+    app = _ollama_event_stub(app_module.Settings(ollama_model=""))
+    app.events.put(
+        (
+            "ollama_models",
+            {"models": [], "all_models": [], "error": "connection refused"},
+        )
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._settings_info_var.values == ["connection refused"]
+    assert app._settings_ollama_status_var.values == ["connection refused"]
+    assert app._settings_ollama_combo.values == ()
 
 
 def test_settings_hardware_controls_are_readonly_and_detection_is_explicit() -> None:

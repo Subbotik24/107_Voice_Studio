@@ -13,6 +13,7 @@ from voice_studio.models import Settings
 from voice_studio.profiles import (
     apply_profile,
     discover_ollama_audio_models,
+    discover_ollama_model_catalog,
     with_preferred_ollama_model,
 )
 
@@ -190,6 +191,75 @@ def test_ollama_discovery_returns_only_models_that_report_audio_capability():
         "gemma4-code:latest",
         "gemma4:12b",
     ]
+
+
+class _CatalogClient:
+    def __init__(self, models, capabilities):
+        self._models = models
+        self._capabilities = capabilities
+
+    def list_models(self):
+        return {"models": [{"name": name} for name in self._models]}
+
+    def show_model(self, model):
+        capabilities = self._capabilities[model]
+        if isinstance(capabilities, Exception):
+            raise capabilities
+        return {"capabilities": capabilities}
+
+
+def test_model_catalog_reports_every_installed_model_beside_the_audio_subset():
+    client = _CatalogClient(
+        ["text-only:latest", "gemma4:12b"],
+        {
+            "text-only:latest": ["completion"],
+            "gemma4:12b": ["completion", "audio"],
+        },
+    )
+
+    assert discover_ollama_model_catalog(client=client) == {
+        "audio": ["gemma4:12b"],
+        "all": ["text-only:latest", "gemma4:12b"],
+    }
+
+
+def test_a_failing_show_model_keeps_the_model_installed_but_not_audio_capable():
+    client = _CatalogClient(
+        ["broken:latest", "gemma4:12b"],
+        {
+            "broken:latest": RuntimeError("show failed"),
+            "gemma4:12b": ["completion", "audio"],
+        },
+    )
+
+    catalog = discover_ollama_model_catalog(client=client)
+
+    assert catalog["all"] == ["broken:latest", "gemma4:12b"]
+    assert catalog["audio"] == ["gemma4:12b"]
+
+
+def test_no_audio_capability_still_lists_every_installed_model():
+    client = _CatalogClient(
+        ["llama4:latest", "mistral:latest"],
+        {"llama4:latest": ["completion"], "mistral:latest": ["completion"]},
+    )
+
+    catalog = discover_ollama_model_catalog(client=client)
+
+    assert catalog["audio"] == []
+    assert catalog["all"] == ["llama4:latest", "mistral:latest"]
+    assert discover_ollama_audio_models(client=client) == []
+
+
+def test_auto_selection_stays_empty_when_no_installed_model_reports_audio():
+    client = _CatalogClient(
+        ["llama4:latest"],
+        {"llama4:latest": ["completion"]},
+    )
+    catalog = discover_ollama_model_catalog(client=client)
+    stored = Settings(ollama_model="")
+
+    assert with_preferred_ollama_model(stored, catalog["audio"]) is stored
 
 
 def test_settings_round_trip(tmp_path):

@@ -2,15 +2,16 @@
 
 ## Ollama is unavailable
 
-Start Ollama, check `ollama list`, then open **Settings → Local AI**, choose
+Start Ollama, check `ollama list`, then open **Settings → Profiles**, choose
 **Refresh**, select a model, and save. VOICE Studio uses the fixed local address
 `127.0.0.1:11434`.
 
 ## The Ollama model does not support audio
 
-Select a model that Ollama reports with `audio` capability. VOICE Studio does
-not install or update Ollama models and never switches to Whisper without your
-selection.
+Select a model that Ollama reports with `audio` capability. When no installed
+model advertises it, the list offers every installed model with a warning and
+recognition may still fail. VOICE Studio does not install or update Ollama
+models and never switches to Whisper without your selection.
 
 ## Ollama returned no transcript
 

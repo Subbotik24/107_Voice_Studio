@@ -21,6 +21,12 @@
 | **Lokální Whisper** | Faster Whisper | Vypnuto | Místní |
 | **OpenAI cloud** | Uložený OpenAI STT model | OpenAI ručně | Výslovný souhlas |
 
+Nastavení modulu je přímo pod kartami profilů a přepíná se spolu s vybraným
+profilem: model Ollama a lokální AI oprava, parametry Faster Whisper, nebo
+modely a klíč OpenAI. Samostatná záložka Lokální AI již neexistuje. Pokud žádný
+nainstalovaný model Ollama neuvádí capability `audio`, seznam nabídne všechny
+nainstalované modely s upozorněním a volba zůstává na vás.
+
 ## Obecné
 
 | Pole | Chování |
@@ -31,7 +37,7 @@
 | **Automaticky kopírovat** | Ve výchozím stavu vypnuto. |
 | **Pouze offline** | Určuje profil; místní profily cloud blokují. |
 
-## Rozpoznávání a Lokální AI
+## Rozpoznávání
 
 | Pole | Účel |
 |---|---|
@@ -51,7 +57,7 @@ Lokální Whisper. Vypněte jej, pokud filtr ořezává tichou řeč; ekvivalent
 jsou `--vad` a `--no-vad`. Profily Ollama a OpenAI toto nastavení ignorují.
 | **Model OpenAI STT** | Používá jen cloudový profil. |
 | **Slovník JSON** | Deterministické nahrazení po rozpoznání. |
-| **Lokální model Ollama** | Instalovaný model s capability `audio`. |
+| **Lokální model Ollama** | Instalovaný model s capability `audio`; pokud žádný není, všechny instalované modely s upozorněním. |
 | **Obnovit** | Na pozadí znovu zkontroluje modely Ollama. |
 | **OpenAI key** | OS keychain; není v settings.json. |
 

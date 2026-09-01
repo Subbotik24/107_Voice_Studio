@@ -21,6 +21,12 @@
 | **Local Whisper** | Faster Whisper | Off | Local |
 | **OpenAI cloud** | Saved OpenAI STT model | OpenAI manually | Explicit consent |
 
+Engine settings sit directly under the profile cards and switch with the
+selected profile: the Ollama model and local AI cleanup, the Faster Whisper
+parameters, or the OpenAI models and key. There is no separate Local AI tab any
+more. When no installed Ollama model advertises the `audio` capability, the list
+falls back to every installed model with a warning, and the choice stays yours.
+
 ## General
 
 | Field | Values / behavior |
@@ -31,7 +37,7 @@
 | **Automatically copy** | Off by default. |
 | **Offline-only** | Controlled by the profile; local profiles block cloud actions. |
 
-## Recognition and Local AI
+## Recognition
 
 | Field | Purpose |
 |---|---|
@@ -51,7 +57,7 @@ Turn it off if the filter clips quiet speech; the CLI equivalents are `--vad`
 and `--no-vad`. The Ollama and OpenAI profiles ignore this setting.
 | **OpenAI STT model** | Used only by the cloud profile. |
 | **Dictionary JSON** | Deterministic replacements after recognition. |
-| **Local Ollama model** | Installed model that reports `audio` capability. |
+| **Local Ollama model** | Installed model that reports `audio` capability; with none, every installed model plus a warning. |
 | **Refresh** | Rechecks local Ollama models in the background. |
 | **OpenAI key** | Stored in the OS keychain, not settings.json. |
 

@@ -13,7 +13,7 @@ rozbalte celý ZIP včetně sousední složky **VOICE Studio**.
 1. Spusťte Ollama ve Windows.
 2. Otevřete **Nastavení → Profily**.
 3. Ponechte **Lokální Ollama**.
-4. Na kartě **Lokální AI** zkontrolujte **Lokální model Ollama**.
+4. Pod kartami profilů zkontrolujte **Lokální model Ollama**.
 5. Je-li seznam prázdný, zvolte **Obnovit** a potom **Uložit**.
 
 Při prvním spuštění VOICE Studio na pozadí vyhledá pouze modely, které Ollama

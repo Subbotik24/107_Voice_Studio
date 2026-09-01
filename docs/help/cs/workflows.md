@@ -4,7 +4,7 @@
 
 1. Spusťte Ollama.
 2. V **Nastavení → Profily** zvolte **Lokální Ollama**.
-3. V **Lokální AI** vyberte audio model a nastavení uložte.
+3. Pod kartami profilů vyberte audio model a nastavení uložte.
 4. Ve **Studio** zvolte **Přepsat soubor…**.
 
 Ollama vrací text bez spolehlivých časových značek. VOICE Studio proto vytvoří

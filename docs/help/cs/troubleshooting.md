@@ -2,14 +2,16 @@
 
 ## Ollama není dostupná
 
-Spusťte Ollama, ověřte `ollama list`, poté v **Nastavení → Lokální AI** zvolte
+Spusťte Ollama, ověřte `ollama list`, poté v **Nastavení → Profily** zvolte
 **Obnovit**, vyberte model a nastavení uložte. VOICE Studio používá pevnou místní
 adresu `127.0.0.1:11434`.
 
 ## Model Ollama nepodporuje zvuk
 
-Vyberte model, který v Ollama hlásí capability `audio`. Program modely Ollama
-neinstaluje ani neaktualizuje a bez vašeho výběru nepřejde na Whisper.
+Vyberte model, který v Ollama hlásí capability `audio`. Pokud takový model není
+nainstalován, seznam nabídne všechny instalované modely s upozorněním a
+rozpoznávání může selhat. Program modely Ollama neinstaluje ani neaktualizuje a
+bez vašeho výběru nepřejde na Whisper.
 
 ## Ollama nevrátila přepis
 

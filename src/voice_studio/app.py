@@ -70,7 +70,7 @@ from .models import (
 from .playback import SUPPORTED_SPEEDS, AudioPlayer
 from .profiles import (
     apply_profile,
-    discover_ollama_audio_models,
+    discover_ollama_model_catalog,
     with_preferred_ollama_model,
 )
 from .recorder import AudioRecorder
@@ -261,12 +261,14 @@ class VoiceStudioApp(tk.Tk):
         self._help_window: tk.Toplevel | None = None
         self._help_images: list[tk.PhotoImage] = []
         self._installed_ollama_audio_models: list[str] = []
+        self._installed_ollama_all_models: list[str] = []
         self._ollama_discovery_error = ""
         self._ollama_discovery_thread: threading.Thread | None = None
         self._settings_ollama_combo: ttk.Combobox | None = None
         self._settings_hardware_device_combo: ttk.Combobox | None = None
         self._settings_hardware_compute_combo: ttk.Combobox | None = None
         self._settings_info_var: tk.StringVar | None = None
+        self._settings_ollama_status_var: tk.StringVar | None = None
         self.dictionary_repository = DictionaryRepository(config_dir())
         self.dictionary = TerminologyDictionary()
         self.dictionary_read_only = False
@@ -396,10 +398,20 @@ class VoiceStudioApp(tk.Tk):
 
         def discover() -> None:
             try:
-                models = discover_ollama_audio_models()
-                self._post_event("ollama_models", {"models": models, "error": ""})
+                catalog = discover_ollama_model_catalog()
+                self._post_event(
+                    "ollama_models",
+                    {
+                        "models": catalog.get("audio", []),
+                        "all_models": catalog.get("all", []),
+                        "error": "",
+                    },
+                )
             except Exception as exc:
-                self._post_event("ollama_models", {"models": [], "error": str(exc)[:500]})
+                self._post_event(
+                    "ollama_models",
+                    {"models": [], "all_models": [], "error": str(exc)[:500]},
+                )
 
         thread = self._start_worker("ollama-model-discovery", discover)
         self._assign_worker_alias("ollama-model-discovery", thread, "_ollama_discovery_thread")
@@ -2587,7 +2599,12 @@ class VoiceStudioApp(tk.Tk):
                     )
                 elif event == "ollama_models":
                     models = [str(item) for item in value.get("models", []) if str(item)]
+                    all_models = [str(item) for item in value.get("all_models", []) if str(item)]
+                    for model in models:
+                        if model not in all_models:
+                            all_models.append(model)
                     self._installed_ollama_audio_models = models
+                    self._installed_ollama_all_models = all_models
                     self._ollama_discovery_error = str(value.get("error", ""))
                     updated = with_preferred_ollama_model(self.settings, models)
                     if updated is not self.settings:
@@ -2600,20 +2617,23 @@ class VoiceStudioApp(tk.Tk):
                             self._refresh_ui_text()
                     combo = self._settings_ollama_combo
                     if combo is not None and combo.winfo_exists():
-                        choices = list(models)
+                        choices = list(models or all_models)
                         if self.settings.ollama_model not in choices:
                             choices.insert(0, self.settings.ollama_model)
                         combo.configure(values=tuple(item for item in choices if item))
                         if self.settings.ollama_model:
                             combo.set(self.settings.ollama_model)
-                    info = self._settings_info_var
-                    if info is not None:
-                        if self._ollama_discovery_error:
-                            info.set(self._ollama_discovery_error)
-                        elif models:
-                            info.set(self._t("ollama_found", count=len(models)))
-                        else:
-                            info.set(self._t("ollama_missing"))
+                    if self._ollama_discovery_error:
+                        message = self._ollama_discovery_error
+                    elif models:
+                        message = self._t("ollama_found", count=len(models))
+                    elif all_models:
+                        message = self._t("ollama_no_audio_models")
+                    else:
+                        message = self._t("ollama_missing")
+                    for variable in (self._settings_info_var, self._settings_ollama_status_var):
+                        if variable is not None:
+                            variable.set(message)
                 elif event == "hardware_detection":
                     result = value
                     if not isinstance(result, HardwareDetectionResult):
@@ -4144,6 +4164,7 @@ class VoiceStudioApp(tk.Tk):
         self._settings_hardware_device_combo = None
         self._settings_hardware_compute_combo = None
         self._settings_info_var = None
+        self._settings_ollama_status_var = None
         dialog.grab_release()
         dialog.destroy()
         self.after_idle(self._start_hotkey)
@@ -4192,17 +4213,22 @@ class VoiceStudioApp(tk.Tk):
 
         language_labels = dict(UI_LANGUAGE_CHOICES)
         language_codes = {label: code for code, label in UI_LANGUAGE_CHOICES}
-        installed_ollama_models = list(self._installed_ollama_audio_models)
+        audio_ollama_models = list(self._installed_ollama_audio_models)
+        installed_ollama_models = list(audio_ollama_models) or list(
+            self._installed_ollama_all_models
+        )
         if self._ollama_discovery_error:
             ollama_status = self._ollama_discovery_error
+        elif audio_ollama_models:
+            ollama_status = self._t("ollama_found", count=len(audio_ollama_models))
         elif installed_ollama_models:
-            ollama_status = self._t("ollama_found", count=len(installed_ollama_models))
+            ollama_status = self._t("ollama_no_audio_models")
         else:
             ollama_status = self._t("ollama_checking")
         if self.settings.ollama_model and self.settings.ollama_model not in installed_ollama_models:
             installed_ollama_models.insert(0, self.settings.ollama_model)
         selected_ollama_model = self.settings.ollama_model or (
-            installed_ollama_models[0] if installed_ollama_models else ""
+            audio_ollama_models[0] if audio_ollama_models else ""
         )
         variables: dict[str, tk.Variable] = {
             "profile": tk.StringVar(value=self.settings.profile),
@@ -4228,6 +4254,8 @@ class VoiceStudioApp(tk.Tk):
         }
         info = tk.StringVar(value=ollama_status)
         self._settings_info_var = info
+        ollama_status_var = tk.StringVar(value=ollama_status)
+        self._settings_ollama_status_var = ollama_status_var
 
         header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="SettingsHeader.TFrame")
         header.grid(row=0, column=0, sticky="ew")
@@ -4243,17 +4271,33 @@ class VoiceStudioApp(tk.Tk):
         profiles_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
         general_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
         recognition_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
-        local_ai_page = ttk.Frame(notebook, padding=22, style="Card.TFrame")
         notebook.add(profiles_page, text=self._t("profiles_settings"))
         notebook.add(general_page, text=self._t("general_settings"))
         notebook.add(recognition_page, text=self._t("recognition_settings"))
-        notebook.add(local_ai_page, text=self._t("local_ai_settings"))
-        for page in (general_page, recognition_page, local_ai_page):
+        for page in (general_page, recognition_page):
             page.grid_columnconfigure(0, weight=1, uniform="settings")
             page.grid_columnconfigure(1, weight=1, uniform="settings")
 
         for column in range(3):
             profiles_page.grid_columnconfigure(column, weight=1, uniform="profiles")
+
+        engine_area = ttk.Frame(profiles_page, style="Card.TFrame")
+        engine_area.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(20, 0))
+        engine_area.grid_columnconfigure(0, weight=1)
+        engine_pages: dict[str, ttk.Frame] = {}
+        for profile in ("ollama-local", "whisper-local", "openai-cloud"):
+            engine_page = ttk.Frame(engine_area, padding=(18, 18), style="CardBorder.TFrame")
+            engine_page.grid(row=0, column=0, sticky="ew")
+            engine_page.grid_columnconfigure(0, weight=1, uniform="settings")
+            engine_page.grid_columnconfigure(1, weight=1, uniform="settings")
+            engine_pages[profile] = engine_page
+
+        def show_engine_page(profile: str) -> None:
+            for name, page in engine_pages.items():
+                if name == profile:
+                    page.grid()
+                else:
+                    page.grid_remove()
 
         def activate_profile() -> None:
             preset = apply_profile(self.settings, str(variables["profile"].get()))
@@ -4261,6 +4305,7 @@ class VoiceStudioApp(tk.Tk):
             variables["cleanup_provider"].set(preset.cleanup_provider)
             variables["automatic_cleanup"].set(preset.automatic_cleanup)
             variables["offline_only"].set(preset.offline_only)
+            show_engine_page(preset.profile)
             info.set(
                 f"{self._t('active_profile')}: "
                 f"{self._t('profile_' + preset.profile.split('-')[0] + '_title')}"
@@ -4416,46 +4461,7 @@ class VoiceStudioApp(tk.Tk):
             state="readonly",
         ).pack(fill="x")
 
-        model_field = field(recognition_page, 1, 0, self._t("model"))
-        ttk.Entry(model_field, textvariable=variables["model"]).pack(fill="x")
-
-        device_field = field(recognition_page, 1, 1, self._t("device"))
-        device_combo = ttk.Combobox(
-            device_field,
-            textvariable=variables["device"],
-            values=SUPPORTED_DEVICES,
-            state="readonly",
-        )
-        device_combo.pack(fill="x")
-        self._settings_hardware_device_combo = device_combo
-
-        compute_field = field(recognition_page, 2, 0, self._t("compute_type"))
-        compute_combo = ttk.Combobox(
-            compute_field,
-            textvariable=variables["compute_type"],
-            values=SUPPORTED_COMPUTE_TYPES,
-            state="readonly",
-        )
-        compute_combo.pack(fill="x")
-        self._settings_hardware_compute_combo = compute_combo
-
-        openai_stt_field = field(recognition_page, 2, 1, self._t("openai_stt_model"))
-        ttk.Entry(openai_stt_field, textvariable=variables["openai_transcription_model"]).pack(
-            fill="x"
-        )
-
-        ttk.Checkbutton(
-            recognition_page,
-            text=self._t("vad_filter"),
-            variable=variables["vad_filter"],
-        ).grid(row=3, column=0, sticky="w", pady=(0, 18))
-        ttk.Button(
-            recognition_page,
-            text=self._t("hardware_detect"),
-            command=self._start_hardware_detection,
-        ).grid(row=3, column=1, sticky="e", pady=(0, 18))
-
-        dictionary_field = field(recognition_page, 4, 0, self._t("dictionary_json"), columnspan=2)
+        dictionary_field = field(recognition_page, 1, 0, self._t("dictionary_json"), columnspan=2)
         dictionary_row = ttk.Frame(dictionary_field, style="Card.TFrame")
         dictionary_row.pack(fill="x")
         ttk.Entry(dictionary_row, textvariable=variables["dictionary_path"]).pack(
@@ -4465,14 +4471,8 @@ class VoiceStudioApp(tk.Tk):
             side="left", padx=(8, 0)
         )
 
-        provider_field = field(local_ai_page, 0, 0, self._t("cleanup_provider"))
-        ttk.Label(
-            provider_field,
-            textvariable=variables["cleanup_provider"],
-            style="CardTitle.TLabel",
-        ).pack(anchor="w")
-
-        ollama_field = field(local_ai_page, 0, 1, self._t("ollama_model"))
+        ollama_page = engine_pages["ollama-local"]
+        ollama_field = field(ollama_page, 0, 0, self._t("ollama_model"), columnspan=2)
         ollama_row = ttk.Frame(ollama_field, style="Card.TFrame")
         ollama_row.pack(fill="x")
         ollama_combo = ttk.Combobox(
@@ -4486,6 +4486,7 @@ class VoiceStudioApp(tk.Tk):
 
         def refresh_ollama_models() -> None:
             info.set(self._t("ollama_checking"))
+            ollama_status_var.set(self._t("ollama_checking"))
             self._start_ollama_model_discovery()
 
         ttk.Button(
@@ -4493,11 +4494,65 @@ class VoiceStudioApp(tk.Tk):
             text=self._t("refresh_models"),
             command=refresh_ollama_models,
         ).pack(side="left", padx=(8, 0))
+
+        provider_field = field(ollama_page, 1, 0, self._t("cleanup_provider"), columnspan=2)
+        ttk.Label(
+            provider_field,
+            textvariable=variables["cleanup_provider"],
+            style="CardTitle.TLabel",
+        ).pack(anchor="w")
+
+        ttk.Label(
+            ollama_page,
+            textvariable=ollama_status_var,
+            style="CardMuted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
         self._start_ollama_model_discovery()
 
-        openai_cleanup_field = field(
-            local_ai_page, 1, 0, self._t("openai_cleanup_model"), columnspan=2
+        whisper_page = engine_pages["whisper-local"]
+        model_field = field(whisper_page, 0, 0, self._t("model"))
+        ttk.Entry(model_field, textvariable=variables["model"]).pack(fill="x")
+
+        device_field = field(whisper_page, 0, 1, self._t("device"))
+        device_combo = ttk.Combobox(
+            device_field,
+            textvariable=variables["device"],
+            values=SUPPORTED_DEVICES,
+            state="readonly",
         )
+        device_combo.pack(fill="x")
+        self._settings_hardware_device_combo = device_combo
+
+        compute_field = field(whisper_page, 1, 0, self._t("compute_type"))
+        compute_combo = ttk.Combobox(
+            compute_field,
+            textvariable=variables["compute_type"],
+            values=SUPPORTED_COMPUTE_TYPES,
+            state="readonly",
+        )
+        compute_combo.pack(fill="x")
+        self._settings_hardware_compute_combo = compute_combo
+
+        ttk.Checkbutton(
+            whisper_page,
+            text=self._t("vad_filter"),
+            variable=variables["vad_filter"],
+        ).grid(row=2, column=0, sticky="w")
+        ttk.Button(
+            whisper_page,
+            text=self._t("hardware_detect"),
+            command=self._start_hardware_detection,
+        ).grid(row=2, column=1, sticky="e")
+
+        openai_page = engine_pages["openai-cloud"]
+        openai_stt_field = field(openai_page, 0, 0, self._t("openai_stt_model"))
+        ttk.Entry(openai_stt_field, textvariable=variables["openai_transcription_model"]).pack(
+            fill="x"
+        )
+
+        openai_cleanup_field = field(openai_page, 0, 1, self._t("openai_cleanup_model"))
         ttk.Entry(openai_cleanup_field, textvariable=variables["openai_cleanup_model"]).pack(
             fill="x"
         )
@@ -4537,7 +4592,7 @@ class VoiceStudioApp(tk.Tk):
             status = openai_key_status()
             info.set(self._t("key_status", source=status.get("source", "unknown")))
 
-        key_field = field(local_ai_page, 2, 0, "OpenAI", columnspan=2)
+        key_field = field(openai_page, 1, 0, "OpenAI", columnspan=2)
         key_row = ttk.Frame(key_field, style="Card.TFrame")
         key_row.pack(fill="x")
         ttk.Button(key_row, text=self._t("set_key"), command=set_cloud_key).pack(side="left")
@@ -4549,11 +4604,14 @@ class VoiceStudioApp(tk.Tk):
             side="left", padx=5
         )
         ttk.Label(
-            local_ai_page,
+            openai_page,
             text=self._t("cloud_consent"),
             style="CardMuted.TLabel",
             wraplength=760,
-        ).grid(row=3, column=0, columnspan=2, sticky="w")
+            justify="left",
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+
+        show_engine_page(str(variables["profile"].get()))
 
         footer = ttk.Frame(dialog, padding=(24, 12, 24, 18), style="SettingsHeader.TFrame")
         footer.grid(row=2, column=0, sticky="ew")
