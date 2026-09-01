@@ -79,6 +79,8 @@ from .subtitles import editable_text
 
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
 
+# Visible build stamp in the window title so an outdated launch is obvious.
+APP_BUILD = "2026-09-01.12"
 EDITOR_FIND_TAG = "editor_find"
 EDITOR_CONFIDENCE_TAG = "editor_confidence"
 FILLER_CONTEXT_WIDTH = 30
@@ -211,7 +213,7 @@ def history_day_bounds(value: str, *, end_of_day: bool) -> datetime | None:
 class VoiceStudioApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("VOICE Studio")
+        self.title(f"VOICE Studio · {APP_BUILD}")
         self._install_window_icon()
         width, height = initial_window_size(
             self.winfo_screenwidth(),
