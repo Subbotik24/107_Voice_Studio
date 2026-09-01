@@ -1781,8 +1781,11 @@ class VoiceStudioApp(tk.Tk):
                     messagebox.showerror(self._t("cleanup_error"), str(value), parent=self)
         except queue.Empty:
             pass
-        if not self._shutdown_event.is_set():
-            self.after(100, self._poll_events)
+        finally:
+            # One failing handler must not stop event polling for the rest of
+            # the session; the exception still surfaces through Tk reporting.
+            if not self._shutdown_event.is_set():
+                self.after(100, self._poll_events)
 
     def _new_recording_temp(self) -> Path:
         recordings_directory = self._recordings_directory()
@@ -1920,6 +1923,14 @@ class VoiceStudioApp(tk.Tk):
             self._process(Path(name), cleanup=False)
 
     def _process(self, source: Path, *, cleanup: bool) -> bool:
+        if self._busy:
+            # The source is retained for a later retry; deleting it here would
+            # discard a finished recording while another job is still running.
+            self.status.set(
+                f"{self._t('processing_not_started')} "
+                f"{self._t('task_already_running')}"
+            )
+            return False
         if self.settings.engine == "openai-cloud":
             if self.settings.offline_only:
                 message = self._t("offline_blocks_openai")
@@ -1975,7 +1986,18 @@ class VoiceStudioApp(tk.Tk):
             except Exception as exc:
                 self._post_event("error", (exc, source if cleanup else None))
 
-        return self._start_worker("transcription", work) is not None
+        try:
+            return self._start_worker("transcription", work) is not None
+        except RuntimeError:
+            # A finished worker can still be alive for an instant after its
+            # completion event cleared the busy flag; recover instead of
+            # letting the error escape into the Tk callback.
+            self._set_busy(False)
+            self.status.set(
+                f"{self._t('processing_not_started')} "
+                f"{self._t('task_already_running')}"
+            )
+            return False
 
     def _cancel_current(self) -> None:
         if self._busy:

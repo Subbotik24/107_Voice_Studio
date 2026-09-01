@@ -596,3 +596,66 @@ def test_cloud_preflight_stat_failure_never_deletes_original_file(
     assert original.read_bytes() == b"original"
     assert app.job_controller.sources == []
     assert errors and "source disappeared" in str(errors[0]).lower()
+
+
+def test_record_stop_while_busy_retains_recording_and_running_job(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches stopping a recording during a running job crashing the Tk callback
+    or hijacking the running job's busy/cancel state."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    app._busy = True
+    app._cancel_event.set()
+
+    app._record_stop(force=True)
+
+    assert recorder.stop_calls == 1
+    assert path.exists()
+    assert app.job_controller.sources == []
+    assert app._busy is True
+    assert app._cancel_event.is_set()
+    assert any("Обробку не розпочато" in value for value in app.status.values)
+
+
+def test_process_refuses_while_busy_without_deleting_tracked_recording(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches a second concurrent job start deleting the waiting recording."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    app._busy = True
+
+    assert app._process(path, cleanup=True) is False
+
+    assert path.exists()
+    assert app.job_controller.sources == []
+    assert app._busy is True
+
+
+def test_process_recovers_when_transcription_worker_is_still_alive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Catches the busy-cleared/worker-alive race raising out of the Tk callback."""
+
+    root = _recording_root(monkeypatch, tmp_path)
+    recorder = FakeRecorder(root=root)
+    app = _app(tmp_path, recorder)
+    path = _start_tracked(app, root)
+    app._worker_threads = {
+        "transcription": SimpleNamespace(is_alive=lambda: True)
+    }
+    app._worker_lock = threading.RLock()
+    app._shutdown_event = threading.Event()
+
+    assert app._process(path, cleanup=True) is False
+
+    assert path.exists()
+    assert app._busy is False
+    assert app.job_controller.sources == []

@@ -949,3 +949,16 @@ def test_startup_settles_the_restore_journal_before_opening_the_store():
     recovery = source.index("self._settle_interrupted_restore()")
     opened = source.index("self.store = LocalStore(data_dir())")
     assert recovery < opened
+
+
+def test_poll_events_reschedules_even_when_a_handler_raises() -> None:
+    app = _worker_registry_stub()
+    after_calls: list[tuple[int, object]] = []
+    app.after = lambda delay, callback, *args: after_calls.append((delay, callback))
+    app._record_stop = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+    app.events.put(("record_stop", None))
+
+    with pytest.raises(RuntimeError):
+        VoiceStudioApp._poll_events(app)
+
+    assert after_calls
