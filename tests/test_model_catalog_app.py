@@ -538,6 +538,73 @@ def test_successful_download_disposes_queue_without_terminating_exited_worker(
     assert list(catalog.downloads.iterdir()) == []
 
 
+class TogglingProcess:
+    """Reports alive for exactly one progress-poll iteration, then exits."""
+
+    def __init__(self, temporary: Path):
+        self.events = []
+        self.calls = 0
+        self.exitcode = 0
+        self.temporary = temporary
+
+    def start(self):
+        self.events.append("start")
+        (self.temporary / "part.incomplete").write_bytes(b"data")
+
+    def is_alive(self):
+        self.calls += 1
+        return self.calls <= 1
+
+    def terminate(self):
+        self.events.append("terminate")
+
+    def join(self, timeout=None):
+        self.events.append(("join", timeout))
+
+    def kill(self):
+        self.events.append("kill")
+
+
+class VanishingDownloadContext:
+    def __init__(self, result=None):
+        self.queue = DownloadQueue(result)
+        self.process = None
+
+    def Queue(self):
+        return self.queue
+
+    def Process(self, *, args, **_kwargs):
+        assert args[3] is self.queue
+        self.process = TogglingProcess(Path(args[1]))
+        return self.process
+
+
+def test_install_progress_tolerates_a_file_vanishing_mid_poll(tmp_path, monkeypatch):
+    context = VanishingDownloadContext({"ok": True})
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+    monkeypatch.setattr(catalog, "_promote", lambda *a, **k: {"id": "tiny"})
+
+    original_stat = Path.stat
+
+    def flaky_stat(self, *args, **kwargs):
+        if self.name == "part.incomplete":
+            raise FileNotFoundError(self)
+        return original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    progress_calls = []
+    result = catalog.install(
+        "tiny",
+        progress=lambda downloaded, expected: progress_calls.append((downloaded, expected)),
+    )
+
+    assert result == {"id": "tiny"}
+    assert progress_calls, "progress callback should still run despite the vanished file"
+    assert progress_calls[0][0] == 0
+
+
 def test_uninstalled_model_has_actionable_error(tmp_path):
     catalog = ModelCatalog(tmp_path / "managed")
     with pytest.raises(FileNotFoundError, match="models install tiny"):
@@ -823,3 +890,57 @@ def test_atomic_catalog_save_removes_failed_temporary_file(tmp_path, monkeypatch
     with pytest.raises(OSError, match="replace failed"):
         catalog._save({"version": 1, "models": []})
     assert list(catalog.root.glob("catalog.json*.tmp")) == []
+
+
+def test_reconcile_lock_preserves_concurrently_imported_model(tmp_path, monkeypatch):
+    """Catches an unlocked reconcile load-modify-save erasing or re-adopting a
+    model that another writer committed between reconcile's load and save."""
+
+    import threading
+
+    root = tmp_path / "managed"
+    reconciler = ModelCatalog(root)
+    importer = ModelCatalog(root)
+    reconciler.import_local("model-a", local_model(tmp_path / "seed-a"))
+    # A complete uncatalogued directory guarantees reconcile reaches _save.
+    local_model(root / "orphan-c")
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_save = ModelCatalog._save
+
+    def gated_save(self, payload):
+        if self is reconciler and not entered.is_set():
+            entered.set()
+            assert release.wait(10)
+        original_save(self, payload)
+
+    monkeypatch.setattr(ModelCatalog, "_save", gated_save)
+    outcome: dict[str, object] = {}
+    reconcile_thread = threading.Thread(
+        target=lambda: outcome.update(reconcile=reconciler.reconcile())
+    )
+    reconcile_thread.start()
+    assert entered.wait(10)
+    import_thread = threading.Thread(
+        target=lambda: outcome.update(
+            imported=importer.import_local("model-b", local_model(tmp_path / "seed-b"))
+        )
+    )
+    import_thread.start()
+    # Unlocked, the import commits well inside this bound and reconcile's
+    # later save erases it; locked, the import stays blocked until release.
+    import_thread.join(2)
+    release.set()
+    reconcile_thread.join(30)
+    import_thread.join(30)
+    assert not reconcile_thread.is_alive()
+    assert not import_thread.is_alive()
+    assert "reconcile" in outcome and "imported" in outcome
+
+    entry = importer.get("model-b")
+    assert entry is not None
+    assert entry.get("reconciled") is not True
+    assert entry["source"] == str((tmp_path / "seed-b").resolve())
+    assert entry["revision"] is None
+    assert importer.resolve("model-b").is_dir()

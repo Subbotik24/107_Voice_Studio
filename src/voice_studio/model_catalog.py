@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import multiprocessing
 import os
@@ -42,6 +43,7 @@ MODEL_DOWNLOAD_ESTIMATES = {
 }
 TRANSIENT_MODEL_DIRECTORIES = {".cache", ".locks"}
 TRANSIENT_MODEL_SUFFIXES = {".incomplete", ".lock", ".metadata", ".tmp"}
+CATALOG_LOCK_TIMEOUT_SECONDS = 10.0
 CATALOG_RESIDUE_MAX_AGE_SECONDS = 300
 STAGING_MAX_AGE_SECONDS = 172_800
 STAGING_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*-[0-9a-f]{32}$")
@@ -122,6 +124,56 @@ class ModelCatalog:
             temporary.replace(self.catalog_path)
         finally:
             temporary.unlink(missing_ok=True)
+
+    @contextlib.contextmanager
+    def _exclusive_lock(self, timeout_seconds: float = CATALOG_LOCK_TIMEOUT_SECONDS):
+        """Hold the cross-process catalog lock for one load-modify-save cycle.
+
+        ``catalog.json`` writes are atomic on their own, but reconcile, promote
+        and remove all read the catalog before writing it back; without mutual
+        exclusion a concurrent process's committed entry is silently lost. The
+        OS releases the lock with the process, and the lock file itself is
+        never deleted, so a crash cannot leave the catalog locked.
+        """
+
+        lock_path = self.root / ".catalog.lock"
+        handle = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        os.lseek(handle, 0, os.SEEK_SET)
+                        msvcrt.locking(handle, msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            "model catalog is in use by another VOICE Studio "
+                            f"process; try again later ({lock_path})"
+                        ) from None
+                    time.sleep(0.05)
+            yield
+        finally:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    os.lseek(handle, 0, os.SEEK_SET)
+                    msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(handle)
 
     def list(self) -> list[dict[str, Any]]:
         return sorted(self._load()["models"], key=lambda item: item["id"])
@@ -577,6 +629,10 @@ class ModelCatalog:
         return True
 
     def reconcile(self) -> dict[str, Any]:
+        with self._exclusive_lock():
+            return self._reconcile_locked()
+
+    def _reconcile_locked(self) -> dict[str, Any]:
         result = _reconcile_result()
         quarantined = False
         try:
@@ -875,10 +931,6 @@ class ModelCatalog:
     ) -> dict[str, Any]:
         self._remove_transient_files(temporary)
         files, size = self._inventory(temporary)
-        target = self.root / model_id
-        if target.exists():
-            raise FileExistsError(f"model is already installed: {model_id}")
-        temporary.replace(target)
         entry = {
             "id": model_id,
             "path": model_id,
@@ -888,10 +940,17 @@ class ModelCatalog:
             "size": size,
             "files": files,
         }
-        payload = self._load()
-        payload["models"] = [item for item in payload["models"] if item["id"] != model_id]
-        payload["models"].append(entry)
-        self._save(payload)
+        with self._exclusive_lock():
+            target = self.root / model_id
+            if target.exists():
+                raise FileExistsError(f"model is already installed: {model_id}")
+            temporary.replace(target)
+            payload = self._load()
+            payload["models"] = [
+                item for item in payload["models"] if item["id"] != model_id
+            ]
+            payload["models"].append(entry)
+            self._save(payload)
         return entry
 
     def import_local(self, model_id: str, source: Path) -> dict[str, Any]:
@@ -982,9 +1041,17 @@ class ModelCatalog:
                         f"model download timed out after {timeout_seconds} seconds: {value}"
                     )
                 if progress:
-                    downloaded = sum(
-                        path.stat().st_size for path in temporary.rglob("*") if path.is_file()
-                    )
+                    downloaded = 0
+                    for path in temporary.rglob("*"):
+                        # The download child can rename/replace entries (e.g. a
+                        # `*.incomplete` file) between this listing and the
+                        # size check below, so a vanished entry must not abort
+                        # the whole install.
+                        try:
+                            if path.is_file():
+                                downloaded += path.stat().st_size
+                        except OSError:
+                            continue
                     progress(downloaded, expected)
                 process.join(timeout=0.25)
             try:
@@ -1055,6 +1122,10 @@ class ModelCatalog:
         value = self._validate_model_id(model_id)
         if not confirmed:
             raise ValueError("model removal requires --yes")
+        with self._exclusive_lock():
+            return self._remove_locked(value)
+
+    def _remove_locked(self, value: str) -> dict[str, Any]:
         entry = self.get(value)
         if entry is None:
             target = self.root / value
