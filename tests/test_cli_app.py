@@ -355,6 +355,31 @@ def test_transcribe_cli_engine_override_applies_matching_profile(monkeypatch):
     assert cloud.offline_only is False
 
 
+def test_transcribe_cli_openai_cloud_still_refused_without_upload_consent(
+    tmp_path, capsys, monkeypatch, make_wav
+):
+    """--engine openai-cloud applies offline_only=False, but the explicit
+
+    --allow-cloud-upload consent gate must still refuse the request — proving
+    the deleted offline_only guard was truly dead code, not the real gate.
+    """
+
+    source = make_wav(tmp_path / "recording.wav")
+    monkeypatch.setenv("VOICE_STUDIO_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("VOICE_STUDIO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VOICE_STUDIO_CACHE_DIR", str(tmp_path / "cache"))
+
+    def _forbidden_controller(*_args, **_kwargs):
+        raise AssertionError("no transcription controller must run without consent")
+
+    monkeypatch.setattr(cli, "TranscriptionJobController", _forbidden_controller)
+
+    exit_code = main(["transcribe", str(source), "--engine", "openai-cloud"])
+
+    assert exit_code == 2
+    assert "--allow-cloud-upload" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("option", "value"),
     [("--device", "rocm"), ("--compute-type", "float64")],

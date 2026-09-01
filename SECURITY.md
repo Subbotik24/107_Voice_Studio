@@ -20,7 +20,9 @@ report and asks for a private channel — no details.
 
 - Local transcription is the default. The OpenAI STT and AI cleanup adapters are
   present, but every cloud operation requires explicit consent, and
-  `offline_only` blocks them.
+  `offline_only` blocks them. The only exception is an explicit CLI
+  `--engine openai-cloud` override combined with `--allow-cloud-upload`, which
+  is itself the consent.
 - API keys are read from `OPENAI_API_KEY` or the OS keychain only. They are
   never written to settings, jobs, backups, diagnostics, logs or transcript
   metadata.

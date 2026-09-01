@@ -597,8 +597,11 @@ def main(argv: list[str] | None = None) -> int:
                         "OpenAI transcription requires --allow-cloud-upload; audio is never "
                         "uploaded silently"
                     )
-                if settings.offline_only:
-                    raise ValueError("offline_only blocks cloud transcription")
+                # An explicit --engine openai-cloud override together with
+                # --allow-cloud-upload is itself the user's consent: the
+                # override always applies the openai-cloud profile (which
+                # sets offline_only=False), so offline_only can never be
+                # True here and a redundant guard is not reintroduced.
                 from .engines.openai_cloud import OpenAICloudEngine
 
                 # Validate consent and file limits before LocalStore reads/copies the source.

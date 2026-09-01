@@ -343,6 +343,36 @@ def test_clipboard_copy_is_private_by_default():
     assert Settings.from_dict({"auto_copy": True}).auto_copy is True
 
 
+def test_sync_folder_settings_are_off_by_default_and_backward_compatible():
+    """An old settings file written before the sync fields existed still loads."""
+
+    defaults = Settings()
+    assert defaults.sync_folder == ""
+    assert defaults.sync_enabled is False
+    assert defaults.sync_include_audio is False
+
+    loaded = Settings.from_dict({"language": "cs"})
+    assert loaded.sync_folder == ""
+    assert loaded.sync_enabled is False
+    assert loaded.sync_include_audio is False
+
+    enabled = Settings.from_dict(
+        {"sync_folder": "/mnt/drive/VOICE Studio", "sync_enabled": True, "sync_include_audio": True}
+    )
+    assert enabled.sync_folder == "/mnt/drive/VOICE Studio"
+    assert enabled.sync_enabled is True
+    assert enabled.sync_include_audio is True
+
+
+def test_sync_enabled_requires_a_non_empty_sync_folder():
+    with pytest.raises(ValueError, match="sync_folder"):
+        Settings(sync_enabled=True, sync_folder="").validate()
+    with pytest.raises(ValueError, match="sync_folder"):
+        Settings(sync_enabled=True, sync_folder="   ").validate()
+    Settings(sync_enabled=True, sync_folder="/mnt/drive/VOICE Studio").validate()
+    Settings(sync_enabled=False, sync_folder="").validate()
+
+
 def test_settings_ignores_unknown_and_classvar_keys():
     settings = Settings.from_dict(
         {

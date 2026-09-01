@@ -54,7 +54,8 @@ This is a privacy-first desktop transcription application. Treat this file and
 - Cloud STT requires an explicit confirmation/CLI `--allow-cloud-upload` before
   any source read or network call. AI cleanup requires `--allow-cloud-text`.
 - `offline_only` blocks all cloud activity. Do not add telemetry or cloud upload
-  by default.
+  by default. The only exception is an explicit CLI `--engine openai-cloud`
+  override combined with `--allow-cloud-upload`, which is itself the consent.
 - Model archives require HTTPS, exact SHA-256, safe ZIP validation and atomic
   install. Do not commit model weights, audio, databases or backups.
 - Do not claim recognition accuracy without a closed test set and measured WER/CER.

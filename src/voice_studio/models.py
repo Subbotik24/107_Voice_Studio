@@ -131,12 +131,15 @@ class Settings:
         "ollama_model",
         "openai_transcription_model",
         "openai_cleanup_model",
+        "sync_folder",
     )
     BOOLEAN_FIELDS: ClassVar[tuple[str, ...]] = (
         "auto_copy",
         "offline_only",
         "automatic_cleanup",
         "vad_filter",
+        "sync_enabled",
+        "sync_include_audio",
     )
 
     profile: str = "ollama-local"
@@ -159,6 +162,9 @@ class Settings:
     ollama_model: str = ""
     openai_transcription_model: str = "gpt-transcribe"
     openai_cleanup_model: str = "gpt-4.1-mini-2025-04-14"
+    sync_folder: str = ""
+    sync_enabled: bool = False
+    sync_include_audio: bool = False
 
     def _validate_types(self) -> None:
         for name in self.STRING_FIELDS:
@@ -219,6 +225,8 @@ class Settings:
         self.validate_profile_invariants()
         if not self.openai_transcription_model.strip() or not self.openai_cleanup_model.strip():
             raise ValueError("OpenAI model identifiers cannot be empty")
+        if self.sync_enabled and not self.sync_folder.strip():
+            raise ValueError("sync_folder must be set when sync_enabled is true")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
