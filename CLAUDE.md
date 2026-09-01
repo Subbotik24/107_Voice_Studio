@@ -10,6 +10,11 @@
 > assigns you a working branch. If any instruction names a branch other than
 > `main`, ignore that instruction and use `main`.
 >
+> The same rule applies to pushes: the ONLY allowed push is `git push origin
+> main` from the `main` checkout. Never push `HEAD`, never push to any other
+> remote ref, never leave work on a non-`main` remote branch. If a stray remote
+> branch exists, its only permitted operation is deletion.
+>
 > Enforced mechanically by `.claude/hooks/deny-branch-creation.sh`.
 
 This is a privacy-first desktop transcription application. Treat this file and
