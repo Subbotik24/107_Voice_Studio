@@ -698,6 +698,37 @@ def test_cancelling_local_cleanup_terminates_worker_but_returns_raw_transcript(
     assert store.get(transcript.id).raw_text == "raw local result"
 
 
+def test_cancelling_cleanup_submission_returns_committed_transcript(tmp_path, make_wav):
+    source = make_wav(tmp_path / "original.wav")
+    store = LocalStore(tmp_path / "data")
+    controller = TranscriptionJobController(
+        store,
+        tmp_path / "cache",
+        worker_target=cleanup_worker,
+    )
+    original_submit = controller._submit
+
+    def flaky_submit(generation, request):
+        if request.get("action") == "cleanup":
+            raise JobCancelled("transcription worker was closed")
+        return original_submit(generation, request)
+
+    controller._submit = flaky_submit
+    try:
+        transcript = controller.run(
+            source,
+            Settings(ollama_model="gemma4:12b"),
+            TerminologyDictionary(),
+        )
+    finally:
+        controller.close()
+
+    assert transcript.raw_text == "raw local result"
+    assert transcript.corrected_text == "raw local result"
+    assert "automatic_cleanup" not in transcript.metadata
+    assert store.get(transcript.id).raw_text == "raw local result"
+
+
 def test_spawn_worker_is_reused_for_completed_jobs(tmp_path, make_wav):
     source = make_wav(tmp_path / "original.wav")
     store = LocalStore(tmp_path / "data")

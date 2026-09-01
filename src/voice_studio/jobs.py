@@ -387,50 +387,58 @@ class TranscriptionJobController:
             if settings.automatic_cleanup and transcript.engine == "ollama":
                 report("cleaning")
                 cleanup_job_id = uuid.uuid4().hex
-                self._submit(
-                    generation,
-                    {
-                        "action": "cleanup",
-                        "job_id": cleanup_job_id,
-                        "settings": settings.to_dict(),
-                        "transcript": transcript.to_dict(),
-                    }
-                )
                 try:
-                    cleanup_response = self._wait_for_result(
+                    self._submit(
                         generation,
-                        cleanup_job_id,
-                        budget,
-                        "cleaning",
+                        {
+                            "action": "cleanup",
+                            "job_id": cleanup_job_id,
+                            "settings": settings.to_dict(),
+                            "transcript": transcript.to_dict(),
+                        }
                     )
-                except (JobCancelled, TimeoutError) as exc:
+                except (JobCancelled, TimeoutError):
+                    # The worker was closed/cancelled between finalize() and the
+                    # cleanup submission itself: the transcript is already
+                    # committed to storage, so return it as-is rather than
+                    # raising and losing the saved result.
                     self._terminate_worker()
-                    transcript = self._record_cleanup_outcome(
-                        transcript,
-                        "cancelled",
-                        str(exc),
-                    )
-                except Exception as exc:
-                    transcript = self._record_cleanup_outcome(
-                        transcript,
-                        "failed",
-                        str(exc),
-                    )
                 else:
-                    if cleanup_response["ok"]:
-                        transcript = self.store.apply_ai_cleanup(
-                            transcript.id,
-                            cleanup_response["proposal"],
-                            provider="ollama",
-                            model=settings.ollama_model,
+                    try:
+                        cleanup_response = self._wait_for_result(
+                            generation,
+                            cleanup_job_id,
+                            budget,
+                            "cleaning",
                         )
-                        transcript = self._record_cleanup_outcome(transcript, "applied")
-                    else:
+                    except (JobCancelled, TimeoutError) as exc:
+                        self._terminate_worker()
+                        transcript = self._record_cleanup_outcome(
+                            transcript,
+                            "cancelled",
+                            str(exc),
+                        )
+                    except Exception as exc:
                         transcript = self._record_cleanup_outcome(
                             transcript,
                             "failed",
-                            str(cleanup_response["error"]),
+                            str(exc),
                         )
+                    else:
+                        if cleanup_response["ok"]:
+                            transcript = self.store.apply_ai_cleanup(
+                                transcript.id,
+                                cleanup_response["proposal"],
+                                provider="ollama",
+                                model=settings.ollama_model,
+                            )
+                            transcript = self._record_cleanup_outcome(transcript, "applied")
+                        else:
+                            transcript = self._record_cleanup_outcome(
+                                transcript,
+                                "failed",
+                                str(cleanup_response["error"]),
+                            )
             report("completed")
             return transcript
         except BaseException as exc:
