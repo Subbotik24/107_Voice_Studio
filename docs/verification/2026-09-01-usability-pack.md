@@ -130,3 +130,10 @@ full gate, diff/secret checks, commit/push, and any explicit `NOT_RUN` items.
 - Xvfb smoke on the real app: sidebar entry, zero Toplevels, per-profile engine switching in-page, guard prompts (stay/discard), F1 help with four topics, language switch to English rebuilding Help, hotkey restart after leaving — captured in seven screenshots.
 - Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 1158 passed / 14 Linux junction skips; wheel build PASS; `pip check` PASS; `git diff --check` PASS.
 - Verification against a real local Ollama runtime and a real proxied Windows environment: NOT RUN here — covered by the fake-server regression test and the loopback error branch.
+
+### Increment 12 — launchers always run the checked-out source
+
+- Base: `45ed5eb`. User report: `run_windows.bat` kept starting the old version after `git pull`. Root cause: both launchers installed the package into `.venv` once ("first run only") and then always started the installed copy (`voice-studio gui` console script); when that first install was not editable — or pointed at another checkout — every later pull changed the sources but not what the launcher ran.
+- Fix: `run_windows.bat` and `run_mac.command` now export `PYTHONPATH=<project>/src` and start `python -m voice_studio gui`, so the launcher always executes exactly the source tree sitting in the folder; the first-run dependency install is unchanged, and the launcher prints the resolved `voice_studio.__file__` so a wrong-folder launch is visible immediately. Verified in this environment that with the path set the import resolves to the checkout's `src` ahead of any installed copy; 2 new launcher contract tests pin the mechanism on both scripts.
+- Checks: Ruff PASS; pytest PASS 1160 passed / 14 Linux junction skips; `git diff --check` PASS (script-and-test-only diff on top of the `45ed5eb` full gate).
+- Real Windows/macOS double-click verification: NOT RUN here — the launchers are Windows/macOS scripts; the contract tests and the path-resolution proof cover the mechanism.

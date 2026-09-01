@@ -14,6 +14,14 @@ def test_mac_launcher_has_fail_fast_preflight_and_first_run_install() -> None:
     assert "pip install --upgrade" not in launcher
 
 
+def test_mac_launcher_always_runs_the_checked_out_source_tree() -> None:
+    launcher = (PROJECT_ROOT / "run_mac.command").read_text(encoding="utf-8")
+
+    assert 'export PYTHONPATH="$PWD/src"' in launcher
+    assert "python -m voice_studio gui" in launcher
+    assert "voice-studio gui" not in launcher.replace("-m voice_studio gui", "")
+
+
 def test_windows_launcher_has_fail_fast_preflight_and_first_run_install() -> None:
     launcher = (PROJECT_ROOT / "run_windows.bat").read_text(encoding="utf-8")
 
@@ -22,6 +30,14 @@ def test_windows_launcher_has_fail_fast_preflight_and_first_run_install() -> Non
     assert "first run only" in launcher
     assert "pip install --upgrade" not in launcher
     assert 'cd /d "%~dp0"' in launcher
+
+
+def test_windows_launcher_always_runs_the_checked_out_source_tree() -> None:
+    launcher = (PROJECT_ROOT / "run_windows.bat").read_text(encoding="utf-8")
+
+    assert 'set "PYTHONPATH=%~dp0src"' in launcher
+    assert "-m voice_studio gui" in launcher
+    assert "voice-studio.exe gui" not in launcher
 
 
 def test_windows_one_click_builder_uses_isolated_environment() -> None:

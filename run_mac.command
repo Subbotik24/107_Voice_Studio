@@ -34,4 +34,9 @@ fi
   echo "Installing VOICE Studio into .venv (first run only)…"
   .venv/bin/python -m pip install -e ".[cloud]"
 }
-exec .venv/bin/voice-studio gui
+# Always run the source tree sitting in this folder, never a stale copy
+# installed inside .venv: right after `git pull` this launcher starts
+# exactly the pulled code.
+export PYTHONPATH="$PWD/src"
+.venv/bin/python -c 'import voice_studio; print("VOICE Studio code:", voice_studio.__file__)'
+exec .venv/bin/python -m voice_studio gui

@@ -32,5 +32,10 @@ if errorlevel 1 (
   .venv\Scripts\python.exe -m pip install -e ".[cloud]"
   if errorlevel 1 exit /b 1
 )
-.venv\Scripts\voice-studio.exe gui
+rem Always run the source tree sitting in this folder, never a stale copy
+rem installed inside .venv: right after `git pull` this launcher starts
+rem exactly the pulled code.
+set "PYTHONPATH=%~dp0src"
+.venv\Scripts\python.exe -c "import voice_studio; print('VOICE Studio code:', voice_studio.__file__)"
+.venv\Scripts\python.exe -m voice_studio gui
 exit /b %errorlevel%
