@@ -526,17 +526,31 @@ class VoiceStudioApp(tk.Tk):
             self.sidebar, padding=(18, 12, 18, 12), style="Sidebar.TFrame"
         )
         navigation.grid(row=1, column=0, sticky="nsew")
+        self.dashboard_button = ttk.Button(
+            navigation,
+            text=self._t("dashboard"),
+            command=lambda: self._show_page("dashboard"),
+            style="Sidebar.TButton",
+        )
+        self.dashboard_button.pack(fill="x", pady=(0, 6))
         self.studio_button = ttk.Button(
             navigation,
             text=self._t("studio_nav"),
-            command=lambda: self.editor.focus_set(),
-            style="SidebarActive.TButton",
+            command=lambda: self._show_page("studio"),
+            style="Sidebar.TButton",
         )
         self.studio_button.pack(fill="x", pady=(0, 6))
+        self.dictionary_button = ttk.Button(
+            navigation,
+            text=self._t("dictionary"),
+            command=lambda: self._show_page("dictionary"),
+            style="Sidebar.TButton",
+        )
+        self.dictionary_button.pack(fill="x", pady=6)
         self.history_nav_button = ttk.Button(
             navigation,
             text=self._t("history"),
-            command=lambda: self.history.focus_set(),
+            command=lambda: self._show_page("history"),
             style="Sidebar.TButton",
         )
         self.history_nav_button.pack(fill="x", pady=6)
@@ -568,8 +582,16 @@ class VoiceStudioApp(tk.Tk):
             style="Sidebar.TButton",
         )
         self.help_button.pack(fill="x", pady=6)
+        self._page_buttons = {
+            "dashboard": self.dashboard_button,
+            "studio": self.studio_button,
+            "dictionary": self.dictionary_button,
+            "history": self.history_nav_button,
+        }
         self._sidebar_buttons = (
+            (self.dashboard_button, "dashboard", "⌂"),
             (self.studio_button, "studio_nav", "●"),
+            (self.dictionary_button, "dictionary", "≡"),
             (self.history_nav_button, "history", "▤"),
             (self.models_button, "models", "◆"),
             (self.backup_button, "backup", "↻"),
@@ -619,9 +641,31 @@ class VoiceStudioApp(tk.Tk):
         self.workspace_body.grid_columnconfigure(0, weight=1)
         self.workspace_body.grid_columnconfigure(1, minsize=214)
 
-        self.main_area = ttk.Frame(self.workspace_body, style="Canvas.TFrame")
+        self.page_host = ttk.Frame(self.workspace_body, style="Canvas.TFrame")
+        self.page_host.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        self.page_host.grid_rowconfigure(0, weight=1)
+        self.page_host.grid_columnconfigure(0, weight=1)
+
+        self.dashboard_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
+        self.dashboard_page.grid(row=0, column=0, sticky="nsew")
+        self.dashboard_placeholder_title = ttk.Label(
+            self.dashboard_page,
+            text=self._t("dashboard_placeholder_title"),
+            style="Title.TLabel",
+        )
+        self.dashboard_placeholder_title.pack(anchor="w")
+        self.dashboard_placeholder_detail = ttk.Label(
+            self.dashboard_page,
+            text=self._t("dashboard_placeholder_detail"),
+            style="Subtitle.TLabel",
+            wraplength=620,
+        )
+        self.dashboard_placeholder_detail.pack(anchor="w", pady=(8, 0))
+
+        self.studio_page = ttk.Frame(self.page_host, style="Canvas.TFrame")
+        self.main_area = self.studio_page
         main_area = self.main_area
-        main_area.grid(row=0, column=0, sticky="nsew", padx=(0, 18))
+        main_area.grid(row=0, column=0, sticky="nsew")
         main_area.grid_rowconfigure(3, weight=1)
         main_area.grid_columnconfigure(0, weight=1)
 
@@ -785,13 +829,17 @@ class VoiceStudioApp(tk.Tk):
                 command=partial(self._export, fmt.lower()),
             ).pack(side="right", padx=2)
 
+        self.history_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
+        self.history_page.grid(row=0, column=0, sticky="nsew")
+        self.history_page.grid_rowconfigure(0, weight=1)
+        self.history_page.grid_columnconfigure(0, weight=1)
         self.history_frame = ttk.Labelframe(
-            main_area,
+            self.history_page,
             text=self._t("history"),
             padding=12,
             style="Card.TLabelframe",
         )
-        self.history_frame.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        self.history_frame.grid(row=0, column=0, sticky="nsew")
 
         search_row = ttk.Frame(self.history_frame, style="Card.TFrame")
         search_row.pack(fill="x", pady=(0, 6))
@@ -838,6 +886,28 @@ class VoiceStudioApp(tk.Tk):
             history_actions, text=self._t("delete"), command=self._delete_selected_history
         )
         self.delete_history_button.pack(side="right")
+
+        self.dictionary_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
+        self.dictionary_page.grid(row=0, column=0, sticky="nsew")
+        self.dictionary_placeholder_title = ttk.Label(
+            self.dictionary_page,
+            text=self._t("dictionary_placeholder_title"),
+            style="Title.TLabel",
+        )
+        self.dictionary_placeholder_title.pack(anchor="w")
+        self.dictionary_placeholder_detail = ttk.Label(
+            self.dictionary_page,
+            text=self._t("dictionary_placeholder_detail"),
+            style="Subtitle.TLabel",
+            wraplength=620,
+        )
+        self.dictionary_placeholder_detail.pack(anchor="w", pady=(8, 0))
+        self._page_frames = {
+            "dashboard": self.dashboard_page,
+            "studio": self.studio_page,
+            "dictionary": self.dictionary_page,
+            "history": self.history_page,
+        }
 
         self.readiness_frame = ttk.Frame(
             self.workspace_body, width=214, padding=18, style="CardBorder.TFrame"
@@ -919,7 +989,9 @@ class VoiceStudioApp(tk.Tk):
         )
         self.privacy_note_label.pack(anchor="w")
 
+        self._current_page = "dashboard"
         self._studio_layout: StudioLayout | None = None
+        self._show_page("dashboard")
         self.bind("<Configure>", self._on_window_configure, add="+")
         self.bind_all("<F1>", lambda _event: self._help_dialog(), add="+")
         self.after_idle(lambda: self._apply_studio_layout(self.winfo_width(), force=True))
@@ -946,17 +1018,40 @@ class VoiceStudioApp(tk.Tk):
             body_padding, panel_gap, subtitle_wrap = studio_content_metrics(width)
             self.workspace_body.configure(padding=body_padding)
             self.workspace_subtitle_label.configure(wraplength=subtitle_wrap)
-        if layout.show_readiness:
+        if layout.show_readiness and self._current_page == "studio":
             self.readiness_frame.grid()
             self.workspace_body.grid_columnconfigure(1, minsize=214)
-            self.main_area.grid_configure(padx=(0, panel_gap))
+            self.page_host.grid_configure(padx=(0, panel_gap))
         else:
             self.readiness_frame.grid_remove()
             self.workspace_body.grid_columnconfigure(1, minsize=0)
-            self.main_area.grid_configure(padx=0)
+            self.page_host.grid_configure(padx=0)
         for button, key, symbol in self._sidebar_buttons:
             label = symbol if layout.compact_sidebar else f"●  {self._t(key)}"
             button.configure(text=label)
+
+    def _show_page(self, page: str) -> bool:
+        if page not in self._page_frames:
+            raise ValueError(f"unknown central page: {page}")
+        if self._current_page == "studio" and page != "studio":
+            if not self._confirm_editor_transition():
+                return False
+        for page_id, frame in self._page_frames.items():
+            if page_id == page:
+                frame.grid()
+            else:
+                frame.grid_remove()
+        self._current_page = page
+        for page_id, button in self._page_buttons.items():
+            button.configure(
+                style="SidebarActive.TButton" if page_id == page else "Sidebar.TButton"
+            )
+        if page == "studio":
+            self.readiness_frame.grid()
+        else:
+            self.readiness_frame.grid_remove()
+        self._apply_studio_layout(self.winfo_width(), force=True)
+        return True
 
     def _t(self, key: str, **values: Any) -> str:
         language = getattr(self.settings, "ui_language", "uk")
@@ -1268,6 +1363,10 @@ class VoiceStudioApp(tk.Tk):
         self.workspace_kicker_label.configure(text=self._t("workspace_kicker"))
         self.workspace_title_label.configure(text=self._t("workspace_title"))
         self.workspace_subtitle_label.configure(text=self._t("workspace_subtitle"))
+        self.dashboard_placeholder_title.configure(text=self._t("dashboard_placeholder_title"))
+        self.dashboard_placeholder_detail.configure(text=self._t("dashboard_placeholder_detail"))
+        self.dictionary_placeholder_title.configure(text=self._t("dictionary_placeholder_title"))
+        self.dictionary_placeholder_detail.configure(text=self._t("dictionary_placeholder_detail"))
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -1297,6 +1396,7 @@ class VoiceStudioApp(tk.Tk):
         self.readiness_language_caption.configure(text=self._t("interface_language"))
         self.readiness_ai_caption.configure(text=self._t("ai_cleanup_short"))
         self.privacy_note_label.configure(text=self._t("privacy_note"))
+        self._apply_studio_layout(self.winfo_width(), force=True)
         help_window = getattr(self, "_help_window", None)
         if help_window is not None and help_window.winfo_exists():
             help_window.title(self._t("help_title"))
@@ -2144,6 +2244,8 @@ class VoiceStudioApp(tk.Tk):
         if selection:
             selected = self._history_items[selection[0]]
             if self._try_show_result(selected, copy=False, refresh=False):
+                if "_page_frames" in self.__dict__:
+                    self._show_page("studio")
                 return
             self.history.selection_clear(0, "end")
             if self.current:
@@ -2232,7 +2334,13 @@ class VoiceStudioApp(tk.Tk):
         )
         if choice is True:
             return self._save_edits()
-        return choice is False
+        if choice is False:
+            if self.current is not None:
+                self._show_result(self.current, refresh=False)
+            else:
+                self._clear_current_transcript_view()
+            return True
+        return False
 
     def _save_edits(self) -> bool:
         if not self.current:
