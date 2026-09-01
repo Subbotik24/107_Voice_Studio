@@ -8,6 +8,7 @@ import sqlite3
 import stat
 import string
 import tempfile
+import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,6 +32,9 @@ IMMUTABLE_TRANSCRIPT_FIELDS = (
 )
 SCHEMA_VERSION = 1
 MAX_MANAGED_TARGET_ATTEMPTS = 16
+# Matches model_catalog.STAGING_MAX_AGE_SECONDS: an in-flight import_source()
+# partial younger than this must not be treated as an orphan.
+IMPORT_PARTIAL_MAX_AGE_SECONDS = 172_800
 _UUID_ALPHABET = string.ascii_letters + string.digits + "!#$%&'()+,-.;=@[]^_{}~`"
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 _SUPPORTED_EXPORT_SUFFIXES = {".txt", ".md", ".json", ".srt", ".vtt"}
@@ -448,24 +452,30 @@ class LocalStore:
         source_hash: str,
         exclude_transcript_id: str | None = None,
     ) -> bool:
+        # Match on the resolved path alone (source_hash is accepted for
+        # interface compatibility with callers but no longer filters rows):
+        # a row's recorded source_sha256 can disagree with the file it points
+        # at (stale/corrupt hash), and such a row must still protect the
+        # managed file it references. source_path lives only inside
+        # payload_json (no dedicated column), so every row is scanned and
+        # _payload_references_target filters out empty paths.
         if exclude_transcript_id is None:
-            rows = db.execute(
-                "SELECT payload_json FROM transcripts WHERE source_sha256 = ?",
-                (source_hash,),
-            ).fetchall()
+            rows = db.execute("SELECT payload_json FROM transcripts").fetchall()
         else:
             rows = db.execute(
-                """
-                SELECT payload_json
-                FROM transcripts
-                WHERE source_sha256 = ? AND id <> ?
-                """,
-                (source_hash, exclude_transcript_id),
+                "SELECT payload_json FROM transcripts WHERE id <> ?",
+                (exclude_transcript_id,),
             ).fetchall()
         return any(
             LocalStore._payload_references_target(row["payload_json"], target)
             for row in rows
         )
+
+    @staticmethod
+    def _joined_raw_segment_text(segments: list[Segment]) -> str:
+        """Join segment raw text the same way undo_last_manual_edit verifies it."""
+
+        return " ".join(segment.text.strip() for segment in segments if segment.text.strip())
 
     @staticmethod
     def _payload_references_target(payload_json: str, target: Path) -> bool:
@@ -496,6 +506,17 @@ class LocalStore:
                 if changed:
                     raise ValueError(
                         "immutable transcript fields cannot be changed: " + ", ".join(changed)
+                    )
+                # Segment raw text is immutable too, even though segment
+                # count and boundaries may legitimately change (e.g. subtitle
+                # sync merges segments while preserving their joined raw
+                # text) — only the joined raw text must stay equal.
+                previous_raw_join = self._joined_raw_segment_text(previous.segments)
+                incoming_raw_join = self._joined_raw_segment_text(transcript.segments)
+                if previous_raw_join != incoming_raw_join:
+                    raise ValueError(
+                        "immutable segment raw text cannot be changed: "
+                        "joined raw segment text differs from the stored transcript"
                     )
             db.execute(
                 """
@@ -1147,6 +1168,10 @@ class LocalStore:
                     continue
                 if _is_reparse_point(info) or not stat.S_ISREG(info.st_mode):
                     continue
+                if target.name.endswith(".partial"):
+                    cutoff = time.time() - IMPORT_PARTIAL_MAX_AGE_SECONDS
+                    if info.st_mtime >= cutoff:
+                        continue
                 try:
                     resolved = target.resolve(strict=True)
                 except OSError:

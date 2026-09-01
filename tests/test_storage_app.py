@@ -6,6 +6,7 @@ import os
 import sqlite3
 import subprocess
 import threading
+import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
@@ -246,6 +247,35 @@ def test_shared_source_is_not_deleted_while_another_record_references_it(tmp_pat
     assert managed.exists()
     store.delete_audio(second)
     assert not managed.exists()
+
+
+def test_shared_source_survives_when_second_record_hash_disagrees(tmp_path):
+    """A record pointing at the same managed file must protect it even if its
+    recorded source_sha256 does not match the file (stale/corrupt hash)."""
+
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "same.wav"
+    source.write_bytes(b"same-content")
+    managed, digest = store.import_source(source)
+    first = transcript()
+    first.source_sha256 = digest
+    first.source_path = str(managed)
+    second = Transcript.from_dict(first.to_dict())
+    second.id = "2"
+    store.save(first)
+    store.save(second)
+
+    payload = second.to_dict()
+    payload["source_sha256"] = "f" * 64
+    with sqlite3.connect(store.db_path) as db:
+        db.execute(
+            "UPDATE transcripts SET source_sha256 = ?, payload_json = ? WHERE id = ?",
+            ("f" * 64, json.dumps(payload), second.id),
+        )
+
+    store.delete_audio(first)
+
+    assert managed.exists()
 
 
 def test_import_source_hashes_and_copies_source_in_one_pass(tmp_path, monkeypatch):
@@ -819,6 +849,49 @@ def test_raw_text_is_immutable_and_corrected_text_has_explicit_update(tmp_path):
     updated = store.update_corrected_text("1", "corrected")
     assert updated.raw_text == "technická poznámka"
     assert updated.corrected_text == "corrected"
+
+
+def test_save_rejects_changed_joined_raw_segment_text(tmp_path):
+    """Segment raw text is immutable even though it is not gated by IMMUTABLE_TRANSCRIPT_FIELDS."""
+
+    from voice_studio.models import Segment
+
+    store = LocalStore(tmp_path)
+    item = transcript()
+    item.segments = [
+        Segment(start=0.0, end=1.0, text="one", corrected_text="one"),
+        Segment(start=1.0, end=2.0, text="two", corrected_text="two"),
+    ]
+    store.save(item)
+
+    item.segments[1].text = "mutated"
+    with pytest.raises(ValueError, match="raw"):
+        store.save(item)
+
+    persisted = store.get("1")
+    assert [segment.text for segment in persisted.segments] == ["one", "two"]
+
+
+def test_save_accepts_merged_segments_with_unchanged_joined_raw_text(tmp_path):
+    """Subtitle-sync style merges may change segment count/boundaries, not raw content."""
+
+    from voice_studio.models import Segment
+
+    store = LocalStore(tmp_path)
+    item = transcript()
+    item.segments = [
+        Segment(start=0.0, end=1.0, text="one", corrected_text="one"),
+        Segment(start=1.0, end=2.0, text="two", corrected_text="two"),
+    ]
+    store.save(item)
+
+    item.segments = [
+        Segment(start=0.0, end=2.0, text="one two", corrected_text="one two"),
+    ]
+    store.save(item)
+
+    persisted = store.get("1")
+    assert [segment.text for segment in persisted.segments] == ["one two"]
 
 
 def test_source_name_can_be_renamed_without_changing_transcript_content(tmp_path):
@@ -1507,3 +1580,34 @@ def test_cleanup_orphans_refuses_final_junction_without_touching_target(tmp_path
     assert result == {"removed": [], "count": 0}
     assert sentinel.read_bytes() == b"external"
     assert candidate.exists()
+
+
+def test_cleanup_orphans_preserves_fresh_import_partial_but_removes_plain_orphan(tmp_path):
+    """An in-flight import_source() .partial must survive concurrent cleanup."""
+
+    store = LocalStore(tmp_path / "data")
+    partial = store.sources / f".{uuid.uuid4().hex}.partial"
+    partial.write_bytes(b"still copying")
+    plain_orphan = store.sources / "unreferenced.wav"
+    plain_orphan.write_bytes(b"unreferenced")
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result["removed"] == [str(plain_orphan)]
+    assert partial.exists()
+    assert not plain_orphan.exists()
+
+
+def test_cleanup_orphans_removes_stale_import_partial(tmp_path):
+    """A .partial left behind by a crashed import past the age bound is removable."""
+
+    store = LocalStore(tmp_path / "data")
+    partial = store.sources / f".{uuid.uuid4().hex}.partial"
+    partial.write_bytes(b"abandoned")
+    stale_time = time.time() - storage_module.IMPORT_PARTIAL_MAX_AGE_SECONDS - 1
+    os.utime(partial, (stale_time, stale_time))
+
+    result = store.cleanup_orphans(confirmed=True)
+
+    assert result["removed"] == [str(partial)]
+    assert not partial.exists()
