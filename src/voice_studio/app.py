@@ -7,6 +7,8 @@ import time
 import tkinter as tk
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from datetime import time as day_time
 from functools import partial
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -26,6 +28,7 @@ from .cloud_secrets import (
     set_openai_api_key,
 )
 from .config import cache_dir, config_dir, data_dir, load_settings, save_settings, settings_path
+from .dashboard import HistoryFilter
 from .dictionary import DictionaryMergePreview, DictionaryRule, TerminologyDictionary, merge_preview
 from .dictionary_store import DictionaryRepository
 from .editor_state import snapshot_editor
@@ -48,6 +51,8 @@ from .model_catalog import ModelCatalog
 from .models import (
     SUPPORTED_COMPUTE_TYPES,
     SUPPORTED_DEVICES,
+    SUPPORTED_ENGINES,
+    SUPPORTED_LANGUAGES,
     Settings,
     Transcript,
 )
@@ -152,6 +157,38 @@ def studio_content_metrics(width: int) -> tuple[tuple[int, int, int, int], int, 
     return (28, 22, 28, 24), 18, 560
 
 
+DASHBOARD_EMPTY_VALUE = "—"
+DASHBOARD_RECENT_LIMIT = 5
+
+
+def format_audio_duration(seconds: float) -> str:
+    """Render accumulated audio length as H:MM:SS."""
+
+    total = max(0, int(seconds))
+    return f"{total // 3600}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def format_speed_multiplier(value: float | None) -> str:
+    return DASHBOARD_EMPTY_VALUE if value is None else f"×{value:.1f}"
+
+
+def format_count_ranking(counts: tuple[tuple[str, int], ...], *, top: int = 3) -> str:
+    if not counts:
+        return DASHBOARD_EMPTY_VALUE
+    return "\n".join(f"{name} — {count}" for name, count in counts[:top])
+
+
+def history_day_bounds(value: str, *, end_of_day: bool) -> datetime | None:
+    """Turn a YYYY-MM-DD entry into an inclusive UTC day bound, or None if invalid."""
+
+    try:
+        day = datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    moment = day_time(23, 59, 59, 999999) if end_of_day else day_time(0, 0, 0)
+    return datetime.combine(day, moment, tzinfo=UTC)
+
+
 class VoiceStudioApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -216,6 +253,7 @@ class VoiceStudioApp(tk.Tk):
         self._report_restore_recovery()
         self._settle_model_catalog()
         self._refresh_history()
+        self._refresh_dashboard()
         self.after(100, self._poll_events)
         self.protocol("WM_DELETE_WINDOW", self._close)
         self._start_hotkey()
@@ -630,19 +668,99 @@ class VoiceStudioApp(tk.Tk):
 
         self.dashboard_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
         self.dashboard_page.grid(row=0, column=0, sticky="nsew")
-        self.dashboard_placeholder_title = ttk.Label(
-            self.dashboard_page,
-            text=self._t("dashboard_placeholder_title"),
-            style="Title.TLabel",
+        self.dashboard_page.grid_columnconfigure(0, weight=1)
+        self.dashboard_title_label = ttk.Label(
+            self.dashboard_page, text=self._t("dashboard_title"), style="Title.TLabel"
         )
-        self.dashboard_placeholder_title.pack(anchor="w")
-        self.dashboard_placeholder_detail = ttk.Label(
-            self.dashboard_page,
-            text=self._t("dashboard_placeholder_detail"),
-            style="Subtitle.TLabel",
+        self.dashboard_title_label.grid(row=0, column=0, sticky="w")
+
+        self.dashboard_kpi_captions: dict[str, ttk.Label] = {}
+        self.dashboard_kpi_values: dict[str, ttk.Label] = {}
+        kpi_area = ttk.Frame(self.dashboard_page, style="Canvas.TFrame")
+        kpi_area.grid(row=1, column=0, sticky="ew", pady=(14, 0))
+        for row, keys in enumerate(
+            (
+                ("total", "completed", "failed", "words"),
+                ("duration", "speed", "retained", "last_7_days"),
+            )
+        ):
+            for column, key in enumerate(keys):
+                kpi_area.grid_columnconfigure(column, weight=1, uniform="dashboard_kpi")
+                card = ttk.Frame(kpi_area, padding=(12, 10), style="Card.TFrame")
+                card.grid(row=row, column=column, sticky="ew", padx=(0, 8), pady=(0, 8))
+                caption = ttk.Label(
+                    card, text=self._t(f"dashboard_{key}"), style="CardMuted.TLabel"
+                )
+                caption.pack(anchor="w")
+                value = ttk.Label(card, text=DASHBOARD_EMPTY_VALUE, style="CardTitle.TLabel")
+                value.pack(anchor="w", pady=(3, 0))
+                self.dashboard_kpi_captions[key] = caption
+                self.dashboard_kpi_values[key] = value
+        activity_card = ttk.Frame(kpi_area, padding=(12, 10), style="Card.TFrame")
+        activity_card.grid(row=2, column=0, sticky="ew", padx=(0, 8))
+        self.dashboard_kpi_captions["last_30_days"] = ttk.Label(
+            activity_card, text=self._t("dashboard_last_30_days"), style="CardMuted.TLabel"
+        )
+        self.dashboard_kpi_captions["last_30_days"].pack(anchor="w")
+        self.dashboard_kpi_values["last_30_days"] = ttk.Label(
+            activity_card, text=DASHBOARD_EMPTY_VALUE, style="CardTitle.TLabel"
+        )
+        self.dashboard_kpi_values["last_30_days"].pack(anchor="w", pady=(3, 0))
+
+        self.dashboard_top_captions: dict[str, ttk.Label] = {}
+        self.dashboard_top_values: dict[str, ttk.Label] = {}
+        top_area = ttk.Frame(self.dashboard_page, style="Canvas.TFrame")
+        top_area.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        for column, key in enumerate(("languages", "engines", "models")):
+            top_area.grid_columnconfigure(column, weight=1, uniform="dashboard_top")
+            card = ttk.Frame(top_area, padding=(12, 10), style="Card.TFrame")
+            card.grid(row=0, column=column, sticky="new", padx=(0, 8))
+            caption = ttk.Label(
+                card, text=self._t(f"dashboard_top_{key}"), style="CardMuted.TLabel"
+            )
+            caption.pack(anchor="w")
+            value = ttk.Label(
+                card, text=DASHBOARD_EMPTY_VALUE, style="CardValue.TLabel", justify="left"
+            )
+            value.pack(anchor="w", pady=(3, 0))
+            self.dashboard_top_captions[key] = caption
+            self.dashboard_top_values[key] = value
+
+        self.dashboard_invalid_frame = ttk.Frame(
+            self.dashboard_page, padding=(12, 8), style="Card.TFrame"
+        )
+        self.dashboard_invalid_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self.dashboard_invalid_label = ttk.Label(
+            self.dashboard_invalid_frame,
+            text="",
+            style="CardMuted.TLabel",
             wraplength=620,
         )
-        self.dashboard_placeholder_detail.pack(anchor="w", pady=(8, 0))
+        self.dashboard_invalid_label.pack(anchor="w")
+        self.dashboard_invalid_frame.grid_remove()
+
+        recent_card = ttk.Frame(self.dashboard_page, padding=(12, 10), style="Card.TFrame")
+        recent_card.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self.dashboard_recent_caption = ttk.Label(
+            recent_card, text=self._t("dashboard_recent"), style="CardMuted.TLabel"
+        )
+        self.dashboard_recent_caption.grid(row=0, column=0, sticky="w")
+        recent_card.grid_columnconfigure(0, weight=1)
+        self._dashboard_recent_items: list[Transcript] = []
+        self.dashboard_recent_buttons: list[ttk.Button] = []
+        for index in range(DASHBOARD_RECENT_LIMIT):
+            button = ttk.Button(
+                recent_card,
+                text="",
+                command=partial(self._open_dashboard_recent, index),
+            )
+            button.grid(row=index + 1, column=0, sticky="ew", pady=(4, 0))
+            button.grid_remove()
+            self.dashboard_recent_buttons.append(button)
+        self.dashboard_recent_empty_label = ttk.Label(
+            recent_card, text=self._t("dashboard_recent_empty"), style="CardValue.TLabel"
+        )
+        self.dashboard_recent_empty_label.grid(row=DASHBOARD_RECENT_LIMIT + 1, column=0, sticky="w")
 
         self.studio_page = ttk.Frame(self.page_host, style="Canvas.TFrame")
         self.main_area = self.studio_page
@@ -833,6 +951,58 @@ class VoiceStudioApp(tk.Tk):
             search_row, text=self._t("search"), command=self._refresh_history
         )
         self.search_button.pack(side="left", padx=(5, 0))
+
+        filter_row = ttk.Frame(self.history_frame, style="Card.TFrame")
+        filter_row.pack(fill="x", pady=(0, 6))
+        filter_row.grid_columnconfigure(1, weight=1)
+        filter_row.grid_columnconfigure(3, weight=1)
+        self._history_filter_vars: dict[str, tk.StringVar] = {}
+        self._history_filter_combos: dict[str, ttk.Combobox] = {}
+        self._history_filter_labels: dict[str, dict[str, object]] = {}
+        self.history_filter_captions: dict[str, ttk.Label] = {}
+        for name, row, column in (
+            ("language", 0, 0),
+            ("engine", 0, 2),
+            ("status", 1, 0),
+            ("retained", 1, 2),
+        ):
+            caption = ttk.Label(
+                filter_row, text=self._t(f"history_filter_{name}"), style="CardMuted.TLabel"
+            )
+            caption.grid(row=row, column=column, sticky="w", padx=(0, 6), pady=(0, 4))
+            variable = tk.StringVar()
+            combo = ttk.Combobox(filter_row, textvariable=variable, state="readonly", width=14)
+            combo.grid(row=row, column=column + 1, sticky="ew", padx=(0, 8), pady=(0, 4))
+            self.history_filter_captions[name] = caption
+            self._history_filter_vars[name] = variable
+            self._history_filter_combos[name] = combo
+            self._apply_history_filter_choices(name, reset=True)
+        for name, row, column in (
+            ("model", 2, 0),
+            ("from", 2, 2),
+            ("to", 3, 0),
+        ):
+            caption = ttk.Label(
+                filter_row, text=self._t(f"history_filter_{name}"), style="CardMuted.TLabel"
+            )
+            caption.grid(row=row, column=column, sticky="w", padx=(0, 6), pady=(0, 4))
+            self.history_filter_captions[name] = caption
+        self.history_model_var = tk.StringVar()
+        ttk.Entry(filter_row, textvariable=self.history_model_var, width=14).grid(
+            row=2, column=1, sticky="ew", padx=(0, 8), pady=(0, 4)
+        )
+        self.history_from_var = tk.StringVar()
+        ttk.Entry(filter_row, textvariable=self.history_from_var, width=14).grid(
+            row=2, column=3, sticky="ew", padx=(0, 8), pady=(0, 4)
+        )
+        self.history_to_var = tk.StringVar()
+        ttk.Entry(filter_row, textvariable=self.history_to_var, width=14).grid(
+            row=3, column=1, sticky="ew", padx=(0, 8), pady=(0, 4)
+        )
+        self.history_reset_button = ttk.Button(
+            filter_row, text=self._t("history_filter_reset"), command=self._reset_history_filters
+        )
+        self.history_reset_button.grid(row=3, column=3, sticky="e", pady=(0, 4))
 
         list_frame = ttk.Frame(self.history_frame, style="Card.TFrame")
         list_frame.pack(fill="both", expand=True)
@@ -1113,6 +1283,8 @@ class VoiceStudioApp(tk.Tk):
         else:
             self.readiness_frame.grid_remove()
         self._apply_studio_layout(self.winfo_width(), force=True)
+        if page == "dashboard":
+            self._refresh_dashboard()
         return True
 
     def _reload_dictionary(self) -> bool:
@@ -1776,8 +1948,8 @@ class VoiceStudioApp(tk.Tk):
         self.workspace_kicker_label.configure(text=self._t("workspace_kicker"))
         self.workspace_title_label.configure(text=self._t("workspace_title"))
         self.workspace_subtitle_label.configure(text=self._t("workspace_subtitle"))
-        self.dashboard_placeholder_title.configure(text=self._t("dashboard_placeholder_title"))
-        self.dashboard_placeholder_detail.configure(text=self._t("dashboard_placeholder_detail"))
+        self._refresh_dashboard_ui_text()
+        self._refresh_history_filter_ui_text()
         self._refresh_dictionary_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
@@ -1819,6 +1991,23 @@ class VoiceStudioApp(tk.Tk):
             self._help_close_button.configure(text=self._t("help_close"))
         self._apply_studio_layout(self.winfo_width(), force=True)
         self._update_engine_label()
+
+    def _refresh_dashboard_ui_text(self) -> None:
+        self.dashboard_title_label.configure(text=self._t("dashboard_title"))
+        for key, label in self.dashboard_kpi_captions.items():
+            label.configure(text=self._t(f"dashboard_{key}"))
+        for key, label in self.dashboard_top_captions.items():
+            label.configure(text=self._t(f"dashboard_top_{key}"))
+        self.dashboard_recent_caption.configure(text=self._t("dashboard_recent"))
+        self.dashboard_recent_empty_label.configure(text=self._t("dashboard_recent_empty"))
+        self._refresh_dashboard()
+
+    def _refresh_history_filter_ui_text(self) -> None:
+        for name, label in self.history_filter_captions.items():
+            label.configure(text=self._t(f"history_filter_{name}"))
+        self.history_reset_button.configure(text=self._t("history_filter_reset"))
+        for name in self._history_filter_vars:
+            self._apply_history_filter_choices(name)
 
     def _refresh_dictionary_ui_text(self) -> None:
         self.dictionary_title_label.configure(text=self._t("dictionary_title"))
@@ -2120,6 +2309,7 @@ class VoiceStudioApp(tk.Tk):
                     self._set_busy(False)
                     if not self._try_show_result(transcript, copy=True):
                         self._refresh_history(select_id=self.current.id if self.current else None)
+                        self._refresh_dashboard()
                     self._report_automatic_cleanup_warning(transcript)
                 elif event == "error":
                     error, cleanup = value
@@ -2551,6 +2741,7 @@ class VoiceStudioApp(tk.Tk):
         )
         if refresh:
             self._refresh_history(select_id=transcript.id)
+            self._refresh_dashboard()
         if copy and self.settings.auto_copy:
             self._copy_to_clipboard(transcript.corrected_text)
 
@@ -2629,14 +2820,141 @@ class VoiceStudioApp(tk.Tk):
         self._copy_to_clipboard(self.editor.get("1.0", "end-1c"))
         self.status.set(self._t("copied"))
 
+    def _refresh_dashboard(self) -> None:
+        if "dashboard_kpi_values" not in self.__dict__:
+            return
+        statistics = self.store.statistics()
+        values = {
+            "total": str(statistics.total_records),
+            "completed": str(statistics.completed_records),
+            "failed": str(statistics.failed_records),
+            "words": str(statistics.word_count_total),
+            "duration": format_audio_duration(statistics.audio_seconds_total),
+            "speed": format_speed_multiplier(statistics.speed_multiplier),
+            "retained": str(statistics.retained_audio_records),
+            "last_7_days": str(statistics.records_last_7_days),
+            "last_30_days": str(statistics.records_last_30_days),
+        }
+        for key, label in self.dashboard_kpi_values.items():
+            label.configure(text=values[key])
+        for key, counts in (
+            ("languages", statistics.language_counts),
+            ("engines", statistics.engine_counts),
+            ("models", statistics.model_counts),
+        ):
+            self.dashboard_top_values[key].configure(text=format_count_ranking(counts))
+        if statistics.invalid_records > 0:
+            self.dashboard_invalid_label.configure(
+                text=self._t("dashboard_invalid_records", count=statistics.invalid_records)
+            )
+            self.dashboard_invalid_frame.grid()
+        else:
+            self.dashboard_invalid_frame.grid_remove()
+        self._dashboard_recent_items = self.store.list(limit=DASHBOARD_RECENT_LIMIT)
+        for index, button in enumerate(self.dashboard_recent_buttons):
+            if index < len(self._dashboard_recent_items):
+                button.configure(text=self._history_label(self._dashboard_recent_items[index]))
+                button.grid()
+            else:
+                button.grid_remove()
+        if self._dashboard_recent_items:
+            self.dashboard_recent_empty_label.grid_remove()
+        else:
+            self.dashboard_recent_empty_label.grid()
+
+    def _open_dashboard_recent(self, index: int) -> None:
+        items = self._dashboard_recent_items
+        if index >= len(items):
+            return
+        if self._try_show_result(items[index], copy=False, refresh=False):
+            self._show_page("studio")
+
+    @staticmethod
+    def _history_label(transcript: Transcript) -> str:
+        return f"{transcript.created_at[:16]}  [{transcript.language}]  {transcript.source_name}"
+
+    def _history_filter_choices(self, name: str) -> tuple[tuple[str, object], ...]:
+        head: tuple[tuple[str, object], ...] = ((self._t("history_filter_all"), None),)
+        if name == "language":
+            return head + tuple((value, value) for value in SUPPORTED_LANGUAGES)
+        if name == "engine":
+            return head + tuple((value, value) for value in SUPPORTED_ENGINES)
+        if name == "status":
+            return head + (
+                (self._t("history_filter_completed"), "completed"),
+                (self._t("history_filter_failed"), "failed"),
+            )
+        return head + (
+            (self._t("history_filter_yes"), True),
+            (self._t("history_filter_no"), False),
+        )
+
+    def _apply_history_filter_choices(self, name: str, *, reset: bool = False) -> None:
+        current = None if reset else self._history_filter_value(name)
+        choices = self._history_filter_choices(name)
+        self._history_filter_labels[name] = {label: value for label, value in choices}
+        self._history_filter_combos[name].configure(values=[label for label, _ in choices])
+        selected = next(
+            (label for label, value in choices if value == current), choices[0][0]
+        )
+        self._history_filter_vars[name].set(selected)
+
+    def _history_filter_value(self, name: str) -> object:
+        labels = self._history_filter_labels.get(name, {})
+        return labels.get(self._history_filter_vars[name].get())
+
+    def _build_history_filter(self) -> HistoryFilter | None:
+        text = self.search_var.get().strip() if "search_var" in self.__dict__ else ""
+        if "_history_filter_vars" not in self.__dict__:
+            return HistoryFilter(text=text)
+        bounds: list[datetime | None] = []
+        for variable, end_of_day in (
+            (self.history_from_var, False),
+            (self.history_to_var, True),
+        ):
+            raw = variable.get().strip()
+            if not raw:
+                bounds.append(None)
+                continue
+            bound = history_day_bounds(raw, end_of_day=end_of_day)
+            if bound is None:
+                self.status.set(self._t("history_filter_date_invalid"))
+                return None
+            bounds.append(bound)
+        language = self._history_filter_value("language")
+        engine = self._history_filter_value("engine")
+        status = self._history_filter_value("status")
+        retained = self._history_filter_value("retained")
+        return HistoryFilter(
+            text=text,
+            created_from=bounds[0],
+            created_to=bounds[1],
+            language=language if isinstance(language, str) else None,
+            engine=engine if isinstance(engine, str) else None,
+            model=self.history_model_var.get().strip() or None,
+            status=status if isinstance(status, str) else None,
+            retained_audio=retained if isinstance(retained, bool) else None,
+        )
+
+    def _reset_history_filters(self) -> None:
+        if "search_var" in self.__dict__:
+            self.search_var.set("")
+        self.history_model_var.set("")
+        self.history_from_var.set("")
+        self.history_to_var.set("")
+        for name in self._history_filter_vars:
+            self._apply_history_filter_choices(name, reset=True)
+        self._refresh_history()
+
     def _refresh_history(self, *, select_id: str | None = None) -> None:
-        query = self.search_var.get().strip() if hasattr(self, "search_var") else ""
-        self._history_items = self.store.list(query=query, limit=250)
+        history_filter = self._build_history_filter()
+        if history_filter is None:
+            return
+        self._history_items = self.store.list(limit=250, filters=history_filter)
         self.history.delete(0, "end")
         selected_index: int | None = None
         for index, item in enumerate(self._history_items):
-            label = f"{item.created_at[:16]}  [{item.language}]  {item.source_name}"
-            self.history.insert("end", label)
+            self.history.insert("end", self._history_label(item))
             if select_id and item.id == select_id:
                 selected_index = index
         if selected_index is not None:
@@ -2719,6 +3037,7 @@ class VoiceStudioApp(tk.Tk):
             self._set_readonly_text(self.raw_editor, "")
             self._set_readonly_text(self.details, "")
         self._refresh_history()
+        self._refresh_dashboard()
         self.status.set(self._t("delete_complete"))
 
     def _editor_is_dirty(self) -> bool:
@@ -3941,6 +4260,7 @@ class VoiceStudioApp(tk.Tk):
         self.settings = load_settings()
         self._clear_current_transcript_view()
         self._refresh_history()
+        self._refresh_dashboard()
         self._refresh_ui_text()
         self._start_hotkey()
 

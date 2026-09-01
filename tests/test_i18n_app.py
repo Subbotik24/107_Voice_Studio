@@ -97,8 +97,9 @@ def test_central_page_labels_and_placeholders_are_localized_everywhere() -> None
         for key in (
             "dashboard",
             "dictionary",
-            "dashboard_placeholder_title",
-            "dashboard_placeholder_detail",
+            "dashboard_title",
+            "dashboard_recent",
+            "dashboard_recent_empty",
             "dictionary_placeholder_title",
             "dictionary_placeholder_detail",
         ):

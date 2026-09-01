@@ -12,8 +12,10 @@ import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
+from .dashboard import DashboardStatistics, HistoryFilter, aggregate_statistics
 from .models import Segment, Transcript
 from .operation import (
     ManagedTargetAllocationError,
@@ -858,9 +860,17 @@ class LocalStore:
             ).fetchone()
         return Transcript.from_dict(json.loads(row["payload_json"])) if row else None
 
-    def list(self, query: str = "", limit: int = 100) -> list[Transcript]:
+    def list(
+        self,
+        query: str = "",
+        limit: int = 100,
+        *,
+        filters: HistoryFilter | None = None,
+    ) -> list[Transcript]:
         if limit <= 0:
             raise ValueError("limit must be positive")
+        if filters is not None:
+            return self._list_filtered(query, limit, filters)
         sql = "SELECT payload_json FROM transcripts"
         args: tuple[object, ...] = ()
         if query:
@@ -871,6 +881,53 @@ class LocalStore:
         with self._connect() as db:
             rows = db.execute(sql, args).fetchall()
         return [Transcript.from_dict(json.loads(row["payload_json"])) for row in rows]
+
+    def _list_filtered(
+        self, query: str, limit: int, filters: HistoryFilter
+    ) -> list[Transcript]:
+        """Apply structured filters before the limit, so old matches stay reachable."""
+
+        if query:
+            raise ValueError("a history filter cannot be combined with a query string")
+        clauses: list[str] = []
+        args: list[object] = []
+        for column, value in (
+            ("language", filters.language),
+            ("engine", filters.engine),
+            ("model", filters.model),
+            ("status", filters.status),
+        ):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                args.append(value)
+        sql = "SELECT payload_json FROM transcripts"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY created_at DESC"
+        matches: list[Transcript] = []
+        with self._connect() as db:
+            for row in db.execute(sql, tuple(args)):
+                try:
+                    transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+                    accepted = filters.matches(transcript)
+                except Exception:
+                    continue
+                if not accepted:
+                    continue
+                matches.append(transcript)
+                if len(matches) >= limit:
+                    break
+        return matches
+
+    def statistics(self, *, now: datetime | None = None) -> DashboardStatistics:
+        """Aggregate every stored record, independent of any interface row limit."""
+
+        reference = now if now is not None else datetime.now(UTC)
+        with self._connect() as db:
+            cursor = db.execute("SELECT payload_json FROM transcripts")
+            return aggregate_statistics(
+                (row["payload_json"] for row in cursor), now=reference
+            )
 
     def audit(self) -> dict[str, object]:
         with self._connect() as db:
