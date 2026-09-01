@@ -129,4 +129,3 @@ log. Physical Tk smoke можна відкласти до Task 8 і познач
 > Git-мутацій; primary controller після одного фінального full gate робить
 > commit/push у main і дописує verification log. Після Task 4 зупинися та
 > відзвітуй, не починай editor/playback автоматично.
-
