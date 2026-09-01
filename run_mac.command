@@ -2,6 +2,18 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Self-update a developer checkout: sync to the latest main before the
+# launch. Offline or without git the launcher just starts what is here.
+# Local edits inside the checkout are discarded by the sync.
+if [ -d .git ] && command -v git >/dev/null 2>&1; then
+  echo "Updating VOICE Studio to the latest version…"
+  if git fetch origin; then
+    git checkout -f -B main origin/main
+  else
+    echo "Offline or fetch failed — starting the current version."
+  fi
+fi
+
 if [ -z "${PYTHON_BIN:-}" ]; then
   for candidate in python3.12 python3.11 python3; do
     if command -v "$candidate" >/dev/null 2>&1; then

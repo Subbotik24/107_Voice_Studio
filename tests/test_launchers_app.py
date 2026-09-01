@@ -32,6 +32,14 @@ def test_windows_launcher_has_fail_fast_preflight_and_first_run_install() -> Non
     assert 'cd /d "%~dp0"' in launcher
 
 
+def test_launchers_self_update_from_origin_main_and_survive_offline() -> None:
+    for name in ("run_windows.bat", "run_mac.command"):
+        launcher = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+        assert "git fetch origin" in launcher
+        assert "git checkout -f -B main origin/main" in launcher
+        assert "starting the current version" in launcher.lower()
+
+
 def test_windows_launcher_always_runs_the_checked_out_source_tree() -> None:
     launcher = (PROJECT_ROOT / "run_windows.bat").read_text(encoding="utf-8")
 

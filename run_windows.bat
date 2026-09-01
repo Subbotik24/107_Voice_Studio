@@ -2,6 +2,22 @@
 setlocal
 cd /d "%~dp0"
 
+rem Self-update a developer checkout: sync to the latest main before the
+rem launch. Offline or without git the launcher just starts what is here.
+rem Local edits inside the checkout are discarded by the sync.
+if exist ".git" (
+  git --version >nul 2>nul
+  if not errorlevel 1 (
+    echo Updating VOICE Studio to the latest version...
+    git fetch origin
+    if errorlevel 1 (
+      echo Offline or fetch failed - starting the current version.
+    ) else (
+      git checkout -f -B main origin/main
+    )
+  )
+)
+
 set "PYTHON_LAUNCHER=py -3.11"
 %PYTHON_LAUNCHER% -c "import sys" >nul 2>nul
 if errorlevel 1 set "PYTHON_LAUNCHER=py -3.12"
