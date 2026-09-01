@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -22,9 +23,13 @@ def initialize_workspace(destination: Path, *, overwrite: bool = False) -> dict[
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         payload = package_root.joinpath(resource_name).read_bytes()
-        temporary = target.with_suffix(target.suffix + ".tmp")
-        temporary.write_bytes(payload)
-        temporary.replace(target)
+        temporary = target.with_name(f"{target.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(payload)
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
         created.append(str(relative_target))
     return {
         "workspace": str(root.resolve()),

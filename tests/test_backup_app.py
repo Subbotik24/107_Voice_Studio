@@ -922,3 +922,76 @@ def test_recovery_refuses_a_journal_from_another_data_directory(tmp_path):
     assert result["status"] == "FAIL"
     assert "different data directory" in result["error"]
     assert LocalStore(data).get("kept") is not None
+
+
+def test_create_backup_preserves_unrelated_neighbor_tmp_file(tmp_path, make_wav):
+    data = tmp_path / "data"
+    store = LocalStore(data)
+    original = make_wav(tmp_path / "original.wav")
+    managed, digest = store.import_source(original)
+    store.save(transcript("backed-up", digest, str(managed)))
+    backup = tmp_path / "safe.voice-backup"
+    neighbor = tmp_path / "safe.voice-backup.tmp"
+    neighbor.write_text("user data", encoding="utf-8")
+
+    create_backup(store, backup)
+
+    assert verify_backup(backup)["status"] == "PASS"
+    assert neighbor.read_text(encoding="utf-8") == "user data"
+
+
+def test_create_encrypted_backup_preserves_unrelated_neighbor_tmp_file(
+    tmp_path, make_wav
+):
+    data = tmp_path / "data"
+    store = LocalStore(data)
+    original = make_wav(tmp_path / "original.wav")
+    managed, digest = store.import_source(original)
+    store.save(transcript("backed-up", digest, str(managed)))
+    backup = tmp_path / "safe.voice-backup"
+    neighbor = tmp_path / "safe.voice-backup.tmp"
+    neighbor.write_text("user data", encoding="utf-8")
+
+    create_backup(store, backup, passphrase="correct horse battery")
+
+    assert neighbor.read_text(encoding="utf-8") == "user data"
+
+
+def test_v1_promoted_swap_crash_window_finishes_settings_from_the_sidecar(
+    tmp_path, make_wav, monkeypatch
+):
+    """Catches misreporting a promoted v1 swap as an untouched live root and
+    silently dropping the parked restored settings."""
+
+    dictionary = tmp_path / "dictionary.json"
+    dictionary.write_text('{"replacements":[]}', encoding="utf-8")
+    settings_file = tmp_path / "config" / "settings.json"
+    save_settings(Settings(dictionary_path=str(dictionary), auto_copy=True), settings_file)
+    archive_path = _seed_backup(tmp_path, make_wav, settings_file=settings_file)
+    save_settings(Settings(dictionary_path=str(dictionary), auto_copy=False), settings_file)
+    original_write = backup_module._write_json_atomic
+
+    def crash_before_journal_advance(path, payload):
+        if payload.get("stage") == "swap_completed":
+            raise KeyboardInterrupt("simulated power loss before the journal advance")
+        original_write(path, payload)
+
+    monkeypatch.setattr(backup_module, "_write_json_atomic", crash_before_journal_advance)
+    data = tmp_path / "data"
+    with pytest.raises(KeyboardInterrupt):
+        restore_backup(archive_path, data, settings_target=settings_file)
+
+    monkeypatch.undo()
+    assert data.is_dir()
+    assert (data / backup_module.RESTORE_SIDECAR_NAME).is_file()
+    journal = json.loads(_journal(data).read_text(encoding="utf-8"))
+    assert journal["stage"] == "swap_started"
+
+    result = backup_module.recover_interrupted_restore(data, settings_target=settings_file)
+
+    assert result["status"] == "PASS"
+    assert result["action"] == "settings_completed"
+    assert LocalStore(data).get("backed-up") is not None
+    assert json.loads(settings_file.read_text(encoding="utf-8"))["auto_copy"] is True
+    assert not (data / backup_module.RESTORE_SIDECAR_NAME).exists()
+    assert not _journal(data).exists()

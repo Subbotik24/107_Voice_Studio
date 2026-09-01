@@ -347,10 +347,10 @@ def _create_backup_v2(
     if len(index_plaintext) > _PRIVATE_INDEX_LIMIT_BYTES:
         raise ValueError("backup private index exceeds its format limit")
 
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
     try:
         manifest_members: dict[str, dict[str, Any]] = {}
-        with zipfile.ZipFile(temporary, "w") as archive:
+        with temporary.open("xb") as backing, zipfile.ZipFile(backing, "w") as archive:
 
             def _write_encrypted_member(
                 opaque_name: str, opener: Callable[[], BinaryIO]
@@ -491,9 +491,11 @@ def create_backup(
         "include_audio": include_audio,
         "members": inventory,
     }
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
     try:
-        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        with temporary.open("xb") as backing, zipfile.ZipFile(
+            backing, "w", compression=zipfile.ZIP_DEFLATED
+        ) as archive:
             archive.writestr(
                 "manifest.json",
                 json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
@@ -1670,18 +1672,24 @@ def recover_interrupted_restore(
             "recovery": recovery_value,
         }
 
-    v2_settings_were_promoted = (
-        journal.get("backup_version") == ENCRYPTED_BACKUP_VERSION
-        and journal.get("settings_payload_written") is False
+    promoted_sidecar_name = (
+        RESTORE_V2_SIDECAR_NAME
+        if journal.get("backup_version") == ENCRYPTED_BACKUP_VERSION
+        else RESTORE_SIDECAR_NAME
+    )
+    settings_were_promoted = (
+        journal.get("settings_payload_written") is False
         and not staging.exists()
-        and (data_root / RESTORE_V2_SIDECAR_NAME).exists()
+        and (data_root / promoted_sidecar_name).exists()
         and _restored_store_is_sound(data_root, expected_records)
     )
-    if v2_settings_were_promoted:
+    if settings_were_promoted:
         # The staging rename completed, but the process died before the
-        # swap_completed journal write. The authenticated sidecar inside the
-        # sound promoted store distinguishes this state from an untouched live
-        # root. Persist the transition before asking for/applying a passphrase.
+        # swap_completed journal write. The parked sidecar inside the sound
+        # promoted store distinguishes this state from an untouched live
+        # root, for the plaintext v1 sidecar and the authenticated v2 one
+        # alike. Persist the transition before applying settings (v1) or
+        # asking for/applying a passphrase (v2).
         journal["stage"] = "swap_completed"
         try:
             _write_json_atomic(journal_path, journal)

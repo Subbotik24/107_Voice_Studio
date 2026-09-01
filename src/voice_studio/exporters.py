@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 
 from .models import Transcript
@@ -48,7 +49,11 @@ def export_transcript(transcript: Transcript, fmt: str, destination: Path) -> Pa
         content = "\n".join(lines).rstrip() + "\n"
     else:
         raise ValueError(f"unsupported export format: {fmt}")
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.replace(destination)
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination

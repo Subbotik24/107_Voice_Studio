@@ -39,3 +39,11 @@ def test_all_exports(tmp_path):
     subtitle = (tmp_path / "demo.srt").read_text(encoding="utf-8")
     assert "00:00:00,000 --> 00:00:01,250" in subtitle
     assert "Привіт, світе." in subtitle
+
+
+def test_export_preserves_unrelated_neighbor_tmp_file(tmp_path):
+    neighbor = tmp_path / "demo.txt.tmp"
+    neighbor.write_text("user data", encoding="utf-8")
+    export_transcript(sample(), "txt", tmp_path / "demo.txt")
+    assert (tmp_path / "demo.txt").exists()
+    assert neighbor.read_text(encoding="utf-8") == "user data"
