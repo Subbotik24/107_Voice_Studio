@@ -382,7 +382,7 @@ def test_add_to_dictionary_saves_the_rule_and_rewrites_only_the_editor(
             target="Інвертор",
             case_sensitive=False,
             whole_word=True,
-            use_as_hint=True,
+            use_as_hint=False,
         )
     ]
     assert app.dictionary_repository.saved == [app.dictionary.rules]

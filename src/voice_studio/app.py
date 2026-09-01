@@ -3165,7 +3165,10 @@ class VoiceStudioApp(tk.Tk):
             target=target,
             case_sensitive=False,
             whole_word=True,
-            use_as_hint=True,
+            # The quick-add flow never exposes the hint checkbox, so it must
+            # not silently grow the recognition-hint payload; the Dictionary
+            # page is where a rule is promoted to a hint deliberately.
+            use_as_hint=False,
         )
         self.dictionary.rules.append(rule)
         if not self._save_dictionary():

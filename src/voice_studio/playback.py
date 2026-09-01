@@ -103,16 +103,16 @@ class AvPcmSource:
         try:
             container = av.open(str(self.path))
         except Exception as exc:
-            raise ValueError(f"cannot open audio file {self.path}: {exc}") from exc
+            raise ValueError(f"cannot open audio file {self.path.name}: {exc}") from exc
 
         try:
             stream = next((item for item in container.streams if item.type == "audio"), None)
             if stream is None:
-                raise ValueError(f"media file has no audio stream: {self.path}")
+                raise ValueError(f"media file has no audio stream: {self.path.name}")
             codec_context = stream.codec_context
             sample_rate = int(getattr(codec_context, "sample_rate", 0) or 0)
             if sample_rate <= 0:
-                raise ValueError(f"media file has no usable audio sample rate: {self.path}")
+                raise ValueError(f"media file has no usable audio sample rate: {self.path.name}")
             layout = getattr(codec_context, "layout", None)
             channels = int(getattr(layout, "nb_channels", 0) or 1)
         except BaseException:
@@ -130,7 +130,7 @@ class AvPcmSource:
 
     def chunks(self, start: float, speed: float) -> Iterator[bytes]:
         if self._closed:
-            raise ValueError(f"audio source is closed: {self.path}")
+            raise ValueError(f"audio source is closed: {self.path.name}")
         output_rate = max(1, int(round(self.sample_rate / speed)))
         chunk_bytes = max(
             self._frame_bytes, int(self.sample_rate * CHUNK_SECONDS) * self._frame_bytes
@@ -161,7 +161,7 @@ class AvPcmSource:
         except (GeneratorExit, StopIteration):
             raise
         except Exception as exc:
-            raise ValueError(f"cannot decode audio file {self.path}: {exc}") from exc
+            raise ValueError(f"cannot decode audio file {self.path.name}: {exc}") from exc
 
         skip_bytes = self._drop(pending, skip_bytes or 0)
         while len(pending) >= chunk_bytes:

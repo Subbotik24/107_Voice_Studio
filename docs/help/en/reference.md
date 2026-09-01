@@ -4,7 +4,10 @@
 
 | Item | Purpose |
 |---|---|
-| **Studio** | Recording, transcription, editor, and history. |
+| **Dashboard** | Local whole-history statistics and the latest records. |
+| **Studio** | Recording, transcription, and the editor. |
+| **Dictionary** | The managed terminology dictionary with import/export. |
+| **History** | Search and combined record filters; opens a record in the Studio. |
 | **Models** | Manage Faster Whisper models only. |
 | **Backup** | Create, verify, and restore backups. |
 | **Settings** | Profiles, languages, Ollama, Whisper, and OpenAI. |

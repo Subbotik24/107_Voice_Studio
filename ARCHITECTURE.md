@@ -34,8 +34,11 @@ UI та storage не залежать від внутрішньої архіте
 | `voice_studio.hardware` | Bounded spawn-based local capability detection (advisory only) |
 | `voice_studio.service` | Оркестрація транскрибування |
 | `voice_studio.storage` | SHA‑256, SQLite, retention |
+| `voice_studio.dashboard` | Immutable агрегати статистики історії та типізовані History-фільтри |
 | `voice_studio.subtitles` | Детермінована синхронізація ручних правок із наявними subtitle intervals без створення часу |
 | `voice_studio.dictionary` | Детерміновані термінологічні заміни |
+| `voice_studio.editor_tools` | Чисті Unicode-операції редактора: пошук/заміна, слова-паразити, порядок перегляду за впевненістю |
+| `voice_studio.playback` | Локальне відтворення керованої аудіокопії: PyAV decode seam, sounddevice sink, bounded PCM chunks |
 | `voice_studio.exporters` | Формати експорту |
 
 ## 3. Engine contract

@@ -42,6 +42,22 @@ report and asks for a private channel — no details.
 - Editor navigation and close use a dirty Save/Discard/Cancel prompt. Save
   persists the editable `corrected_text` layer and formatting; immutable
   `raw_text` is never rewritten.
+- The Studio editor tools (find and replace, add selection to dictionary,
+  filler-word cleanup, confidence review) change only the open editor buffer.
+  They write nothing to storage before an explicit save, and `raw_text` is
+  never rewritten. The confidence threshold is page state only and is never
+  persisted to settings or disk.
+- Terminology rules live in the locally managed dictionary file next to the
+  other application data. Adding a rule from the editor selection writes only
+  that file. Rule terms used as recognition hints are passed per request and
+  are not written to settings, transcripts, metadata, diagnostics or logs.
+- Dashboard statistics are aggregated locally from the local database. No
+  network call, upload or telemetry is involved; a record whose payload cannot
+  be read is counted as invalid instead of failing the page.
+- Local playback resolves only the retained managed audio copy inside the
+  managed sources directory. The external original file is never looked up or
+  opened, and playback stops when the page or the record changes, on restore
+  and on close.
 - Microphone capture is recorder-owned under the private app-cache recordings
   directory. It streams 100 ms blocks through a bounded 64-block queue, has a
   two-hour limit, surfaces sounddevice status and queue-drop warnings, and
@@ -61,8 +77,8 @@ report and asks for a private channel — no details.
 
 - Native acceptance is still **NOT RUN** on physical Windows and macOS: normal
   and continuous microphone capture, overflow and device disconnect, the
-  two-hour limit, close during capture or transcription, and clipboard history
-  and sync all remain unverified. The exact verified and remaining scope is in
+  two-hour limit, close during capture or transcription, local playback through
+  a real audio device, and clipboard history and sync all remain unverified. The exact verified and remaining scope is in
   `VERIFICATION.md`.
 - Native installers are not signed.
 - The global hotkey depends on OS Accessibility permissions.

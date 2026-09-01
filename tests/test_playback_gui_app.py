@@ -156,6 +156,26 @@ def test_an_external_original_is_never_playable(tmp_path: Path) -> None:
     assert app._playable_source_path() is None
 
 
+def test_a_symlink_inside_sources_to_an_external_file_is_rejected(tmp_path: Path) -> None:
+    import os
+
+    import pytest
+
+    outside = tmp_path / "outside" / "secret.wav"
+    outside.parent.mkdir(parents=True)
+    outside.write_bytes(b"pcm")
+    sources = tmp_path / "sources"
+    sources.mkdir(parents=True, exist_ok=True)
+    link = sources / "evil.wav"
+    try:
+        os.symlink(outside, link)
+    except OSError:
+        pytest.skip("symlinks are unavailable on this platform")
+    app = _playback_app(tmp_path, _transcript(str(link)))
+
+    assert app._playable_source_path() is None
+
+
 def test_a_deleted_managed_file_is_not_playable(tmp_path: Path) -> None:
     media = _managed_file(tmp_path)
     media.unlink()
@@ -431,9 +451,9 @@ def test_shutdown_is_clean_when_the_worker_stops_in_time(tmp_path: Path) -> None
 # --- retranslation ----------------------------------------------------------
 
 
-def test_retranslate_relabels_the_playback_bar() -> None:
+def test_retranslate_relabels_the_playback_bar(tmp_path: Path) -> None:
     for locale in ("uk", "cs", "en"):
-        app = _playback_app(Path("/tmp"), None)
+        app = _playback_app(tmp_path, None)
         app.settings = Settings(ui_language=locale)
 
         app._refresh_playback_ui_text()

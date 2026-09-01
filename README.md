@@ -92,6 +92,63 @@ VOICE Studio never installs, updates or deletes Ollama models. If an installed
 model cannot load, the app shows the error returned by the local Ollama runtime
 so another installed model can be selected.
 
+## Workspace: Dashboard, Studio, Dictionary, History
+
+The left menu opens four local pages — **Dashboard**, **Studio**, **Dictionary**
+and **History** — next to the Models, Backup, Settings and Help dialogs. The
+dirty Save/Discard/Cancel prompt also guards navigation between pages.
+
+**Dashboard** aggregates the whole local history on the device: totals,
+completed and failed records, recognized words, total audio duration, average
+speed, retained audio copies, activity over the last 7 and 30 days, and the most
+used languages, engines and models. It streams every stored record instead of
+the rows the History view shows, performs no network call, and counts records
+whose payload cannot be read as invalid — those point at
+`voice-studio storage audit` instead of breaking the page.
+
+**History** combines the text, date, language, engine, model, status and
+retained-audio filters and applies them across the whole store before the
+250-record display limit, so a match outside the newest records is still listed.
+
+**Dictionary** manages the deterministic replacement rules. The managed
+dictionary is stored locally beside the other application data and can be
+imported or exported as JSON or CSV. In the Local Whisper profile the terms of
+the rules marked as hints are additionally passed to recognition as bounded
+per-request hotwords; they are never written into settings, transcripts,
+metadata, diagnostics or logs.
+
+## Studio editor tools
+
+The editor toolbar adds four tools next to the formatting buttons:
+
+- **Find and replace** — literal Unicode search with a match count and
+  highlighting, replace from the cursor with wrap, and replace all.
+- **Add to dictionary** — turns the selection into a managed dictionary rule and
+  applies it to the open editor only. It is refused while an external read-only
+  dictionary is loaded or the Dictionary page has unsaved changes.
+- **Filler words** — a preview with one checkbox and context per match; only the
+  checked matches are removed. The list follows the recording language and falls
+  back to the recognition language in Settings when that is `auto`.
+- **Confidence score** — a panel listing the segments below a threshold
+  (0.60 by default, page state only, never written to settings or disk), lowest
+  score first, with **no score** for segments the engine reported without one.
+  The value is the engine's own confidence signal for that segment; it is not an
+  error probability and not an accuracy claim.
+
+These tools change only the text in the open editor. Nothing reaches storage
+before **Save edits**, and `raw_text` stays immutable.
+
+The playback bar under the editor plays **only the retained managed audio
+copy**: play/pause, stop, ±5 s and 0.75–2× speed. The external original file is
+never looked up or opened, and a record without a retained copy simply reports
+that. Speed is implemented by resampling, so a faster pace also raises the
+pitch. The confidence panel can start playback at a segment's start. Playback
+stops when the page or the record changes, on restore and on close.
+
+These usability features have source/headless test evidence on Linux; playback
+through a real audio device and Windows/macOS packaged acceptance remain
+**NOT RUN**.
+
 ## Optional OpenAI features
 
 Cloud use is opt-in, never a fallback. Configure a key in an environment

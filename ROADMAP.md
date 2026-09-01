@@ -82,6 +82,21 @@ R1/R2 capabilities are not part of the current completion scope.
    - стан: реалізовано й перевірено source/headless; повний split/retime editor
      та word timestamps лишаються поза R0.
 
+11. **Робочий простір і локальні інструменти редактора (usability pack)**
+   - центральна навігація Огляд/Студія/Словник/Історія з dirty-guard;
+   - керований словник термінів і per-request hotwords для локального Whisper;
+   - статистика Огляду по всій історії та комбіновані фільтри Історії до ліміту;
+   - пошук/заміна, додавання виділення до словника, чистка слів-паразитів;
+   - панель впевненості: поріг лише як стан сторінки, без заяв про точність;
+   - локальне відтворення лише збереженої керованої копії аудіо;
+   - стан: реалізовано й перевірено source/headless на Linux
+     (`1135 passed`, 14 junction skips, 2026-09-01); packaged/native acceptance,
+     фізичний Tk smoke і відтворення на реальному аудіопристрої — NOT RUN.
+
+Наступні кроки P0: native/packaged acceptance на Windows 10/11 x64 і macOS
+Apple Silicon (пункти 1 і 4), release assets `models-v1` через
+`scripts/build_model_release.py`, далі signing/notarization.
+
 ## P1
 
 - speaker diarization;

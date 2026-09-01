@@ -4,7 +4,10 @@
 
 | Položka | Účel |
 |---|---|
-| **Studio** | Nahrávání, přepis, editor a historie. |
+| **Přehled** | Místní statistika celé historie a poslední záznamy. |
+| **Studio** | Nahrávání, přepis a editor. |
+| **Slovník** | Spravovaný terminologický slovník s importem/exportem. |
+| **Historie** | Hledání a kombinované filtry záznamů; otevře záznam ve Studiu. |
 | **Modely** | Správa pouze modelů Faster Whisper. |
 | **Záloha** | Vytvoření, ověření a obnovení zálohy. |
 | **Nastavení** | Profily, jazyky, Ollama, Whisper a OpenAI. |

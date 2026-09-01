@@ -44,6 +44,13 @@ in the supported flow.
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
 | Integrated packaging/dependency gate | PASS | `python -m build --wheel`, `python -m pip check`, `python -m pip_audit` (no known vulnerabilities) |
 | Deep audit and fix round (2026-09-01) | PASS source/headless | four-lens full-repository correctness audit; all confirmed findings fixed with failing-first regression tests (GUI busy/polling, atomic temp writes, v1 restore promotion recovery, storage cleanup/reference/segment-raw gates, cross-process catalog lock, cleanup-submission outcome, HTTPS registry, cloud extension contract); Linux gate `875 passed`, 14 Windows-junction skips; evidence in `VERIFICATION.md` |
+| Usability 1 central navigation (2026-09-01) | PASS source/headless | Dashboard, Studio, Dictionary and History pages behind one dispatcher; every navigation and the History → Studio hand-off pass through the dirty Save/Discard/Cancel guard; uk/cs/en key parity; gate `886 passed` with 9 Windows symlink-privilege skips |
+| Usability 2 managed terminology dictionary (2026-09-01) | PASS source/headless | Dictionary page over a managed local dictionary file with atomic saves, merge accounting, bounded JSON/CSV import/export, read-only handling of an external dictionary and Settings reconciliation; gate `940 passed` with 9 Windows symlink-privilege skips |
+| Usability 3 Local Whisper recognition hints (2026-09-01) | PASS source/headless | immutable per-request `TranscriptionHints` (≤256 terms, ≤8192 UTF-8 bytes) built in the parent from the already validated active dictionary; only faster-whisper receives them as `hotwords`, the worker rejects `dictionary_path`, terms stay out of settings, transcripts, metadata, diagnostics, logs and worker error detail, and the model cache key is unchanged; gate `954 passed` with 9 Windows symlink-privilege skips |
+| Usability 4 Dashboard statistics and History filters (2026-09-01) | PASS source/headless | `dashboard.py` immutable `DashboardStatistics`/`HistoryFilter`; `LocalStore.statistics()` streams every row without the 250-row UI limit and without migration, counting unreadable payloads as invalid instead of raising; combined text/date/language/engine/model/status/retained-audio filters apply before `limit` while the legacy path stays byte-for-byte; Tk KPI grid, top-3 rankings and refresh without polling; gate `993 passed` with 14 Linux junction skips, wheel and `pip check` PASS; Xvfb source GUI smoke only |
+| Usability 5 Studio editor tools (2026-09-01) | PASS source/headless | `editor_tools.py` literal Unicode `find_matches`/`apply_replacements` with validated spans, `segment_spans` alignment and whole-word filler matching; toolbar Find/Replace with match count and highlight, add-selection-to-dictionary through the managed save path (editor text only, never storage), and a per-match filler preview; all three edit only the open editor until Save and `raw_text` stays immutable; gate `1055 passed` with 14 Linux junction skips |
+| Usability 6 confidence review panel (2026-09-01) | PASS source/headless | `confidence_entries()` sorts scored segments lowest-first below a validated 0.00–1.00 threshold and lists unusable scores after them as **no score**, never as 0.0; the panel threshold defaults to 0.60, is page state only and is never written to settings or disk (pinned by a test); wording presents the engine's own confidence signal with no error-probability or accuracy claim; gate `1089 passed` with 14 Linux junction skips |
+| Usability 7 local audio playback (2026-09-01) | PASS source/headless | `playback.py` on the existing PyAV + sounddevice dependencies with injected decode/device seams, bounded ~100 ms PCM chunks, one daemon worker with generation-guarded play/pause/stop/seek/speed, device abort to unblock a blocked write and a 2 s join budget; speed is resampling only, so pitch shifts; playback resolves ONLY the retained managed copy and never looks up an external original (pinned by tests), starts at a segment from the confidence panel, and stops on page/transcript switch, restore and close; gate `1135 passed` with 14 Linux junction skips, wheel and `pip check` PASS; real audio device NOT RUN |
 
 ## Known release limits
 
@@ -72,6 +79,11 @@ in the supported flow.
 - W2-C3 audit/repair was not exercised against physical removable media,
   antivirus races or a packaged executable; Windows junction/reparse tests ran,
   while eight symlink cases were privilege-skipped in this environment.
+- Local playback plays only the retained managed audio copy; a record without
+  one cannot be played, and the 0.75–2× speed is implemented by resampling, so
+  a changed pace also shifts the pitch. Playback was exercised through fake and
+  Xvfb source seams only; no real audio device was available in the
+  verification environment.
 
 These remain `IMPLEMENTED_PENDING_NATIVE_ACCEPTANCE`, never production PASS.
 
@@ -94,6 +106,12 @@ Windows/macOS Test RC build or acceptance run was performed for this
 increment. Clean-machine acceptance, signing, real microphone/hotkey coverage
 and production speech-quality measurements remain open exactly as listed in
 `VERIFICATION.md`.
+
+The 2026-09-01 usability pack (increments 1-7) was verified on Linux/CPython
+3.12 source/headless only; its final controller gate recorded `1135 passed` with
+14 Linux junction skips. Packaged and native usability acceptance, physical Tk
+smoke and playback on a real audio device were **NOT RUN**; the per-increment
+evidence is in `docs/verification/2026-09-01-usability-pack.md`.
 
 ## Release rule
 
