@@ -358,12 +358,26 @@ def test_play_routes_the_selected_segment_to_the_playback_hook() -> None:
     assert requested == [1]
 
 
-def test_the_playback_hook_reports_that_playback_is_not_available_yet() -> None:
+def test_the_playback_hook_starts_playback_at_the_segment_start() -> None:
     app = _mixed_app()
+    app.current.segments[2].start = 17.5
+    started: list[float] = []
+    app._start_playback = started.append
 
     app._segment_play_requested(2)
 
-    assert app.status.get() == translate("en", "editor_confidence_play_unavailable")
+    assert started == [17.5]
+
+
+def test_the_playback_hook_refuses_without_a_transcript() -> None:
+    app = _confidence_app()
+    started: list[float] = []
+    app._start_playback = started.append
+
+    app._segment_play_requested(0)
+
+    assert started == []
+    assert app.status.get() == translate("en", "playback_no_safe_audio")
 
 
 # --- panel lifecycle --------------------------------------------------------

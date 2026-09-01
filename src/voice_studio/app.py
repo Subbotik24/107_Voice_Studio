@@ -67,6 +67,7 @@ from .models import (
     Settings,
     Transcript,
 )
+from .playback import SUPPORTED_SPEEDS, AudioPlayer
 from .profiles import (
     apply_profile,
     discover_ollama_audio_models,
@@ -232,6 +233,9 @@ class VoiceStudioApp(tk.Tk):
         self.store = LocalStore(data_dir())
         self.job_controller = TranscriptionJobController(self.store, cache_dir())
         self.recorder = AudioRecorder()
+        self.player = AudioPlayer()
+        self._playback_ticker: str | None = None
+        self._playback_error_reported: str | None = None
         self.hotkey: GlobalHotkey | None = None
         self.current: Transcript | None = None
         self._editor_baseline = snapshot_editor("", {})
@@ -932,6 +936,44 @@ class VoiceStudioApp(tk.Tk):
         self.editor.bind("<Return>", self._insert_editor_newline)
         self.editor.bind("<Control-Return>", self._insert_editor_newline)
 
+        self.playback_bar = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
+        self.playback_bar.pack(fill="x")
+        self.playback_toggle_button = ttk.Button(
+            self.playback_bar,
+            text=self._t("playback_play"),
+            command=self._toggle_playback,
+        )
+        self.playback_toggle_button.pack(side="left")
+        self._playback_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("playback_stop", self._stop_playback),
+            ("playback_back_5", lambda: self._seek_playback(-5.0)),
+            ("playback_forward_5", lambda: self._seek_playback(5.0)),
+        ):
+            button = ttk.Button(self.playback_bar, text=self._t(key), command=command)
+            button.pack(side="left", padx=(5, 0))
+            self._playback_button_keys[button] = key
+        self.playback_speed_label = ttk.Label(
+            self.playback_bar, text=self._t("playback_speed"), style="CardMuted.TLabel"
+        )
+        self.playback_speed_label.pack(side="left", padx=(12, 4))
+        self.playback_speed_var = tk.StringVar(value="1×")
+        speed_combo = ttk.Combobox(
+            self.playback_bar,
+            textvariable=self.playback_speed_var,
+            values=[f"{speed:g}×" for speed in SUPPORTED_SPEEDS],
+            state="readonly",
+            width=6,
+        )
+        speed_combo.pack(side="left")
+        speed_combo.bind("<<ComboboxSelected>>", self._set_playback_speed)
+        self.playback_position_var = tk.StringVar(value="0:00 / —")
+        ttk.Label(
+            self.playback_bar,
+            textvariable=self.playback_position_var,
+            style="CardMuted.TLabel",
+        ).pack(side="right")
+
         self.find_panel = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
         self.find_panel_visible = False
         self.find_panel.grid_columnconfigure(1, weight=1)
@@ -1433,6 +1475,8 @@ class VoiceStudioApp(tk.Tk):
         if page == "dictionary" and self._current_page != "dictionary":
             if not self._reload_dictionary():
                 return False
+        if self._current_page == "studio" and page != "studio":
+            self._stop_playback()
         for page_id, frame in self._page_frames.items():
             if page_id == page:
                 frame.grid()
@@ -2118,6 +2162,7 @@ class VoiceStudioApp(tk.Tk):
         self._refresh_dictionary_ui_text()
         self._refresh_editor_tools_ui_text()
         self._refresh_confidence_ui_text()
+        self._refresh_playback_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -2894,6 +2939,8 @@ class VoiceStudioApp(tk.Tk):
     def _show_result(
         self, transcript: Transcript, *, copy: bool = False, refresh: bool = True
     ) -> None:
+        if self.current is None or self.current.id != transcript.id:
+            self._stop_playback()
         self.current = transcript
         self.editor.delete("1.0", "end")
         self.editor.insert("1.0", transcript.corrected_text)
@@ -3282,10 +3329,177 @@ class VoiceStudioApp(tk.Tk):
         self._segment_play_requested(entry.index)
 
     def _segment_play_requested(self, segment_index: int) -> None:
-        """Hook for the local segment playback that a later increment adds."""
+        """Play the retained managed audio from the segment's own start."""
 
-        del segment_index
-        self.status.set(self._t("editor_confidence_play_unavailable"))
+        transcript = self.current
+        if transcript is None or not 0 <= segment_index < len(transcript.segments):
+            self.status.set(self._t("playback_no_safe_audio"))
+            return
+        start = float(transcript.segments[segment_index].start)
+        self._start_playback(max(0.0, start))
+
+    def _playable_source_path(self) -> Path | None:
+        """Resolve the retained managed copy; external originals are never used."""
+
+        transcript = self.current
+        if transcript is None or not transcript.audio_retained or not transcript.source_path:
+            return None
+        try:
+            target = Path(transcript.source_path).expanduser().resolve()
+            target.relative_to(self.store.sources.resolve())
+        except (OSError, ValueError):
+            return None
+        return target if target.is_file() else None
+
+    def _selected_playback_speed(self) -> float:
+        if "playback_speed_var" not in self.__dict__:
+            return 1.0
+        value = self.playback_speed_var.get().strip().rstrip("×xX")
+        try:
+            speed = float(value.replace(",", "."))
+        except ValueError:
+            return 1.0
+        return speed if speed in SUPPORTED_SPEEDS else 1.0
+
+    def _start_playback(self, start: float) -> None:
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        media = self._playable_source_path()
+        if media is None:
+            self.status.set(self._t("playback_no_safe_audio"))
+            return
+        self._playback_error_reported = None
+        try:
+            player.play(media, start=start, speed=self._selected_playback_speed())
+        except (RuntimeError, ValueError) as exc:
+            self.status.set(self._t("playback_error", error=exc))
+            return
+        self._sync_playback_toggle()
+        self._arm_playback_ticker()
+
+    def _toggle_playback(self) -> None:
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        if player.state == "idle":
+            self._start_playback(0.0)
+            return
+        player.toggle_pause()
+        self._sync_playback_toggle()
+
+    def _stop_playback(self) -> None:
+        self._cancel_playback_ticker()
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        stopped = False
+        try:
+            stopped = bool(player.stop())
+        except Exception:
+            stopped = False
+        if not stopped:
+            try:
+                self.status.set(self._t("playback_stop_timeout"))
+            except Exception:
+                pass
+        self._refresh_playback_label()
+        self._sync_playback_toggle()
+
+    def _seek_playback(self, delta: float) -> None:
+        player = self.__dict__.get("player")
+        if player is None or player.state == "idle":
+            return
+        try:
+            player.seek_by(float(delta))
+        except (RuntimeError, ValueError) as exc:
+            self.status.set(self._t("playback_error", error=exc))
+            return
+        self._refresh_playback_label()
+
+    def _set_playback_speed(self, _event: Any = None) -> None:
+        player = self.__dict__.get("player")
+        if player is None or player.state == "idle":
+            return
+        try:
+            player.set_speed(self._selected_playback_speed())
+        except (RuntimeError, ValueError) as exc:
+            self.status.set(self._t("playback_error", error=exc))
+
+    def _arm_playback_ticker(self) -> None:
+        self._cancel_playback_ticker()
+        self._playback_ticker = self.after(250, self._playback_tick)
+
+    def _cancel_playback_ticker(self) -> None:
+        ticker = self.__dict__.get("_playback_ticker")
+        self._playback_ticker = None
+        if ticker is not None:
+            try:
+                self.after_cancel(ticker)
+            except Exception:
+                pass
+
+    def _playback_tick(self) -> None:
+        self._playback_ticker = None
+        self._refresh_playback_label()
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        if player.state == "idle":
+            self._sync_playback_toggle()
+            error = player.last_error
+            if error and error != self._playback_error_reported:
+                self._playback_error_reported = error
+                self.status.set(self._t("playback_error", error=error))
+            return
+        self._playback_ticker = self.after(250, self._playback_tick)
+
+    @staticmethod
+    def _format_playback_seconds(value: float) -> str:
+        total = max(0, int(value))
+        return f"{total // 60}:{total % 60:02d}"
+
+    def _refresh_playback_label(self) -> None:
+        if "playback_position_var" not in self.__dict__:
+            return
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        duration = player.duration
+        rendered = "—" if duration is None else self._format_playback_seconds(duration)
+        self.playback_position_var.set(
+            f"{self._format_playback_seconds(player.position)} / {rendered}"
+        )
+
+    def _sync_playback_toggle(self) -> None:
+        if "playback_toggle_button" not in self.__dict__:
+            return
+        player = self.__dict__.get("player")
+        key = "playback_pause" if player is not None and player.state == "playing" else (
+            "playback_play"
+        )
+        self.playback_toggle_button.configure(text=self._t(key))
+
+    def _shutdown_playback(self, residues: set[str]) -> None:
+        """Stop the playback worker at exit; record it when it will not join."""
+
+        self._cancel_playback_ticker()
+        player = self.__dict__.get("player")
+        if player is None:
+            return
+        stopped = False
+        try:
+            stopped = bool(player.stop())
+        except Exception:
+            stopped = False
+        if not stopped:
+            residues.add("playback-worker")
+
+    def _refresh_playback_ui_text(self) -> None:
+        for button, key in self._playback_button_keys.items():
+            button.configure(text=self._t(key))
+        self.playback_speed_label.configure(text=self._t("playback_speed"))
+        self._sync_playback_toggle()
 
     def _copy_to_clipboard(self, text: str) -> None:
         self.clipboard_clear()
@@ -4735,6 +4949,7 @@ class VoiceStudioApp(tk.Tk):
         self.job_controller = TranscriptionJobController(self.store, cache_dir())
 
     def _reload_after_restore(self) -> None:
+        self._stop_playback()
         self._restart_runtime()
         self.settings = load_settings()
         self._clear_current_transcript_view()
@@ -4767,6 +4982,7 @@ class VoiceStudioApp(tk.Tk):
         residues: set[str] = set()
         writer_timeout_path: Path | None = None
         try:
+            self._shutdown_playback(residues)
             hotkey = self.__dict__.get("hotkey")
             hotkey_stopped = True
             if hotkey is not None:

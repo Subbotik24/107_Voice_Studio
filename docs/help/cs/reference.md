@@ -80,8 +80,17 @@ Práh začíná na 0.60 a lze jej nastavit mezi 0.00 a 1.00. Patří jen otevře
 stránce: nikdy se nezapisuje do nastavení ani na disk, takže další relace opět
 začíná na 0.60. Výběr řádku zvýrazní odpovídající segment v editoru a přesune
 tam kurzor; pokud je text segmentu už přepsaný k nepoznání, panel to oznámí
-místo skoku. „Přehrát segment“ je zástupné místo pro místní přehrávání v příští
-verzi a zatím hlásí, že přehrávání ještě není k dispozici.
+místo skoku. „Přehrát segment“ spustí místní přehrávání uloženého zvuku od
+začátku daného segmentu.
+
+### Místní přehrávání
+
+Panel přehrávání pod editorem přehrává uloženou spravovanou kopii zvuku:
+přehrát/pauza, stop, posun o ±5 sekund a rychlost 0.75–2×. Rychlost je řešená
+převzorkováním, vyšší tempo tedy zvyšuje i výšku hlasu. Přehrává se pouze
+spravovaná kopie v úložišti aplikace; externí originální soubor se nikdy
+nevyhledává ani neotevírá. Pokud zvuk záznamu není uložen, panel to oznámí.
+Přepnutí stránky nebo záznamu i obnovení ze zálohy přehrávání zastaví.
 
 ## Formáty a soukromí
 

@@ -82,8 +82,16 @@ the open page only: it is never written to settings or to disk, so the next
 session starts at 0.60 again. Selecting a row highlights the matching segment in
 the editor and moves the cursor there; when the segment text has already been
 edited beyond recognition, the panel says so instead of jumping. **Play segment**
-is a placeholder for the local segment playback of a later version and currently
-reports that playback is not available yet.
+starts local playback of the retained audio from that segment's start.
+
+### Local playback
+
+The playback bar under the editor plays the retained managed audio copy:
+play/pause, stop, ±5-second seeking and 0.75–2× speed. Speed is implemented by
+resampling, so a faster pace also raises the pitch. Only the managed copy in
+the application's storage is played; the external original file is never
+looked up or opened. When a record has no retained audio, the bar says so.
+Switching the page or the record, and restoring from a backup, stop playback.
 
 ## Formats and limits
 
