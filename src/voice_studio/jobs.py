@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .dictionary import TerminologyDictionary
+from .engines.base import TranscriptionHints
 from .media import MAX_SOURCE_BYTES
 from .models import Settings, Transcript
 from .operation import JobCancelled, OperationBudget
@@ -35,8 +36,13 @@ def _engine_worker(
         if request is None:
             return
         job_id = request["job_id"]
+        using_recognition_hints = False
+        is_inference = request.get("action") != "cleanup"
         try:
-            settings = Settings.from_dict(request["settings"])
+            worker_settings = request["settings"]
+            if isinstance(worker_settings, dict) and "dictionary_path" in worker_settings:
+                raise ValueError("worker settings must not include dictionary_path")
+            settings = Settings.from_dict(worker_settings)
             if request.get("action") == "cleanup":
                 from .cloud_cleanup import propose_cleanup
 
@@ -56,15 +62,29 @@ def _engine_worker(
                     }
                 )
                 continue
+            hint_terms = request.get("hints", ())
+            if not isinstance(hint_terms, (list, tuple)):
+                raise ValueError("worker transcription hints must be a term list")
+            hints = TranscriptionHints(tuple(hint_terms))
+            using_recognition_hints = bool(hints.terms)
             engine = manager.get(settings)
-            result = engine.transcribe(Path(request["source"]), request["language"])
+            result = engine.transcribe(
+                Path(request["source"]), request["language"], hints=hints
+            )
             results.put({"job_id": job_id, "ok": True, "result": result})
         except BaseException as exc:
+            if is_inference and using_recognition_hints:
+                error = (
+                    f"{type(exc).__name__}: transcription engine failed while using "
+                    "recognition hints"
+                )
+            else:
+                error = f"{type(exc).__name__}: {exc}"
             results.put(
                 {
                     "job_id": job_id,
                     "ok": False,
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": error,
                 }
             )
 
@@ -339,6 +359,9 @@ class TranscriptionJobController:
             lambda: self._epoch_cancelled(epoch, cancelled),
         )
         service = TranscriptionService(self.store, engine=None, dictionary=dictionary)
+        hints = TranscriptionHints(tuple(dictionary.hint_terms()))
+        worker_settings = settings.to_dict()
+        worker_settings.pop("dictionary_path", None)
         started = time.monotonic()
 
         def report(phase: str) -> None:
@@ -367,9 +390,10 @@ class TranscriptionJobController:
                 generation,
                 {
                     "job_id": job_id,
-                    "settings": settings.to_dict(),
+                    "settings": worker_settings,
                     "source": str(prepared.managed),
                     "language": settings.language,
+                    "hints": list(hints.terms),
                 }
             )
             report("transcribing")
@@ -393,7 +417,7 @@ class TranscriptionJobController:
                         {
                             "action": "cleanup",
                             "job_id": cleanup_job_id,
-                            "settings": settings.to_dict(),
+                            "settings": worker_settings,
                             "transcript": transcript.to_dict(),
                         }
                     )

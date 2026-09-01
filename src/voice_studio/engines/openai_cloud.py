@@ -12,7 +12,7 @@ from typing import Any
 
 from ..cloud_secrets import get_openai_api_key
 from ..models import Segment
-from .base import EngineResult
+from .base import EngineResult, TranscriptionHints
 
 MAX_CLOUD_AUDIO_BYTES = 25 * 1024 * 1024
 SUPPORTED_OPENAI_MEDIA_EXTENSIONS = {".mp3", ".mp4", ".m4a", ".wav", ".webm"}
@@ -75,7 +75,13 @@ class OpenAICloudEngine:
                 "Use a local engine; VOICE Studio will not split or compress audio silently."
             )
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(
+        self,
+        source: Path,
+        language: str | None,
+        *,
+        hints: TranscriptionHints | None = None,
+    ) -> EngineResult:
         self.validate_upload(source)
         started = time.perf_counter()
         request: dict[str, Any] = {"model": self.model_name}

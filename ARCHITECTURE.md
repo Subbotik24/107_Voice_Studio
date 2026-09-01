@@ -43,7 +43,12 @@ UI та storage не залежать від внутрішньої архіте
 Вхід:
 
 ```python
-transcribe(source: Path, language: str | None) -> EngineResult
+transcribe(
+    source: Path,
+    language: str | None,
+    *,
+    hints: TranscriptionHints | None = None,
+) -> EngineResult
 ```
 
 Вихід містить:
@@ -59,6 +64,16 @@ transcribe(source: Path, language: str | None) -> EngineResult
 STT-результату. Вони застосовуються лише до `corrected_text`; `raw_text`
 залишається незмінним навіть у разі помилки або скасування cleanup. OpenAI AI
 cleanup доступний лише як explicit cloud action.
+
+`TranscriptionHints` — immutable per-request contract для локального Whisper:
+tuple реальних рядків, максимум 256 термінів і максимум 8192 UTF-8 bytes для
+`", ".join(terms)`. Parent формує hints тільки з already validated active
+dictionary та передає worker-у bounded term list; worker reconstructs and
+validates it без читання `dictionary_path`. Terms не потрапляють у Settings,
+transcripts, metadata, diagnostics, logs, progress, cleanup requests або IPC
+error detail. Лише faster-whisper передає non-empty terms як `hotwords`; Ollama
+та OpenAI приймають і ігнорують keyword-only argument. Hints — параметр
+inference call, тому не змінюють model cache key або cached model reload.
 
 Ollama audio adapter працює тільки зі стандартним loopback runtime, попередньо
 перевіряє capability `audio` і не має прихованого fallback. Оскільки Ollama не

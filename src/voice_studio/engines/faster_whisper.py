@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..models import Segment, validate_hardware_options
-from .base import EngineResult
+from .base import EngineResult, TranscriptionHints
 
 
 class FasterWhisperEngine:
@@ -99,18 +99,29 @@ class FasterWhisperEngine:
         except (TypeError, ValueError, OverflowError):
             return None
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(
+        self,
+        source: Path,
+        language: str | None,
+        *,
+        hints: TranscriptionHints | None = None,
+    ) -> EngineResult:
         was_loaded = self._model is not None
         load_started = time.perf_counter()
         model = self._load()
         model_load_seconds = 0.0 if was_loaded else time.perf_counter() - load_started
         started = time.perf_counter()
+        request = {
+            "language": None if language in {None, "auto"} else language,
+            "vad_filter": self.vad_filter,
+            "beam_size": 5,
+            "word_timestamps": False,
+        }
+        if hints is not None and hints.terms:
+            request["hotwords"] = ", ".join(hints.terms)
         parts, info = model.transcribe(
             str(source),
-            language=None if language in {None, "auto"} else language,
-            vad_filter=self.vad_filter,
-            beam_size=5,
-            word_timestamps=False,
+            **request,
         )
         segments: list[Segment] = []
         for part in parts:

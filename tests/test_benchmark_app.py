@@ -8,7 +8,7 @@ from voice_studio.models import Segment, Settings
 
 
 class FakeEngine:
-    def transcribe(self, _source, language):
+    def transcribe(self, _source, language, *, hints=None):
         return EngineResult(
             engine="fixture",
             model="fixture",

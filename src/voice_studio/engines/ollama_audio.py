@@ -8,7 +8,7 @@ from typing import Any
 
 from ..models import Segment
 from ..ollama_local import OllamaClient
-from .base import EngineResult
+from .base import EngineResult, TranscriptionHints
 
 OLLAMA_AUDIO_RATE = 16_000
 MAX_OLLAMA_AUDIO_SECONDS = 30 * 60
@@ -108,7 +108,13 @@ class OllamaAudioEngine:
         self._client = client or OllamaClient()
         self._converter = converter
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(
+        self,
+        source: Path,
+        language: str | None,
+        *,
+        hints: TranscriptionHints | None = None,
+    ) -> EngineResult:
         started = time.perf_counter()
         details = self._client.show_model(self.model_name)
         capabilities = details.get("capabilities")

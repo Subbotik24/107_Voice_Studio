@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .dictionary import TerminologyDictionary
-from .engines.base import EngineResult, SpeechEngine
+from .engines.base import EngineResult, SpeechEngine, TranscriptionHints
 from .media import PROBE_TIMEOUT_SECONDS, validate_media_file
 from .models import Segment, Transcript, utc_now
 from .operation import OperationBudget
@@ -144,7 +144,8 @@ class TranscriptionService:
         try:
             if budget is not None:
                 budget.checkpoint("inference")
-            result = self.engine.transcribe(prepared.managed, language)
+            hints = TranscriptionHints(tuple(self.dictionary.hint_terms()))
+            result = self.engine.transcribe(prepared.managed, language, hints=hints)
             return self.finalize(prepared, result, language, retention, budget=budget)
         except BaseException:
             self.cleanup(prepared)

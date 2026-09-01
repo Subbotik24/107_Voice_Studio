@@ -8,6 +8,23 @@ from ..models import Segment
 
 
 @dataclass(frozen=True)
+class TranscriptionHints:
+    """Bounded, per-request recognition hints for local Whisper."""
+
+    terms: tuple[str, ...] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.terms, tuple):
+            raise ValueError("transcription hints must be a tuple of strings")
+        if any(type(term) is not str for term in self.terms):
+            raise ValueError("transcription hints must contain only strings")
+        if len(self.terms) > 256:
+            raise ValueError("transcription hints exceed the maximum of 256 terms")
+        if len(", ".join(self.terms).encode("utf-8")) > 8192:
+            raise ValueError("transcription hints exceed the maximum payload size of 8192 bytes")
+
+
+@dataclass(frozen=True)
 class EngineResult:
     engine: str
     model: str
@@ -33,4 +50,10 @@ class SpeechEngine(Protocol):
     name: str
     model_name: str
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult: ...
+    def transcribe(
+        self,
+        source: Path,
+        language: str | None,
+        *,
+        hints: TranscriptionHints | None = None,
+    ) -> EngineResult: ...

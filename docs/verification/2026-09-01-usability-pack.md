@@ -42,3 +42,13 @@ full gate, diff/secret checks, commit/push, and any explicit `NOT_RUN` items.
 - Final controller gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 940 / 9 Windows symlink-privilege skips.
 - `pip check`, `git diff --check`, and changed-diff secret/private-path scan: PASS.
 - Live Tk visual, physical GUI, and packaged/native acceptance: NOT RUN.
+
+### Increment 3 — Local Whisper recognition hints
+
+- Base: `00fb4b4`; implementation kept hints per-request and did not change transcript, Settings, backup, or model-cache schemas.
+- RED: missing `TranscriptionHints`/worker serialization produced 2 failures; privacy review regressions produced 2 failures for dictionary-path boundary and echoed hint values; provider omission hardening was test-only.
+- Focused GREEN: 14 hint-contract tests; related engine/service/job/cloud selection 106 passed.
+- Sol review: worker error redaction, worker rejection of `dictionary_path`, sanitized cleanup settings, exact provider omission, constructor reuse, invalid payload bounds, Architecture signature, and benchmark fake were corrected; final verdict CLEAN.
+- Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 954 / 9 Windows symlink-privilege skips.
+- `pip check`, `git diff --check`, and changed-diff secret/private-path scan: PASS.
+- Live engine/model smoke, physical GUI, and packaged/native acceptance: NOT RUN.

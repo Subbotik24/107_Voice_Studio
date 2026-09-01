@@ -1,4 +1,4 @@
-from .base import EngineResult, SpeechEngine
+from .base import EngineResult, SpeechEngine, TranscriptionHints
 
 __all__ = [
     "EngineManager",
@@ -6,6 +6,7 @@ __all__ = [
     "FasterWhisperEngine",
     "OllamaAudioEngine",
     "SpeechEngine",
+    "TranscriptionHints",
 ]
 
 

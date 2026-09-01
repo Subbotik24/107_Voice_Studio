@@ -13,7 +13,7 @@ class FakeEngine:
     name = "fake"
     model_name = "fake-v1"
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(self, source: Path, language: str | None, *, hints=None) -> EngineResult:
         assert source.exists()
         return EngineResult(
             engine=self.name,
@@ -58,7 +58,7 @@ class FailingEngine:
     name = "failing"
     model_name = "failing-v1"
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(self, source: Path, language: str | None, *, hints=None) -> EngineResult:
         raise RuntimeError("synthetic failure")
 
 
@@ -80,7 +80,7 @@ class InterruptedEngine:
     name = "interrupted"
     model_name = "interrupted-v1"
 
-    def transcribe(self, source: Path, language: str | None) -> EngineResult:
+    def transcribe(self, source: Path, language: str | None, *, hints=None) -> EngineResult:
         raise KeyboardInterrupt
 
 
@@ -126,9 +126,9 @@ def test_cancel_during_prepare_does_not_start_engine_request(tmp_path, make_wav)
     requests = []
 
     class RecordingEngine(FakeEngine):
-        def transcribe(self, source: Path, language: str | None) -> EngineResult:
+        def transcribe(self, source: Path, language: str | None, *, hints=None) -> EngineResult:
             requests.append(source)
-            return super().transcribe(source, language)
+            return super().transcribe(source, language, hints=hints)
 
     budget = OperationBudget(10.0, cancelled=lambda: True)
     with pytest.raises(JobCancelled, match="prepare|import"):
