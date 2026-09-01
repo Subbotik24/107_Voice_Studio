@@ -52,6 +52,21 @@ jsou `--vad` a `--no-vad`. Profily Ollama a OpenAI toto nastavení ignorují.
 | **Obnovit** | Na pozadí znovu zkontroluje modely Ollama. |
 | **OpenAI key** | OS keychain; není v settings.json. |
 
+## Nástroje editoru ve Studiu
+
+| Tlačítko | Akce |
+|---|---|
+| **B**, **I** | Tučné a kurzíva pro vybraný text. |
+| **Hledat a nahradit** | Otevře panel pod editorem: hledání s ohledem na velikost písmen a celá slova, počet shod, „Nahradit“ a „Nahradit vše“. |
+| **Přidat do slovníku** | Z vybraného textu vytvoří pravidlo a uloží spravovaný slovník. |
+| **Výplňková slova** | Ukáže každou nalezenou shodu v kontextu; odstraní se jen zaškrtnuté. |
+
+Všechny tři nástroje mění pouze text v editoru. Do úložiště se změny dostanou
+až po „Uložit úpravy“; `raw_text` zůstává beze změny. „Přidat do slovníku“ je
+nedostupné, když je otevřený externí slovník jen ke čtení nebo když má stránka
+„Slovník“ neuložené změny. Výplňková slova se berou ze seznamu pro jazyk
+záznamu, a je-li `auto`, z jazyka rozpoznávání v nastavení.
+
 ## Formáty a soukromí
 
 Podporované vstupy: WAV, MP3, M4A, FLAC, OGG, OPUS, AAC, MP4, MOV, MKV,

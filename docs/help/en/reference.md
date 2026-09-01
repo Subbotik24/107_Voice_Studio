@@ -52,6 +52,21 @@ and `--no-vad`. The Ollama and OpenAI profiles ignore this setting.
 | **Refresh** | Rechecks local Ollama models in the background. |
 | **OpenAI key** | Stored in the OS keychain, not settings.json. |
 
+## Studio editor tools
+
+| Button | Action |
+|---|---|
+| **B**, **I** | Bold and italic for the selected text. |
+| **Find and replace** | Opens a panel under the editor: match case, whole word, a match count, **Replace** and **Replace all**. |
+| **Add to dictionary** | Turns the selection into a rule and saves the managed dictionary. |
+| **Filler words** | Shows every match with its context; only the checked ones are removed. |
+
+All three tools change only the text in the editor. Nothing reaches storage
+until **Save edits**, and `raw_text` stays unchanged. **Add to dictionary** is
+refused while an external read-only dictionary is open or while the Dictionary
+page has unsaved changes. Filler words come from the list for the recording
+language, or, when that is `auto`, from the recognition language in Settings.
+
 ## Formats and limits
 
 Input: WAV, MP3, M4A, FLAC, OGG, OPUS, AAC, MP4, MOV, MKV, WEBM; up to 2 GiB

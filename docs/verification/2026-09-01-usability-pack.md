@@ -63,3 +63,13 @@ full gate, diff/secret checks, commit/push, and any explicit `NOT_RUN` items.
 - `git diff --check` and changed-diff secret/private-path scan: PASS.
 - Help/docs synchronization for the new Dashboard and History behavior: deferred to Task 8 of the approved master plan.
 - Physical Tk smoke and Windows/macOS packaged/native acceptance: NOT RUN.
+
+### Increment 5 — Studio editor tools
+
+- Base: `2e2a13e`; slices 5A and 5B verified and committed together under one controller gate in the same Linux/CPython 3.12.3 environment as Increment 4.
+- 5A pure module: new `voice_studio/editor_tools.py` with `find_matches` (literal Unicode search via re.escape + IGNORECASE so offsets always index the original string), `apply_replacements` (slice-built, backreference-proof, validated spans), `segment_spans`/`segment_index_for_offset` (sequential alignment mirroring `sync_segments`), `DEFAULT_FILLERS` (uk: ем, е-е, мм; cs: ehm, hm; en: um, uh, erm, hmm — «ну», "like", "you know" deliberately absent), `find_filler_matches` (whole-word, longest-first alternation, trailing comma in span) and `remove_matches` with local whitespace tidying. No undo here: the bounded manual-edit undo in `storage.update_editor_state` covers editor saves. 33 focused tests.
+- 5B interface: editor toolbar gained Find/Replace (collapsible panel, match count, highlight tag, replace-one from cursor with wrap, replace-all via reverse targeted delete/insert so formatting tags survive), «Додати до словника» from the selection (blocked on read-only or unsaved dictionary, persists through the managed `_save_dictionary` path with rollback on failure, applies the single rule to the editor text only and never writes storage — pinned by a test) and filler cleanup as a preview modal with one checkbox per match and ±30-char context; language resolves transcript-first with `auto` falling back to settings. 25 new i18n keys in uk/cs/en; help `reference.md` (uk/cs/en) documents the three tools. 29 new headless lifecycle tests.
+- A Linux Xvfb source-level smoke of the real GUI exercised all three tools on a seeded transcript, including formatting-tag survival, filler modal Cancel/partial Apply, and uk/cs/en retranslation (not the packaged or physical acceptance).
+- Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 1055 passed / 14 Linux junction skips; wheel build PASS (`voice_studio-0.3.0rc1`); `pip check` PASS.
+- `git diff --check` and changed-diff secret/private-path scan: PASS.
+- Physical Tk smoke and Windows/macOS packaged/native acceptance: NOT RUN.

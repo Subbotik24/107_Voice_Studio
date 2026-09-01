@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from datetime import time as day_time
@@ -32,6 +32,13 @@ from .dashboard import HistoryFilter
 from .dictionary import DictionaryMergePreview, DictionaryRule, TerminologyDictionary, merge_preview
 from .dictionary_store import DictionaryRepository
 from .editor_state import snapshot_editor
+from .editor_tools import (
+    FillerMatch,
+    TextMatch,
+    find_filler_matches,
+    find_matches,
+    remove_matches,
+)
 from .exporters import export_transcript
 from .hardware import HardwareDetectionResult, detect_hardware
 from .help_content import (
@@ -65,6 +72,9 @@ from .recorder import AudioRecorder
 from .storage import LocalStore
 
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
+
+EDITOR_FIND_TAG = "editor_find"
+FILLER_CONTEXT_WIDTH = 30
 
 MEDIA_FILETYPES = [
     ("Audio/video", "*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.aac *.mp4 *.mov *.mkv *.webm"),
@@ -863,6 +873,24 @@ class VoiceStudioApp(tk.Tk):
         ttk.Button(
             format_bar, text="I", width=3, command=lambda: self._toggle_editor_tag("italic")
         ).pack(side="right")
+        self.editor_find_button = ttk.Button(
+            format_bar,
+            text=self._t("editor_find_button"),
+            command=self._toggle_find_panel,
+        )
+        self.editor_find_button.pack(side="left", padx=(12, 0))
+        self.editor_add_rule_button = ttk.Button(
+            format_bar,
+            text=self._t("editor_add_rule_button"),
+            command=self._add_selection_to_dictionary,
+        )
+        self.editor_add_rule_button.pack(side="left", padx=(6, 0))
+        self.editor_filler_button = ttk.Button(
+            format_bar,
+            text=self._t("editor_filler_button"),
+            command=self._open_filler_dialog,
+        )
+        self.editor_filler_button.pack(side="left", padx=(6, 0))
         self.editor = tk.Text(
             corrected_frame,
             wrap="word",
@@ -881,8 +909,64 @@ class VoiceStudioApp(tk.Tk):
         self.editor.pack(fill="both", expand=True)
         self.editor.tag_configure("bold", font=(theme.ui_font, 11, "bold"))
         self.editor.tag_configure("italic", font=(theme.ui_font, 11, "italic"))
+        self.editor.tag_configure(
+            EDITOR_FIND_TAG, background=theme.selection, foreground=theme.ink
+        )
         self.editor.bind("<Return>", self._insert_editor_newline)
         self.editor.bind("<Control-Return>", self._insert_editor_newline)
+
+        self.find_panel = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
+        self.find_panel_visible = False
+        self.find_panel.grid_columnconfigure(1, weight=1)
+        self.find_panel.grid_columnconfigure(3, weight=1)
+        self.editor_find_caption = ttk.Label(
+            self.find_panel, text=self._t("editor_find_label"), style="CardMuted.TLabel"
+        )
+        self.editor_find_caption.grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.editor_find_var = tk.StringVar()
+        find_entry = ttk.Entry(self.find_panel, textvariable=self.editor_find_var)
+        find_entry.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+        find_entry.bind("<Return>", lambda _event: self._find_in_editor())
+        self.editor_replace_caption = ttk.Label(
+            self.find_panel, text=self._t("editor_replace_label"), style="CardMuted.TLabel"
+        )
+        self.editor_replace_caption.grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.editor_replace_var = tk.StringVar()
+        ttk.Entry(self.find_panel, textvariable=self.editor_replace_var).grid(
+            row=0, column=3, sticky="ew"
+        )
+        self.editor_find_case_var = tk.BooleanVar(value=False)
+        self.editor_find_case_check = ttk.Checkbutton(
+            self.find_panel,
+            text=self._t("editor_find_case"),
+            variable=self.editor_find_case_var,
+        )
+        self.editor_find_case_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        self.editor_find_word_var = tk.BooleanVar(value=False)
+        self.editor_find_word_check = ttk.Checkbutton(
+            self.find_panel,
+            text=self._t("editor_find_whole_word"),
+            variable=self.editor_find_word_var,
+        )
+        self.editor_find_word_check.grid(row=1, column=2, columnspan=2, sticky="w", pady=(5, 0))
+        self.editor_find_count_var = tk.StringVar()
+        ttk.Label(
+            self.find_panel,
+            textvariable=self.editor_find_count_var,
+            style="CardMuted.TLabel",
+        ).grid(row=1, column=4, sticky="e", padx=(10, 0))
+        find_actions = ttk.Frame(self.find_panel, style="Card.TFrame")
+        find_actions.grid(row=2, column=0, columnspan=5, sticky="w", pady=(6, 0))
+        self._editor_find_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("editor_find_action", self._find_in_editor),
+            ("editor_find_replace_one", self._replace_one_in_editor),
+            ("editor_find_replace_all", self._replace_all_in_editor),
+            ("editor_find_close", self._close_find_panel),
+        ):
+            button = ttk.Button(find_actions, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._editor_find_button_keys[button] = key
         self.raw_editor = tk.Text(
             raw_frame,
             wrap="word",
@@ -1951,6 +2035,7 @@ class VoiceStudioApp(tk.Tk):
         self._refresh_dashboard_ui_text()
         self._refresh_history_filter_ui_text()
         self._refresh_dictionary_ui_text()
+        self._refresh_editor_tools_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -2008,6 +2093,21 @@ class VoiceStudioApp(tk.Tk):
         self.history_reset_button.configure(text=self._t("history_filter_reset"))
         for name in self._history_filter_vars:
             self._apply_history_filter_choices(name)
+
+    def _refresh_editor_tools_ui_text(self) -> None:
+        self.editor_find_button.configure(text=self._t("editor_find_button"))
+        self.editor_add_rule_button.configure(text=self._t("editor_add_rule_button"))
+        self.editor_filler_button.configure(text=self._t("editor_filler_button"))
+        self.editor_find_caption.configure(text=self._t("editor_find_label"))
+        self.editor_replace_caption.configure(text=self._t("editor_replace_label"))
+        self.editor_find_case_check.configure(text=self._t("editor_find_case"))
+        self.editor_find_word_check.configure(text=self._t("editor_find_whole_word"))
+        for button, key in self._editor_find_button_keys.items():
+            button.configure(text=self._t(key))
+        if self.find_panel_visible:
+            self._find_in_editor()
+        else:
+            self.editor_find_count_var.set("")
 
     def _refresh_dictionary_ui_text(self) -> None:
         self.dictionary_title_label.configure(text=self._t("dictionary_title"))
@@ -2807,6 +2907,197 @@ class VoiceStudioApp(tk.Tk):
                     self.editor.tag_add(tag, str(item[0]), str(item[1]))
                 except tk.TclError:
                     continue
+
+    def _editor_text(self) -> str:
+        return self.editor.get("1.0", "end-1c")
+
+    @staticmethod
+    def _editor_index(offset: int) -> str:
+        return f"1.0+{offset}c"
+
+    def _editor_cursor_offset(self) -> int:
+        return len(self.editor.get("1.0", "insert"))
+
+    def _rewrite_editor(self, text: str) -> bool:
+        """Replace the whole editor content, keeping the formatting ranges."""
+
+        if text == self._editor_text():
+            return False
+        formatting = self._editor_formatting()
+        self.editor.delete("1.0", "end")
+        self.editor.insert("1.0", text)
+        self._apply_editor_formatting(formatting)
+        return True
+
+    def _toggle_find_panel(self) -> None:
+        if self.find_panel_visible:
+            self._close_find_panel()
+            return
+        self.find_panel.pack(fill="x")
+        self.find_panel_visible = True
+
+    def _close_find_panel(self) -> None:
+        self.find_panel.pack_forget()
+        self.find_panel_visible = False
+        self.editor.tag_remove(EDITOR_FIND_TAG, "1.0", "end")
+        self.editor_find_count_var.set("")
+
+    def _find_in_editor(self) -> tuple[TextMatch, ...]:
+        query = self.editor_find_var.get()
+        matches = find_matches(
+            self._editor_text(),
+            query,
+            case_sensitive=bool(self.editor_find_case_var.get()),
+            whole_word=bool(self.editor_find_word_var.get()),
+        )
+        self.editor.tag_remove(EDITOR_FIND_TAG, "1.0", "end")
+        for match in matches:
+            self.editor.tag_add(
+                EDITOR_FIND_TAG,
+                self._editor_index(match.start),
+                self._editor_index(match.end),
+            )
+        self.editor_find_count_var.set(
+            "" if not query.strip() else self._t("editor_find_count", count=len(matches))
+        )
+        return matches
+
+    def _replace_editor_span(self, match: TextMatch, replacement: str) -> None:
+        self.editor.delete(
+            self._editor_index(match.start), self._editor_index(match.end)
+        )
+        if replacement:
+            self.editor.insert(self._editor_index(match.start), replacement)
+
+    def _replace_one_in_editor(self) -> bool:
+        matches = self._find_in_editor()
+        if not matches:
+            return False
+        cursor = self._editor_cursor_offset()
+        target = next((match for match in matches if match.start >= cursor), matches[0])
+        replacement = self.editor_replace_var.get()
+        self._replace_editor_span(target, replacement)
+        self.editor.mark_set("insert", self._editor_index(target.start + len(replacement)))
+        self._find_in_editor()
+        return True
+
+    def _replace_all_in_editor(self) -> int:
+        matches = self._find_in_editor()
+        if not matches:
+            return 0
+        replacement = self.editor_replace_var.get()
+        for match in reversed(matches):
+            self._replace_editor_span(match, replacement)
+        self._find_in_editor()
+        self.status.set(self._t("editor_find_replaced", count=len(matches)))
+        return len(matches)
+
+    def _add_selection_to_dictionary(self) -> None:
+        try:
+            selection = self.editor.get("sel.first", "sel.last")
+        except tk.TclError:
+            selection = ""
+        source = selection.strip()
+        if not source:
+            self.status.set(self._t("editor_add_rule_no_selection"))
+            return
+        if self.dictionary_read_only:
+            self.status.set(self._t("editor_add_rule_read_only"))
+            return
+        if self._dictionary_dirty:
+            self.status.set(self._t("editor_add_rule_unsaved"))
+            return
+        answer = simpledialog.askstring(
+            self._t("editor_add_rule_title"),
+            self._t("editor_add_rule_prompt", source=source),
+            initialvalue=source,
+            parent=self,
+        )
+        if answer is None:
+            return
+        target = answer.strip()
+        if not target:
+            self.status.set(self._t("editor_add_rule_empty"))
+            return
+        rule = DictionaryRule(
+            source=source,
+            target=target,
+            case_sensitive=False,
+            whole_word=True,
+            use_as_hint=True,
+        )
+        self.dictionary.rules.append(rule)
+        if not self._save_dictionary():
+            if self.dictionary.rules and self.dictionary.rules[-1] is rule:
+                del self.dictionary.rules[-1]
+            return
+        self._rewrite_editor(TerminologyDictionary([rule]).apply(self._editor_text()))
+        self.status.set(self._t("editor_add_rule_saved", source=source, target=target))
+
+    def _editor_filler_language(self) -> str:
+        language = self.current.language if self.current else ""
+        if not language or language == "auto":
+            language = getattr(self.settings, "language", "")
+        return "" if language == "auto" else language
+
+    def _collect_filler_matches(self) -> tuple[FillerMatch, ...]:
+        language = self._editor_filler_language()
+        if not language:
+            return ()
+        return find_filler_matches(self._editor_text(), language)
+
+    @staticmethod
+    def _filler_context(text: str, match: FillerMatch) -> str:
+        before = text[max(0, match.start - FILLER_CONTEXT_WIDTH) : match.start]
+        after = text[match.end : match.end + FILLER_CONTEXT_WIDTH]
+        body = f"…{before}[{text[match.start : match.end]}]{after}…"
+        return body.replace("\n", " ")
+
+    def _apply_filler_removal(
+        self, matches: Sequence[FillerMatch], selected: Sequence[bool]
+    ) -> None:
+        chosen = [
+            match for match, keep in zip(matches, selected, strict=True) if keep
+        ]
+        if not chosen:
+            return
+        if self._rewrite_editor(remove_matches(self._editor_text(), chosen)):
+            self.status.set(self._t("editor_filler_removed", count=len(chosen)))
+
+    def _open_filler_dialog(self) -> None:
+        matches = self._collect_filler_matches()
+        if not matches:
+            self.status.set(self._t("editor_filler_none"))
+            return
+        text = self._editor_text()
+        window = tk.Toplevel(self)
+        window.title(self._t("editor_filler_title"))
+        window.transient(self)
+        body = ttk.Frame(window, padding=14)
+        body.pack(fill="both", expand=True)
+        variables: list[tk.BooleanVar] = []
+        for row, match in enumerate(matches):
+            variable = tk.BooleanVar(value=True)
+            variables.append(variable)
+            ttk.Checkbutton(
+                body, text=self._filler_context(text, match), variable=variable
+            ).grid(row=row, column=0, sticky="w", pady=(0, 2))
+        actions = ttk.Frame(body)
+        actions.grid(row=len(matches), column=0, sticky="e", pady=(12, 0))
+
+        def apply_selected() -> None:
+            flags = [bool(variable.get()) for variable in variables]
+            window.destroy()
+            self._apply_filler_removal(matches, flags)
+
+        ttk.Button(
+            actions, text=self._t("editor_filler_apply"), command=apply_selected
+        ).pack(side="left")
+        ttk.Button(
+            actions, text=self._t("editor_filler_cancel"), command=window.destroy
+        ).pack(side="left", padx=(6, 0))
+        window.grab_set()
+        window.wait_window()
 
     def _copy_to_clipboard(self, text: str) -> None:
         self.clipboard_clear()
