@@ -1,6 +1,6 @@
 # Implementation status — VOICE Studio 0.3.0 Test RC
 
-Last reviewed: 2026-08-30.
+Last reviewed: 2026-09-01.
 
 The repository contains a verified unsigned Windows Test RC. It is a standalone
 VOICE Studio product; there are no retired product names or startup AI wizard
@@ -43,6 +43,7 @@ in the supported flow.
 | Integrated tests | PASS | `347 passed` on Linux/CPython 3.12, no skips; green on macOS-14 and windows-2022 x CPython 3.11/3.12 in CI run 33170283362 |
 | Integrated lint/policy/diff | PASS | Ruff, workflow-pin policy and `git diff --check` |
 | Integrated packaging/dependency gate | PASS | `python -m build --wheel`, `python -m pip check`, `python -m pip_audit` (no known vulnerabilities) |
+| Deep audit and fix round (2026-09-01) | PASS source/headless | four-lens full-repository correctness audit; all confirmed findings fixed with failing-first regression tests (GUI busy/polling, atomic temp writes, v1 restore promotion recovery, storage cleanup/reference/segment-raw gates, cross-process catalog lock, cleanup-submission outcome, HTTPS registry, cloud extension contract); Linux gate `875 passed`, 14 Windows-junction skips; evidence in `VERIFICATION.md` |
 
 ## Known release limits
 

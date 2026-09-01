@@ -56,12 +56,16 @@ This is a privacy-first desktop transcription application. Treat this file and
 
 ## Current verified state
 
-The final Windows gate passed locally on 2026-08-28 with locked CPython 3.12.10:
-compilation, Ruff, Help validation, 362 tests, dependency checks, wheel/frozen
-payload assertions, the PyInstaller runtime probe and packaged GUI startup. The
-final unsigned EXE completed a real local `gemma4:12b` synthetic-audio workflow.
-The source quality gate also passed on Linux/CPython 3.12 on 2026-08-28: compilation,
-Ruff, `check_help.py`, `347 passed`, wheel build, `pip check` and `pip-audit`.
+The source quality gate last passed on Linux/CPython 3.12 on 2026-09-01, after
+a full-repository correctness audit whose confirmed findings were all fixed
+with failing-first regression tests: compilation, Ruff, `check_help.py`,
+`875 passed` (14 Windows-junction skips), wheel build, `pip check`,
+`pip-audit` and `git diff --check`. Encrypted backup v2 closed source/headless
+on 2026-08-31. The final Windows packaged gate passed on 2026-08-28 with
+locked CPython 3.12.10: compilation, Ruff, Help validation, dependency
+checks, wheel/frozen payload assertions, the PyInstaller runtime probe and
+packaged GUI startup, and the final unsigned EXE completed a real local
+`gemma4:12b` synthetic-audio workflow.
 Full evidence, including what was not run, is in `VERIFICATION.md`.
 No live OpenAI key, real cloud request, clean-machine run, physical-device run,
 or signed artifact build was performed. Do not represent those as verified.

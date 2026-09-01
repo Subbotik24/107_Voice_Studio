@@ -3,6 +3,69 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## Deep program audit and fix round — 2026-09-01
+
+Environment: Linux x86_64 container, CPython 3.12.3 virtual environment,
+`main`. This is a source/headless round only; no packaged, native,
+clean-machine, signed or physical-device acceptance is claimed.
+
+A full-repository correctness audit ran through four independent lenses:
+privacy/storage invariants, encrypted backup v2, persistence/concurrency and
+worker lifecycle, and adversarial input boundaries. Verified sound with
+recorded evidence: `raw_text` immutability (including a 500-transcript editor
+fuzz with 1,233 edits), original-file preservation across every deletion path
+(symlink/hardlink cases exercised on Linux), secret hygiene, the complete v2
+crypto construction (nonce uniqueness, AAD chunk binding, manifest HMAC,
+version-downgrade rejection, hard tamper/wrong-passphrase errors), journal
+recovery half-states, SQLite save-vs-remove serialization, bounded worker
+shutdown, and ZIP/model-archive safety against crafted traversal/symlink/
+duplicate archives. The auditors' confirmed findings were all fixed the same
+day with failing-first regression tests:
+
+- GUI: stopping a recording while a job ran raised inside the Tk callback and
+  permanently stopped event polling; `_process` now refuses while busy
+  (retaining the recording), recovers the finished-worker liveness race, and
+  `_poll_events` reschedules from `finally`.
+- Exporters, backup creation and workspace init wrote through a predictable
+  `<name>.tmp` sibling that silently destroyed an unrelated user file of that
+  name; all use uuid temp names with exclusive create now.
+- A v1 restore killed between the swap rename and the journal advance was
+  misreported as `staging_discarded` and silently dropped the restored
+  settings; promotion is now detected through the parked sidecar (v2 parity)
+  and recovery completes the settings step.
+- Storage: `cleanup_orphans` deleted fresh in-flight import `.partial` files
+  (now age-gated at 48 h); the managed-source reference check matches the
+  resolved path alone with a JSON-and-LIKE-escaped file-name prefilter; and
+  `save()` rejects changes to an existing row's joined raw segment text,
+  making the documented segment-raw immutability self-enforcing.
+- Model catalog: reconcile/promote/remove hold a cross-process exclusive lock
+  for their load-modify-save cycles, closing a lost-update race that erased a
+  concurrently committed install; the install progress poll tolerates files
+  and directories the download child renames mid-scan.
+- Jobs: a close landing exactly on the automatic-cleanup submission returns
+  the committed transcript with a recorded `cancelled` cleanup outcome
+  instead of raising after the save.
+- `fetch_registry` requires HTTPS like the asset check; the OpenAI cloud
+  extension set dropped `.mpeg`/`.mpga`, which media containment never
+  accepted, with a subset contract test.
+
+| Check | Result |
+| --- | --- |
+| `python -m compileall -q src tests scripts packaging` | PASS |
+| `python -m ruff check src tests scripts` | PASS |
+| `python scripts/check_help.py` | PASS; 13 Markdown files |
+| `PYTHONPATH=src python -m pytest -q` | PASS; 875 passed, 14 skipped (Windows-junction cases unavailable on Linux) |
+| `python -m build --wheel` | PASS; `voice_studio-0.3.0rc1-py3-none-any.whl` |
+| `python -m pip check` | PASS; `No broken requirements found.` |
+| `python -m pip_audit` | PASS; no known vulnerabilities in project dependencies |
+| `git diff --check` | PASS |
+
+Not run in this round: any Windows or macOS native gate, packaged executable,
+frozen probe, physical microphone/hotkey, clean machine, live cloud request,
+or signed artifact. The 14 skips are the Windows junction/symlink tests that
+cannot run on a Linux host; the same suite passes them on Windows per the
+records below.
+
 ## R0 W3-E1 minimal subtitle consistency — 2026-08-30
 
 Environment: Windows x64, repository `.venv` CPython 3.12, local `main`.
