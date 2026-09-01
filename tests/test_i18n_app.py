@@ -105,15 +105,24 @@ def test_central_page_labels_and_placeholders_are_localized_everywhere() -> None
             assert translate(language, key).strip()
 
 
+@pytest.mark.parametrize("language", ["uk", "cs", "en"])
+def test_dictionary_copy_explains_the_local_whisper_hint_limitation(language: str) -> None:
+    detail = translate(language, "dictionary_detail")
+
+    assert "Whisper" in detail
+    assert "accuracy" in detail.lower() or "точності" in detail or "přesnost" in detail
+
+
 def test_unknown_translation_key_fails_fast() -> None:
     with pytest.raises(KeyError):
         translate("uk", "missing-key")
 
 
 def test_transcript_language_can_be_formatted_without_conflicting_with_locale() -> None:
-    assert translate(
-        "en", "transcription_done", language="uk", segments=3, rtf=""
-    ) == "Done — uk, 3 segment(s)"
+    assert (
+        translate("en", "transcription_done", language="uk", segments=3, rtf="")
+        == "Done — uk, 3 segment(s)"
+    )
 
 
 def test_every_catalog_carries_exactly_the_same_keys() -> None:

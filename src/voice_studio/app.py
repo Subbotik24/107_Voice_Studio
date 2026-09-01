@@ -25,8 +25,9 @@ from .cloud_secrets import (
     openai_key_status,
     set_openai_api_key,
 )
-from .config import cache_dir, data_dir, load_settings, save_settings, settings_path
-from .dictionary import TerminologyDictionary
+from .config import cache_dir, config_dir, data_dir, load_settings, save_settings, settings_path
+from .dictionary import DictionaryMergePreview, DictionaryRule, TerminologyDictionary, merge_preview
+from .dictionary_store import DictionaryRepository
 from .editor_state import snapshot_editor
 from .exporters import export_transcript
 from .hardware import HardwareDetectionResult, detect_hardware
@@ -207,6 +208,10 @@ class VoiceStudioApp(tk.Tk):
         self._settings_hardware_device_combo: ttk.Combobox | None = None
         self._settings_hardware_compute_combo: ttk.Combobox | None = None
         self._settings_info_var: tk.StringVar | None = None
+        self.dictionary_repository = DictionaryRepository(config_dir())
+        self.dictionary = TerminologyDictionary()
+        self.dictionary_read_only = False
+        self._dictionary_dirty = False
         self._build_ui()
         self._report_restore_recovery()
         self._settle_model_catalog()
@@ -234,9 +239,7 @@ class VoiceStudioApp(tk.Tk):
         """
 
         try:
-            result = recover_interrupted_restore(
-                data_dir(), settings_target=settings_path()
-            )
+            result = recover_interrupted_restore(data_dir(), settings_target=settings_path())
             if result.get("action") != "passphrase_required":
                 return result
             passphrase = simpledialog.askstring(
@@ -260,13 +263,9 @@ class VoiceStudioApp(tk.Tk):
         result = self._restore_recovery
         action = result.get("action", "none")
         if result.get("status") != "PASS":
-            message = self._t(
-                "restore_recovery_failed", error=result.get("error", "unknown")
-            )
+            message = self._t("restore_recovery_failed", error=result.get("error", "unknown"))
             self.status.set(message)
-            self.after(
-                250, lambda: messagebox.showwarning(self._t("backup"), message)
-            )
+            self.after(250, lambda: messagebox.showwarning(self._t("backup"), message))
             return
         key = {
             "completed": "restore_recovered",
@@ -291,20 +290,14 @@ class VoiceStudioApp(tk.Tk):
         status = result.get("status")
         action = result.get("action", "none")
         if status == "FAIL":
-            message = self._t(
-                "model_catalog_repair_failed", error=result.get("error", "unknown")
-            )
+            message = self._t("model_catalog_repair_failed", error=result.get("error", "unknown"))
             self.status.set(message)
-            self.after(
-                250, lambda: messagebox.showwarning(self._t("models"), message)
-            )
+            self.after(250, lambda: messagebox.showwarning(self._t("models"), message))
             return result
 
         if action == "repaired" or action == "attention":
             if result.get("catalog_quarantined"):
-                message = self._t(
-                    "model_catalog_rebuilt", path=result["catalog_quarantined"]
-                )
+                message = self._t("model_catalog_rebuilt", path=result["catalog_quarantined"])
             elif action == "repaired":
                 message = self._t(
                     "model_catalog_repaired",
@@ -312,18 +305,19 @@ class VoiceStudioApp(tk.Tk):
                     dropped=", ".join(str(item) for item in result.get("dropped") or []),
                 )
             else:
-                details = "; ".join(
-                    f"{item.get('id', '?')}: {item.get('reason', 'unknown')}"
-                    if isinstance(item, dict)
-                    else str(item)
-                    for item in result.get("blocked") or []
-                ) or "unknown model catalog issue"
+                details = (
+                    "; ".join(
+                        f"{item.get('id', '?')}: {item.get('reason', 'unknown')}"
+                        if isinstance(item, dict)
+                        else str(item)
+                        for item in result.get("blocked") or []
+                    )
+                    or "unknown model catalog issue"
+                )
                 message = self._t("model_catalog_attention", details=details)
             self.status.set(message)
             if action == "attention":
-                self.after(
-                    250, lambda: messagebox.showwarning(self._t("models"), message)
-                )
+                self.after(250, lambda: messagebox.showwarning(self._t("models"), message))
         return result
 
     def _install_window_icon(self) -> None:
@@ -345,14 +339,10 @@ class VoiceStudioApp(tk.Tk):
                 models = discover_ollama_audio_models()
                 self._post_event("ollama_models", {"models": models, "error": ""})
             except Exception as exc:
-                self._post_event(
-                    "ollama_models", {"models": [], "error": str(exc)[:500]}
-                )
+                self._post_event("ollama_models", {"models": [], "error": str(exc)[:500]})
 
         thread = self._start_worker("ollama-model-discovery", discover)
-        self._assign_worker_alias(
-            "ollama-model-discovery", thread, "_ollama_discovery_thread"
-        )
+        self._assign_worker_alias("ollama-model-discovery", thread, "_ollama_discovery_thread")
 
     def _start_worker(
         self,
@@ -453,11 +443,7 @@ class VoiceStudioApp(tk.Tk):
             except (RuntimeError, OSError):
                 continue
         return tuple(
-            sorted(
-                role
-                for role, thread in snapshot
-                if thread is not current and thread.is_alive()
-            )
+            sorted(role for role, thread in snapshot if thread is not current and thread.is_alive())
         )
 
     def _build_ui(self) -> None:
@@ -512,9 +498,7 @@ class VoiceStudioApp(tk.Tk):
         self.brand_mark.grid(row=0, column=0, sticky="w")
         self.brand_details = ttk.Frame(brand, style="Sidebar.TFrame")
         self.brand_details.grid(row=0, column=1, sticky="w", padx=(10, 0))
-        ttk.Label(
-            self.brand_details, text="VOICE Studio", style="Brand.TLabel"
-        ).pack(anchor="w")
+        ttk.Label(self.brand_details, text="VOICE Studio", style="Brand.TLabel").pack(anchor="w")
         self.brand_subtitle_label = ttk.Label(
             self.brand_details,
             text=self._t("studio_subtitle"),
@@ -522,9 +506,7 @@ class VoiceStudioApp(tk.Tk):
         )
         self.brand_subtitle_label.pack(anchor="w", pady=(2, 0))
 
-        navigation = ttk.Frame(
-            self.sidebar, padding=(18, 12, 18, 12), style="Sidebar.TFrame"
-        )
+        navigation = ttk.Frame(self.sidebar, padding=(18, 12, 18, 12), style="Sidebar.TFrame")
         navigation.grid(row=1, column=0, sticky="nsew")
         self.dashboard_button = ttk.Button(
             navigation,
@@ -625,9 +607,9 @@ class VoiceStudioApp(tk.Tk):
         topbar = ttk.Frame(self.workspace, padding=(28, 16), style="Topbar.TFrame")
         topbar.grid(row=0, column=0, sticky="ew")
         self.engine_label = tk.StringVar()
-        ttk.Label(
-            topbar, textvariable=self.engine_label, style="TopbarMuted.TLabel"
-        ).pack(side="right")
+        ttk.Label(topbar, textvariable=self.engine_label, style="TopbarMuted.TLabel").pack(
+            side="right"
+        )
         self.topbar_context_label = ttk.Label(
             topbar, text=self._t("workspace_context"), style="TopbarTitle.TLabel"
         )
@@ -850,9 +832,7 @@ class VoiceStudioApp(tk.Tk):
         self.search_button = ttk.Button(
             search_row, text=self._t("search"), command=self._refresh_history
         )
-        self.search_button.pack(
-            side="left", padx=(5, 0)
-        )
+        self.search_button.pack(side="left", padx=(5, 0))
 
         list_frame = ttk.Frame(self.history_frame, style="Card.TFrame")
         list_frame.pack(fill="both", expand=True)
@@ -889,19 +869,97 @@ class VoiceStudioApp(tk.Tk):
 
         self.dictionary_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
         self.dictionary_page.grid(row=0, column=0, sticky="nsew")
-        self.dictionary_placeholder_title = ttk.Label(
-            self.dictionary_page,
-            text=self._t("dictionary_placeholder_title"),
-            style="Title.TLabel",
+        self.dictionary_page.grid_rowconfigure(3, weight=1)
+        self.dictionary_page.grid_columnconfigure(0, weight=1)
+        self.dictionary_title_label = ttk.Label(
+            self.dictionary_page, text=self._t("dictionary_title"), style="Title.TLabel"
         )
-        self.dictionary_placeholder_title.pack(anchor="w")
-        self.dictionary_placeholder_detail = ttk.Label(
+        self.dictionary_title_label.grid(row=0, column=0, sticky="w")
+        self.dictionary_detail_label = ttk.Label(
             self.dictionary_page,
-            text=self._t("dictionary_placeholder_detail"),
+            text=self._t("dictionary_detail"),
             style="Subtitle.TLabel",
-            wraplength=620,
+            wraplength=760,
         )
-        self.dictionary_placeholder_detail.pack(anchor="w", pady=(8, 0))
+        self.dictionary_detail_label.grid(row=1, column=0, sticky="w", pady=(8, 4))
+        self.dictionary_banner_var = tk.StringVar()
+        ttk.Label(
+            self.dictionary_page, textvariable=self.dictionary_banner_var, style="CardMuted.TLabel"
+        ).grid(row=2, column=0, sticky="w", pady=(0, 8))
+        dictionary_actions = ttk.Frame(self.dictionary_page, style="Canvas.TFrame")
+        dictionary_actions.grid(row=3, column=0, sticky="nsew")
+        dictionary_actions.grid_rowconfigure(1, weight=1)
+        dictionary_actions.grid_columnconfigure(0, weight=1)
+        search_row = ttk.Frame(dictionary_actions, style="Canvas.TFrame")
+        search_row.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        search_row.grid_columnconfigure(0, weight=1)
+        self.dictionary_search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_row, textvariable=self.dictionary_search_var)
+        search_entry.grid(row=0, column=0, sticky="ew")
+        search_entry.bind("<KeyRelease>", lambda _event: self._dictionary_refresh_widgets())
+        self.dictionary_search_button = ttk.Button(
+            search_row, text=self._t("search"), command=self._dictionary_refresh_widgets
+        )
+        self.dictionary_search_button.grid(row=0, column=1, padx=(6, 0))
+        self.dictionary_table = ttk.Treeview(
+            dictionary_actions,
+            columns=("source", "target", "case", "whole", "hint"),
+            show="headings",
+            height=9,
+        )
+        self._dictionary_heading_keys: dict[str, str] = {}
+        for key, width in (
+            ("source", 170),
+            ("target", 170),
+            ("case", 70),
+            ("whole", 70),
+            ("hint", 70),
+        ):
+            self.dictionary_table.heading(key, text=self._t(f"dictionary_{key}"))
+            self.dictionary_table.column(key, width=width, anchor="w")
+            self._dictionary_heading_keys[key] = f"dictionary_{key}"
+        self.dictionary_table.grid(row=1, column=0, sticky="nsew")
+        controls = ttk.Frame(dictionary_actions, style="Canvas.TFrame")
+        controls.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self.dictionary_edit_buttons: list[ttk.Button] = []
+        self._dictionary_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("dictionary_add", self._dictionary_add_dialog),
+            ("dictionary_edit", self._dictionary_edit_dialog),
+            ("dictionary_delete", self._dictionary_delete),
+            ("dictionary_up", lambda: self._dictionary_move(-1)),
+            ("dictionary_down", lambda: self._dictionary_move(1)),
+            ("save", self._save_dictionary),
+            ("dictionary_import", self._dictionary_import_dialog),
+            ("export", self._dictionary_export_dialog),
+        ):
+            button = ttk.Button(controls, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._dictionary_button_keys[button] = key
+            if key in {
+                "dictionary_add",
+                "dictionary_edit",
+                "dictionary_delete",
+                "dictionary_up",
+                "dictionary_down",
+                "save",
+            }:
+                self.dictionary_edit_buttons.append(button)
+        test_box = ttk.Frame(dictionary_actions, style="Canvas.TFrame")
+        test_box.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        test_box.grid_columnconfigure(0, weight=1)
+        self.dictionary_test_var = tk.StringVar()
+        ttk.Entry(test_box, textvariable=self.dictionary_test_var).grid(
+            row=0, column=0, sticky="ew"
+        )
+        self.dictionary_test_button = ttk.Button(
+            test_box, text=self._t("dictionary_test"), command=self._dictionary_test
+        )
+        self.dictionary_test_button.grid(row=0, column=1, padx=(6, 0))
+        self.dictionary_test_result_var = tk.StringVar()
+        ttk.Label(
+            test_box, textvariable=self.dictionary_test_result_var, style="CardMuted.TLabel"
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         self._page_frames = {
             "dashboard": self.dashboard_page,
             "studio": self.studio_page,
@@ -918,9 +976,7 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame, text=self._t("readiness"), style="CardTitle.TLabel"
         )
         self.readiness_title_label.pack(anchor="w")
-        ready_box = ttk.Frame(
-            self.readiness_frame, padding=(12, 10), style="ReadyBox.TFrame"
-        )
+        ready_box = ttk.Frame(self.readiness_frame, padding=(12, 10), style="ReadyBox.TFrame")
         ready_box.pack(fill="x", pady=(14, 18))
         self.ready_status_label = ttk.Label(
             ready_box, text=self._t("ready_to_work"), style="Ready.TLabel"
@@ -1036,6 +1092,12 @@ class VoiceStudioApp(tk.Tk):
         if self._current_page == "studio" and page != "studio":
             if not self._confirm_editor_transition():
                 return False
+        if self._current_page == "dictionary" and page != "dictionary":
+            if not self._confirm_dictionary_transition():
+                return False
+        if page == "dictionary" and self._current_page != "dictionary":
+            if not self._reload_dictionary():
+                return False
         for page_id, frame in self._page_frames.items():
             if page_id == page:
                 frame.grid()
@@ -1052,6 +1114,357 @@ class VoiceStudioApp(tk.Tk):
             self.readiness_frame.grid_remove()
         self._apply_studio_layout(self.winfo_width(), force=True)
         return True
+
+    def _reload_dictionary(self) -> bool:
+        path = self.settings.dictionary_path
+        try:
+            if path and self.dictionary_repository.is_managed(path) and not Path(path).exists():
+                dictionary = TerminologyDictionary()
+            else:
+                dictionary = self.dictionary_repository.load(path)
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_load_error", error=str(exc)))
+            return False
+        self.dictionary = dictionary
+        self.dictionary_read_only = bool(path) and not self.dictionary_repository.is_managed(path)
+        self._dictionary_dirty = False
+        self._dictionary_refresh_widgets()
+        return True
+
+    def _dictionary_can_edit(self) -> bool:
+        return not self.dictionary_read_only
+
+    def _dictionary_changed(self) -> None:
+        self._dictionary_dirty = True
+        self._dictionary_refresh_widgets()
+
+    def _add_dictionary_rule(self, rule: DictionaryRule) -> bool:
+        if not self._dictionary_can_edit():
+            return False
+        self.dictionary.rules.append(rule)
+        self._dictionary_changed()
+        return True
+
+    def _edit_dictionary_rule(self, index: int, rule: DictionaryRule) -> bool:
+        if not self._dictionary_can_edit() or not 0 <= index < len(self.dictionary.rules):
+            return False
+        self.dictionary.rules[index] = rule
+        self._dictionary_changed()
+        return True
+
+    def _delete_dictionary_rule(self, index: int) -> bool:
+        if not self._dictionary_can_edit() or not 0 <= index < len(self.dictionary.rules):
+            return False
+        del self.dictionary.rules[index]
+        self._dictionary_changed()
+        return True
+
+    def _move_dictionary_rule(self, index: int, delta: int) -> bool:
+        destination = index + delta
+        if (
+            not self._dictionary_can_edit()
+            or not 0 <= index < len(self.dictionary.rules)
+            or not 0 <= destination < len(self.dictionary.rules)
+        ):
+            return False
+        self.dictionary.rules[index], self.dictionary.rules[destination] = (
+            self.dictionary.rules[destination],
+            self.dictionary.rules[index],
+        )
+        self._dictionary_changed()
+        return True
+
+    def _filtered_dictionary_rules(self, query: str) -> list[DictionaryRule]:
+        needle = query.casefold().strip()
+        if not needle:
+            return list(self.dictionary.rules)
+        return [
+            rule
+            for rule in self.dictionary.rules
+            if needle in rule.source.casefold() or needle in rule.target.casefold()
+        ]
+
+    def _apply_dictionary_test_sentence(self, text: str) -> str:
+        return self.dictionary.apply(text)
+
+    def _save_dictionary(self) -> bool:
+        if self.dictionary_read_only:
+            self._dictionary_status(self._t("dictionary_external_read_only"))
+            return False
+        try:
+            self.dictionary_repository.save_managed(self.dictionary)
+            updated_settings = replace(
+                self.settings, dictionary_path=str(self.dictionary_repository.managed_path)
+            )
+            save_settings(updated_settings)
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_save_error", error=str(exc)))
+            return False
+        self.settings = updated_settings
+        self._dictionary_dirty = False
+        self._dictionary_status(self._t("dictionary_saved"))
+        self._dictionary_refresh_widgets()
+        return True
+
+    def _prepare_dictionary_import(self, path: str | Path, mode: str) -> DictionaryMergePreview:
+        suffix = Path(path).suffix.lower()
+        if suffix == ".csv":
+            incoming = self.dictionary_repository.load_csv(path)
+        elif suffix == ".json":
+            incoming = self.dictionary_repository.load(path)
+        else:
+            raise ValueError(f"unsupported dictionary format: {suffix or 'no suffix'}")
+        if mode == "replace":
+            return DictionaryMergePreview(incoming, len(incoming.rules), 0, 0, ())
+        if mode != "merge":
+            raise ValueError(f"unknown dictionary import mode: {mode}")
+        return merge_preview(self.dictionary, incoming)
+
+    def _commit_dictionary_import(
+        self, preview: DictionaryMergePreview, mode: str, *, confirmed: bool
+    ) -> bool:
+        if not confirmed or (mode == "merge" and preview.conflicts):
+            return False
+        try:
+            self.dictionary_repository.save_managed(preview.merged)
+            updated_settings = replace(
+                self.settings, dictionary_path=str(self.dictionary_repository.managed_path)
+            )
+            save_settings(updated_settings)
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_import_error", error=str(exc)))
+            return False
+        self.settings = updated_settings
+        self.dictionary = preview.merged
+        self.dictionary_read_only = False
+        self._dictionary_dirty = False
+        self._dictionary_status(self._t("dictionary_imported"))
+        self._dictionary_refresh_widgets()
+        return True
+
+    def _export_dictionary(self, destination: str | Path) -> bool:
+        try:
+            target = Path(destination)
+            if target.suffix.lower() == ".csv":
+                self.dictionary_repository.export_csv(self.dictionary, target)
+            elif target.suffix.lower() == ".json":
+                self.dictionary_repository.export_json(self.dictionary, target)
+            else:
+                raise ValueError(
+                    f"unsupported dictionary format: {target.suffix.lower() or 'no suffix'}"
+                )
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_export_error", error=str(exc)))
+            return False
+        self._dictionary_status(self._t("dictionary_exported"))
+        return True
+
+    def _confirm_dictionary_transition(self) -> bool:
+        if not self.__dict__.get("_dictionary_dirty", False):
+            return True
+        choice = messagebox.askyesnocancel(
+            self._t("dictionary"), self._t("dictionary_unsaved"), parent=self
+        )
+        if choice is None:
+            return False
+        if choice:
+            return self._save_dictionary()
+        return self._reload_dictionary()
+
+    def _apply_settings_update(self, updated: Settings) -> bool:
+        previous_ui_language = self.settings.ui_language
+        path_changed = updated.dictionary_path != self.settings.dictionary_path
+        if path_changed and self._dictionary_dirty and not self._confirm_dictionary_transition():
+            return False
+        try:
+            if updated.dictionary_path:
+                self.dictionary_repository.load(updated.dictionary_path)
+            save_settings(updated)
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_load_error", error=str(exc)))
+            return False
+        self.settings = updated
+        if path_changed and not self._reload_dictionary():
+            return False
+        self._refresh_after_settings_save(previous_ui_language)
+        return True
+
+    def _dictionary_status(self, message: str) -> None:
+        if hasattr(self, "dictionary_banner_var"):
+            self.dictionary_banner_var.set(message)
+        if hasattr(self, "status"):
+            self.status.set(message)
+
+    def _dictionary_refresh_widgets(self) -> None:
+        if not hasattr(self, "dictionary_table"):
+            return
+        query = self.dictionary_search_var.get() if hasattr(self, "dictionary_search_var") else ""
+        for item in self.dictionary_table.get_children():
+            self.dictionary_table.delete(item)
+        visible = self._filtered_dictionary_rules(query)
+        for index, rule in enumerate(self.dictionary.rules):
+            if rule in visible:
+                self.dictionary_table.insert(
+                    "",
+                    "end",
+                    iid=str(index),
+                    values=(
+                        rule.source,
+                        rule.target,
+                        rule.case_sensitive,
+                        rule.whole_word,
+                        rule.use_as_hint,
+                    ),
+                )
+        if hasattr(self, "dictionary_banner_var"):
+            self.dictionary_banner_var.set(
+                self._t("dictionary_external_read_only")
+                if self.dictionary_read_only
+                else self._t("dictionary_ready")
+            )
+        for button in getattr(self, "dictionary_edit_buttons", []):
+            button.configure(state="disabled" if self.dictionary_read_only else "normal")
+
+    def _selected_dictionary_index(self) -> int | None:
+        selection = self.dictionary_table.selection()
+        if not selection:
+            return None
+        return int(selection[0])
+
+    def _dictionary_test(self) -> None:
+        self.dictionary_test_result_var.set(
+            self._apply_dictionary_test_sentence(self.dictionary_test_var.get())
+        )
+
+    def _dictionary_add_dialog(self) -> None:
+        self._dictionary_rule_dialog(None)
+
+    def _dictionary_edit_dialog(self) -> None:
+        index = self._selected_dictionary_index()
+        if index is not None:
+            self._dictionary_rule_dialog(index)
+
+    def _dictionary_rule_dialog(self, index: int | None) -> None:
+        if not self._dictionary_can_edit():
+            return
+        existing = self.dictionary.rules[index] if index is not None else DictionaryRule(" ", "")
+        dialog = tk.Toplevel(self)
+        dialog.title(self._t("dictionary_edit"))
+        source, target = (
+            tk.StringVar(value=existing.source.strip()),
+            tk.StringVar(value=existing.target),
+        )
+        case, whole, hint = (
+            tk.BooleanVar(value=existing.case_sensitive),
+            tk.BooleanVar(value=existing.whole_word),
+            tk.BooleanVar(value=existing.use_as_hint),
+        )
+        for row, (label, variable) in enumerate(
+            ((self._t("dictionary_source"), source), (self._t("dictionary_target"), target))
+        ):
+            ttk.Label(dialog, text=label).grid(row=row, column=0, padx=12, pady=5, sticky="w")
+            ttk.Entry(dialog, textvariable=variable).grid(
+                row=row, column=1, padx=12, pady=5, sticky="ew"
+            )
+        for row, (label, variable) in enumerate(
+            (
+                (self._t("dictionary_case"), case),
+                (self._t("dictionary_whole"), whole),
+                (self._t("dictionary_hint"), hint),
+            ),
+            start=2,
+        ):
+            ttk.Checkbutton(dialog, text=label, variable=variable).grid(
+                row=row, column=0, columnspan=2, padx=12, sticky="w"
+            )
+
+        def submit() -> None:
+            try:
+                rule = DictionaryRule(
+                    source.get(), target.get(), case.get(), whole.get(), hint.get()
+                )
+            except ValueError as exc:
+                messagebox.showerror(self._t("dictionary"), str(exc), parent=dialog)
+                return
+            if index is None:
+                self._add_dictionary_rule(rule)
+            else:
+                self._edit_dictionary_rule(index, rule)
+            dialog.destroy()
+
+        ttk.Button(dialog, text=self._t("save"), command=submit).grid(
+            row=5, column=1, padx=12, pady=12, sticky="e"
+        )
+
+    def _dictionary_delete(self) -> None:
+        index = self._selected_dictionary_index()
+        if index is not None and messagebox.askyesno(
+            self._t("dictionary"), self._t("dictionary_delete_confirm"), parent=self
+        ):
+            self._delete_dictionary_rule(index)
+
+    def _dictionary_move(self, delta: int) -> None:
+        index = self._selected_dictionary_index()
+        if index is not None:
+            self._move_dictionary_rule(index, delta)
+
+    def _dictionary_import_dialog(self) -> None:
+        path = filedialog.askopenfilename(parent=self, filetypes=[("Dictionary", "*.json *.csv")])
+        if not path:
+            return
+        mode = (
+            "merge"
+            if messagebox.askyesno(
+                self._t("dictionary_import"), self._t("dictionary_import_merge_prompt"), parent=self
+            )
+            else "replace"
+        )
+        try:
+            preview = self._prepare_dictionary_import(path, mode)
+        except Exception as exc:
+            self._dictionary_status(self._t("dictionary_import_error", error=str(exc)))
+            return
+        if preview.conflicts:
+            detail = "; ".join(
+                f"{item.incoming.source}: {item.existing.target} / {item.incoming.target}"
+                for item in preview.conflicts
+            )
+            messagebox.showerror(
+                self._t("dictionary_import"),
+                self._t("dictionary_import_conflicts", conflicts=detail),
+                parent=self,
+            )
+            return
+        detail = self._t(
+            "dictionary_import_preview",
+            added=preview.added_count,
+            skipped=preview.exact_skipped_count,
+            hints=preview.hint_update_count,
+            count=len(preview.merged.rules),
+        )
+        self._commit_dictionary_import(
+            preview,
+            mode,
+            confirmed=messagebox.askyesno(self._t("dictionary_import"), detail, parent=self),
+        )
+
+    def _dictionary_export_dialog(self) -> None:
+        format_choice = messagebox.askyesnocancel(
+            self._t("dictionary_export_format_title"),
+            self._t("dictionary_export_format_prompt"),
+            parent=self,
+        )
+        if format_choice is None:
+            return
+        suffix = ".json" if format_choice else ".csv"
+        label = "JSON" if format_choice else "CSV"
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            defaultextension=suffix,
+            filetypes=[(label, f"*{suffix}")],
+        )
+        if path:
+            self._export_dictionary(Path(path).with_suffix(suffix))
 
     def _t(self, key: str, **values: Any) -> str:
         language = getattr(self.settings, "ui_language", "uk")
@@ -1365,8 +1778,7 @@ class VoiceStudioApp(tk.Tk):
         self.workspace_subtitle_label.configure(text=self._t("workspace_subtitle"))
         self.dashboard_placeholder_title.configure(text=self._t("dashboard_placeholder_title"))
         self.dashboard_placeholder_detail.configure(text=self._t("dashboard_placeholder_detail"))
-        self.dictionary_placeholder_title.configure(text=self._t("dictionary_placeholder_title"))
-        self.dictionary_placeholder_detail.configure(text=self._t("dictionary_placeholder_detail"))
+        self._refresh_dictionary_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -1408,6 +1820,17 @@ class VoiceStudioApp(tk.Tk):
         self._apply_studio_layout(self.winfo_width(), force=True)
         self._update_engine_label()
 
+    def _refresh_dictionary_ui_text(self) -> None:
+        self.dictionary_title_label.configure(text=self._t("dictionary_title"))
+        self.dictionary_detail_label.configure(text=self._t("dictionary_detail"))
+        self.dictionary_search_button.configure(text=self._t("search"))
+        self.dictionary_test_button.configure(text=self._t("dictionary_test"))
+        for column, key in self._dictionary_heading_keys.items():
+            self.dictionary_table.heading(column, text=self._t(key))
+        for button, key in self._dictionary_button_keys.items():
+            button.configure(text=self._t(key))
+        self._dictionary_refresh_widgets()
+
     def _update_engine_label(self) -> None:
         if self.settings.engine == "ollama":
             model = self.settings.ollama_model or self._t("not_selected")
@@ -1415,9 +1838,7 @@ class VoiceStudioApp(tk.Tk):
             model = self.settings.openai_transcription_model
         else:
             model = self.settings.model
-        self.engine_label.set(
-            self._t("engine_status", engine=self.settings.engine, model=model)
-        )
+        self.engine_label.set(self._t("engine_status", engine=self.settings.engine, model=model))
         profile_labels = {
             "ollama-local": self._t("profile_ollama_title"),
             "whisper-local": self._t("profile_whisper_title"),
@@ -1609,8 +2030,7 @@ class VoiceStudioApp(tk.Tk):
         ambiguous = self.__dict__.get("_ambiguous_microphone_files", set())
         is_ambiguous = self._recorder_error_is_ambiguous(error)
         structured_residue = bool(
-            getattr(error, "cleanup_error", None) is not None
-            or getattr(error, "residue_paths", ())
+            getattr(error, "cleanup_error", None) is not None or getattr(error, "residue_paths", ())
         )
         diagnostics = self.__dict__.get("_recording_residue_diagnostics", [])
         for raw_path in raw_paths:
@@ -1664,14 +2084,10 @@ class VoiceStudioApp(tk.Tk):
             details.append(
                 self._t(
                     "residue_pending",
-                    paths=", ".join(
-                        str(path) for path in sorted(unambiguous_pending, key=str)
-                    ),
+                    paths=", ".join(str(path) for path in sorted(unambiguous_pending, key=str)),
                 )
             )
-        messagebox.showerror(
-            self._t("recording_cleanup_title"), "\n\n".join(details), parent=self
-        )
+        messagebox.showerror(self._t("recording_cleanup_title"), "\n\n".join(details), parent=self)
 
     def _report_automatic_cleanup_warning(self, transcript: Transcript) -> bool:
         metadata = getattr(transcript, "metadata", {})
@@ -1703,9 +2119,7 @@ class VoiceStudioApp(tk.Tk):
                     self._cleanup_temp(cleanup)
                     self._set_busy(False)
                     if not self._try_show_result(transcript, copy=True):
-                        self._refresh_history(
-                            select_id=self.current.id if self.current else None
-                        )
+                        self._refresh_history(select_id=self.current.id if self.current else None)
                     self._report_automatic_cleanup_warning(transcript)
                 elif event == "error":
                     error, cleanup = value
@@ -1777,7 +2191,10 @@ class VoiceStudioApp(tk.Tk):
                     result = value
                     if not isinstance(result, HardwareDetectionResult):
                         result = HardwareDetectionResult(
-                            "degraded", (), (), ("auto", "default"),
+                            "degraded",
+                            (),
+                            (),
+                            ("auto", "default"),
                             self._t("hardware_detection_degraded"),
                         )
                     info = self._settings_info_var
@@ -1795,9 +2212,7 @@ class VoiceStudioApp(tk.Tk):
                     )
                     compute_values = tuple(
                         item
-                        for item in dict.fromkeys(
-                            ("default", "auto", *result.compute_types)
-                        )
+                        for item in dict.fromkeys(("default", "auto", *result.compute_types))
                         if item in SUPPORTED_COMPUTE_TYPES
                     )
                     for combo, values in (
@@ -1855,9 +2270,7 @@ class VoiceStudioApp(tk.Tk):
                         before=transcript.corrected_text[:1000],
                         after=proposal.corrected_text[:1000],
                     )
-                    if messagebox.askyesno(
-                        self._t("cleanup_preview_title"), preview, parent=self
-                    ):
+                    if messagebox.askyesno(self._t("cleanup_preview_title"), preview, parent=self):
                         if not self._confirm_editor_transition():
                             continue
                         if not self._cleanup_result_is_current(transcript):
@@ -1983,16 +2396,12 @@ class VoiceStudioApp(tk.Tk):
             or tracked_path is None
         ):
             self._cleanup_temp(active_path)
-            self._report_recorder_error(
-                RuntimeError(self._t("recording_path_mismatch"))
-            )
+            self._report_recorder_error(RuntimeError(self._t("recording_path_mismatch")))
             return
 
         limit_reached = bool(getattr(result, "limit_reached", False) or limit_forced)
         if getattr(result, "degraded", False):
-            warning = getattr(result, "warning", "") or (
-                self._t("recording_damage_default")
-            )
+            warning = getattr(result, "warning", "") or (self._t("recording_damage_default"))
             if not messagebox.askyesno(
                 self._t("recording_corrupt_title"),
                 self._t("recording_corrupt_prompt", warning=warning),
@@ -2009,9 +2418,7 @@ class VoiceStudioApp(tk.Tk):
         started = self._process(result_path, cleanup=True)
         if limit_reached:
             result_text = (
-                self._t("recording_processing")
-                if started
-                else self._t("processing_not_started")
+                self._t("recording_processing") if started else self._t("processing_not_started")
             )
             self.status.set(self._t("recording_limit_status", result=result_text))
 
@@ -2027,8 +2434,7 @@ class VoiceStudioApp(tk.Tk):
             # The source is retained for a later retry; deleting it here would
             # discard a finished recording while another job is still running.
             self.status.set(
-                f"{self._t('processing_not_started')} "
-                f"{self._t('task_already_running')}"
+                f"{self._t('processing_not_started')} {self._t('task_already_running')}"
             )
             return False
         if self.settings.engine == "openai-cloud":
@@ -2094,8 +2500,7 @@ class VoiceStudioApp(tk.Tk):
             # letting the error escape into the Tk callback.
             self._set_busy(False)
             self.status.set(
-                f"{self._t('processing_not_started')} "
-                f"{self._t('task_already_running')}"
+                f"{self._t('processing_not_started')} {self._t('task_already_running')}"
             )
             return False
 
@@ -2745,9 +3150,7 @@ class VoiceStudioApp(tk.Tk):
             try:
                 result = detect_hardware()
             except Exception as exc:
-                result = HardwareDetectionResult(
-                    "degraded", (), (), ("auto", "default"), str(exc)
-                )
+                result = HardwareDetectionResult("degraded", (), (), ("auto", "default"), str(exc))
             self._post_event("hardware_detection", result)
 
         try:
@@ -2781,10 +3184,7 @@ class VoiceStudioApp(tk.Tk):
             ollama_status = self._t("ollama_found", count=len(installed_ollama_models))
         else:
             ollama_status = self._t("ollama_checking")
-        if (
-            self.settings.ollama_model
-            and self.settings.ollama_model not in installed_ollama_models
-        ):
+        if self.settings.ollama_model and self.settings.ollama_model not in installed_ollama_models:
             installed_ollama_models.insert(0, self.settings.ollama_model)
         selected_ollama_model = self.settings.ollama_model or (
             installed_ollama_models[0] if installed_ollama_models else ""
@@ -2816,9 +3216,7 @@ class VoiceStudioApp(tk.Tk):
 
         header = ttk.Frame(dialog, padding=(28, 22, 28, 18), style="SettingsHeader.TFrame")
         header.grid(row=0, column=0, sticky="ew")
-        ttk.Label(header, text=self._t("settings_title"), style="CardTitle.TLabel").pack(
-            anchor="w"
-        )
+        ttk.Label(header, text=self._t("settings_title"), style="CardTitle.TLabel").pack(anchor="w")
         ttk.Label(
             header,
             text=self._t("settings_intro"),
@@ -2914,9 +3312,7 @@ class VoiceStudioApp(tk.Tk):
                 padx=(0, 14) if column == 0 and columnspan == 1 else 0,
                 pady=(0, 18),
             )
-            ttk.Label(container, text=label, style="CardMuted.TLabel").pack(
-                anchor="w", pady=(0, 6)
-            )
+            ttk.Label(container, text=label, style="CardMuted.TLabel").pack(anchor="w", pady=(0, 6))
             return container
 
         interface_field = field(general_page, 0, 0, self._t("interface_language"))
@@ -2935,9 +3331,7 @@ class VoiceStudioApp(tk.Tk):
             state="readonly",
         ).pack(fill="x")
 
-        hotkey_field = field(
-            general_page, 1, 0, self._t("hotkey"), columnspan=2
-        )
+        hotkey_field = field(general_page, 1, 0, self._t("hotkey"), columnspan=2)
         hotkey_row = ttk.Frame(hotkey_field, style="Card.TFrame")
         hotkey_row.pack(fill="x")
         ttk.Entry(hotkey_row, textvariable=variables["hotkey"]).pack(
@@ -2999,9 +3393,7 @@ class VoiceStudioApp(tk.Tk):
             style="CardTitle.TLabel",
         ).pack(anchor="w")
 
-        language_field = field(
-            recognition_page, 0, 1, self._t("transcription_language")
-        )
+        language_field = field(recognition_page, 0, 1, self._t("transcription_language"))
         ttk.Combobox(
             language_field,
             textvariable=variables["language"],
@@ -3033,9 +3425,9 @@ class VoiceStudioApp(tk.Tk):
         self._settings_hardware_compute_combo = compute_combo
 
         openai_stt_field = field(recognition_page, 2, 1, self._t("openai_stt_model"))
-        ttk.Entry(
-            openai_stt_field, textvariable=variables["openai_transcription_model"]
-        ).pack(fill="x")
+        ttk.Entry(openai_stt_field, textvariable=variables["openai_transcription_model"]).pack(
+            fill="x"
+        )
 
         ttk.Checkbutton(
             recognition_page,
@@ -3048,9 +3440,7 @@ class VoiceStudioApp(tk.Tk):
             command=self._start_hardware_detection,
         ).grid(row=3, column=1, sticky="e", pady=(0, 18))
 
-        dictionary_field = field(
-            recognition_page, 4, 0, self._t("dictionary_json"), columnspan=2
-        )
+        dictionary_field = field(recognition_page, 4, 0, self._t("dictionary_json"), columnspan=2)
         dictionary_row = ttk.Frame(dictionary_field, style="Card.TFrame")
         dictionary_row.pack(fill="x")
         ttk.Entry(dictionary_row, textvariable=variables["dictionary_path"]).pack(
@@ -3093,9 +3483,9 @@ class VoiceStudioApp(tk.Tk):
         openai_cleanup_field = field(
             local_ai_page, 1, 0, self._t("openai_cleanup_model"), columnspan=2
         )
-        ttk.Entry(
-            openai_cleanup_field, textvariable=variables["openai_cleanup_model"]
-        ).pack(fill="x")
+        ttk.Entry(openai_cleanup_field, textvariable=variables["openai_cleanup_model"]).pack(
+            fill="x"
+        )
 
         def set_cloud_key() -> None:
             value = simpledialog.askstring(
@@ -3135,15 +3525,11 @@ class VoiceStudioApp(tk.Tk):
         key_field = field(local_ai_page, 2, 0, "OpenAI", columnspan=2)
         key_row = ttk.Frame(key_field, style="Card.TFrame")
         key_row.pack(fill="x")
-        ttk.Button(key_row, text=self._t("set_key"), command=set_cloud_key).pack(
-            side="left"
-        )
+        ttk.Button(key_row, text=self._t("set_key"), command=set_cloud_key).pack(side="left")
         ttk.Button(key_row, text=self._t("delete_key"), command=delete_cloud_key).pack(
             side="left", padx=5
         )
-        ttk.Button(key_row, text=self._t("status"), command=key_status).pack(
-            side="left", padx=5
-        )
+        ttk.Button(key_row, text=self._t("status"), command=key_status).pack(side="left", padx=5)
         ttk.Button(key_row, text=self._t("test_connection"), command=test_cloud_key).pack(
             side="left", padx=5
         )
@@ -3169,7 +3555,6 @@ class VoiceStudioApp(tk.Tk):
             self._close_settings_dialog(dialog)
 
         def save() -> None:
-            previous_ui_language = self.settings.ui_language
             try:
                 updated = replace(
                     self.settings,
@@ -3196,20 +3581,17 @@ class VoiceStudioApp(tk.Tk):
                 )
                 updated = apply_profile(updated, updated.profile)
                 updated.validate()
-                if updated.dictionary_path:
-                    TerminologyDictionary.load(updated.dictionary_path)
-                save_settings(updated)
-                self.settings = updated
             except Exception as exc:
                 messagebox.showerror(self._t("settings"), str(exc), parent=dialog)
                 return
-            self._refresh_after_settings_save(previous_ui_language)
+            if not self._apply_settings_update(updated):
+                return
             self.status.set(self._t("settings_saved"))
             self._close_settings_dialog(dialog)
 
-        ttk.Button(
-            footer_actions, text=self._t("cancel"), command=close_without_saving
-        ).pack(side="left", padx=(0, 8))
+        ttk.Button(footer_actions, text=self._t("cancel"), command=close_without_saving).pack(
+            side="left", padx=(0, 8)
+        )
         ttk.Button(
             footer_actions, text=self._t("save"), command=save, style="Primary.TButton"
         ).pack(side="left")
@@ -3240,9 +3622,7 @@ class VoiceStudioApp(tk.Tk):
             return items[selection[0]]["id"] if selection else None
 
         def import_local() -> None:
-            source = filedialog.askdirectory(
-                parent=dialog, title=self._t("model_directory_title")
-            )
+            source = filedialog.askdirectory(parent=dialog, title=self._t("model_directory_title"))
             if not source:
                 return
             model_id = simpledialog.askstring(
@@ -3343,9 +3723,7 @@ class VoiceStudioApp(tk.Tk):
 
         passphrase = simpledialog.askstring(
             self._t("backup"),
-            self._t("backup_passphrase_enter")
-            + "\n\n"
-            + self._t("backup_encrypt_warning"),
+            self._t("backup_passphrase_enter") + "\n\n" + self._t("backup_encrypt_warning"),
             show="*",
             parent=parent,
         )
@@ -3448,9 +3826,7 @@ class VoiceStudioApp(tk.Tk):
             wraplength=520,
         ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
 
-        def start_operation(
-            action: str, callback: Any, passphrase: str | None = None
-        ) -> None:
+        def start_operation(action: str, callback: Any, passphrase: str | None = None) -> None:
             dialog.destroy()
             self._start_backup_operation(action, callback, passphrase=passphrase)
 
@@ -3483,9 +3859,7 @@ class VoiceStudioApp(tk.Tk):
             if source:
                 start_operation(
                     "verify",
-                    lambda passphrase=None: verify_backup(
-                        Path(source), passphrase=passphrase
-                    ),
+                    lambda passphrase=None: verify_backup(Path(source), passphrase=passphrase),
                 )
 
         def restore() -> None:
@@ -3583,6 +3957,8 @@ class VoiceStudioApp(tk.Tk):
             return
         if not self._confirm_editor_transition():
             return
+        if not self._confirm_dictionary_transition():
+            return
         self._closing = True
         shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())
         lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
@@ -3611,8 +3987,7 @@ class VoiceStudioApp(tk.Tk):
             except Exception as exc:
                 if self._is_unresolved_writer_timeout(exc):
                     writer_timeout_path = self._retain_unresolved_recorder_path(
-                        self._active_recording_path
-                        or getattr(self.recorder, "destination", None)
+                        self._active_recording_path or getattr(self.recorder, "destination", None)
                     )
                 try:
                     self._report_recorder_error(exc)

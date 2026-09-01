@@ -30,3 +30,15 @@ full gate, diff/secret checks, commit/push, and any explicit `NOT_RUN` items.
 - Controller full gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 886 / 9 Windows symlink-privilege skips; CLI version PASS `0.3.0rc1`.
 - `pip check`, `git diff --check`, changed-file whitespace and secret/private-path scan: PASS.
 - Physical GUI and packaged/native acceptance: NOT RUN.
+
+### Increment 2 — managed terminology dictionary
+
+- Base: `e3f1704`; production changes were reviewed in one working-tree increment before controller commit.
+- Task 2A RED/GREEN: missing repository/rule APIs initially failed collection; final focused dictionary proof: 27 passed, affected subset 49 passed / 73 deselected.
+- Task 2A Sol review: four correction rounds closed bounded-read, CSV large-field/concurrency, atomicity, merge-accounting, shared-parser, and boundary-proof findings; final verdict CLEAN.
+- Task 2B RED/GREEN: initial controller surface 9 failed; lifecycle review fixes recorded 7 failed / 12 passed plus 1 live-i18n failure; export dispatch fix recorded 2 failed; final focused set 80 passed and export subset 25 passed.
+- Task 2B Sol review: Settings reconciliation, dirty close, live localization, load-error boundary, and explicit JSON/CSV export selection corrected; final verdict CLEAN.
+- First controller full pytest exposed three legacy headless-close stub regressions: 936 passed / 3 failed / 9 skipped. A narrow regression fix then passed 7 relevant tests / 22 deselected.
+- Final controller gate: compileall PASS; Ruff PASS; Help validation PASS (13 Markdown files); pytest PASS 940 / 9 Windows symlink-privilege skips.
+- `pip check`, `git diff --check`, and changed-diff secret/private-path scan: PASS.
+- Live Tk visual, physical GUI, and packaged/native acceptance: NOT RUN.
