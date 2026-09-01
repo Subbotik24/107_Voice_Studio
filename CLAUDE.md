@@ -68,15 +68,18 @@ or signed artifact build was performed. Do not represent those as verified.
 
 ## Highest-priority next work
 
-1. Implement the already specified W2-C2 model-catalog reconciliation task in
-   `NEXT_ANTIGRAVITY_TASK.md` with its required regression tests.
-2. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
-   `RELEASE_ACCEPTANCE.md`; capture evidence without private data.
+1. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
+   `RELEASE_ACCEPTANCE.md`; capture evidence without private data. All
+   source/headless R0 increments (W2-C2 included) are COMPLETE — see
+   `IMPLEMENTATION_STATUS.md`.
+2. Run the R0.10 packaged/native acceptance for encrypted backup v2 (the
+   PyInstaller crypto probe recorded as NOT RUN in `VERIFICATION.md`).
 3. Create Tiny/Small `models-v1` release assets with
    `scripts/build_model_release.py`, including upstream revision, inventory,
    license/model card and SHA256SUMS. Never add those archives to Git.
-4. Build unsigned Test RC artifacts only after acceptance is green. Do not tag
-   or publish a release until checksums and release manifest exist.
+4. Build unsigned Test RC artifacts only after acceptance is green, then
+   signing/notarization (W4). Do not tag or publish a release until checksums
+   and release manifest exist.
 
 ## Windows source launch
 
