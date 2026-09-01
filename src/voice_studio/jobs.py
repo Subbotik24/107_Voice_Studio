@@ -397,12 +397,19 @@ class TranscriptionJobController:
                             "transcript": transcript.to_dict(),
                         }
                     )
-                except (JobCancelled, TimeoutError):
+                except (JobCancelled, TimeoutError) as exc:
                     # The worker was closed/cancelled between finalize() and the
                     # cleanup submission itself: the transcript is already
                     # committed to storage, so return it as-is rather than
-                    # raising and losing the saved result.
+                    # raising and losing the saved result. Record the outcome
+                    # the same way the _wait_for_result branch below does, so
+                    # the GUI can still tell the user cleanup did not run.
                     self._terminate_worker()
+                    transcript = self._record_cleanup_outcome(
+                        transcript,
+                        "cancelled",
+                        str(exc),
+                    )
                 else:
                     try:
                         cleanup_response = self._wait_for_result(

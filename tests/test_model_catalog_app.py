@@ -605,6 +605,35 @@ def test_install_progress_tolerates_a_file_vanishing_mid_poll(tmp_path, monkeypa
     assert progress_calls[0][0] == 0
 
 
+def test_install_progress_tolerates_rglob_itself_vanishing_mid_poll(tmp_path, monkeypatch):
+    """The recursive descent of ``Path.rglob`` (not just the per-file stat)
+    can itself raise FileNotFoundError when the download child renames or
+    removes a subdirectory between discovery and descent. That must skip the
+    progress tick, not abort the install."""
+
+    context = VanishingDownloadContext({"ok": True})
+    patch_download_context(monkeypatch, context)
+    catalog = ModelCatalog(tmp_path / "managed")
+    monkeypatch.setattr(catalog, "_promote", lambda *a, **k: {"id": "tiny"})
+
+    def flaky_rglob(self, pattern):
+        def generator():
+            raise FileNotFoundError(self)
+            yield  # pragma: no cover - unreachable, keeps this a generator
+
+        return generator()
+
+    monkeypatch.setattr(Path, "rglob", flaky_rglob)
+
+    progress_calls = []
+    result = catalog.install(
+        "tiny",
+        progress=lambda downloaded, expected: progress_calls.append((downloaded, expected)),
+    )
+
+    assert result == {"id": "tiny"}
+
+
 def test_uninstalled_model_has_actionable_error(tmp_path):
     catalog = ModelCatalog(tmp_path / "managed")
     with pytest.raises(FileNotFoundError, match="models install tiny"):

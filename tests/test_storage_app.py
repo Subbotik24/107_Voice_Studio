@@ -278,6 +278,35 @@ def test_shared_source_survives_when_second_record_hash_disagrees(tmp_path):
     assert managed.exists()
 
 
+def test_shared_source_with_like_metacharacters_in_name_survives_delete(tmp_path):
+    """The SQL LIKE prefilter added to _source_is_referenced_in_db matches on
+    the managed file's bare name, which must be escaped: an unescaped '%' or
+    '_' in the name would make the prefilter under-match (treat it as a
+    wildcard) and let a still-referenced file be deleted."""
+
+    store = LocalStore(tmp_path / "data")
+    source = tmp_path / "same.wav"
+    source.write_bytes(b"same-content")
+    managed, digest = store.import_source(source)
+
+    # Rename the managed file so its name contains LIKE metacharacters that a
+    # naive (unescaped) LIKE pattern would misinterpret as wildcards.
+    tricky_managed = managed.with_name(f"weird_100%name{managed.suffix}")
+    managed.rename(tricky_managed)
+
+    first = transcript()
+    first.source_sha256 = digest
+    first.source_path = str(tricky_managed)
+    second = Transcript.from_dict(first.to_dict())
+    second.id = "2"
+    store.save(first)
+    store.save(second)
+
+    store.delete_audio(first)
+
+    assert tricky_managed.exists()
+
+
 def test_import_source_hashes_and_copies_source_in_one_pass(tmp_path, monkeypatch):
     import shutil
 

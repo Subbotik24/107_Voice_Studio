@@ -1041,18 +1041,23 @@ class ModelCatalog:
                         f"model download timed out after {timeout_seconds} seconds: {value}"
                     )
                 if progress:
-                    downloaded = 0
-                    for path in temporary.rglob("*"):
-                        # The download child can rename/replace entries (e.g. a
-                        # `*.incomplete` file) between this listing and the
-                        # size check below, so a vanished entry must not abort
-                        # the whole install.
-                        try:
-                            if path.is_file():
-                                downloaded += path.stat().st_size
-                        except OSError:
-                            continue
-                    progress(downloaded, expected)
+                    # The download child can rename/replace/remove entries
+                    # (e.g. a `*.incomplete` file, or a whole subdirectory)
+                    # between listing and descent, so any OSError raised while
+                    # walking the tree — including from rglob's own recursive
+                    # descent, not just the per-file stat below — must not
+                    # abort the whole install. Just skip this progress tick.
+                    try:
+                        downloaded = 0
+                        for path in temporary.rglob("*"):
+                            try:
+                                if path.is_file():
+                                    downloaded += path.stat().st_size
+                            except OSError:
+                                continue
+                        progress(downloaded, expected)
+                    except OSError:
+                        pass
                 process.join(timeout=0.25)
             try:
                 result = result_queue.get(timeout=2)

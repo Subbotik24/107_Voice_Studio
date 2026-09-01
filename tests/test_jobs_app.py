@@ -725,8 +725,9 @@ def test_cancelling_cleanup_submission_returns_committed_transcript(tmp_path, ma
 
     assert transcript.raw_text == "raw local result"
     assert transcript.corrected_text == "raw local result"
-    assert "automatic_cleanup" not in transcript.metadata
+    assert transcript.metadata["automatic_cleanup"] == "cancelled"
     assert store.get(transcript.id).raw_text == "raw local result"
+    assert store.get(transcript.id).metadata["automatic_cleanup"] == "cancelled"
 
 
 def test_spawn_worker_is_reused_for_completed_jobs(tmp_path, make_wav):

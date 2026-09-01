@@ -446,6 +446,16 @@ class LocalStore:
             )
 
     @staticmethod
+    def _escape_like_metacharacters(value: str) -> str:
+        """Escape a literal string for use inside a `LIKE ... ESCAPE '\\'` pattern.
+
+        Backslash must be escaped first so the escaping of % and _ does not
+        itself get re-escaped.
+        """
+
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    @staticmethod
     def _source_is_referenced_in_db(
         db: sqlite3.Connection,
         target: Path,
@@ -457,14 +467,31 @@ class LocalStore:
         # a row's recorded source_sha256 can disagree with the file it points
         # at (stale/corrupt hash), and such a row must still protect the
         # managed file it references. source_path lives only inside
-        # payload_json (no dedicated column), so every row is scanned and
-        # _payload_references_target filters out empty paths.
+        # payload_json (no dedicated column), so a SQL LIKE prefilter on the
+        # target's bare file name narrows the candidate rows before the exact
+        # (and authoritative) _payload_references_target check below decides.
+        # The name is escaped so % and _ in it cannot act as wildcards, which
+        # guarantees the prefilter can only over-match, never under-match, so
+        # correctness (never deleting a still-referenced file) is preserved.
+        # A Windows path's backslashes get JSON-escaped inside payload_json,
+        # but the bare file name itself never contains a path separator, so
+        # LIKE on the name alone is unaffected by that.
+        # JSON-encode the name first so the needle matches the exact bytes
+        # stored inside payload_json even when the name contains characters
+        # JSON escapes (a quote or backslash), then escape LIKE wildcards.
+        json_needle = json.dumps(target.name, ensure_ascii=False)[1:-1]
+        name_needle = LocalStore._escape_like_metacharacters(json_needle)
         if exclude_transcript_id is None:
-            rows = db.execute("SELECT payload_json FROM transcripts").fetchall()
+            rows = db.execute(
+                "SELECT payload_json FROM transcripts "
+                "WHERE payload_json LIKE '%' || ? || '%' ESCAPE '\\'",
+                (name_needle,),
+            ).fetchall()
         else:
             rows = db.execute(
-                "SELECT payload_json FROM transcripts WHERE id <> ?",
-                (exclude_transcript_id,),
+                "SELECT payload_json FROM transcripts WHERE id <> ? "
+                "AND payload_json LIKE '%' || ? || '%' ESCAPE '\\'",
+                (exclude_transcript_id, name_needle),
             ).fetchall()
         return any(
             LocalStore._payload_references_target(row["payload_json"], target)
@@ -772,11 +799,7 @@ class LocalStore:
                 restored_segments.append(Segment.from_dict(value))
                 previous_start = float(start)
             if restored_segments:
-                raw_join = " ".join(
-                    segment.text.strip()
-                    for segment in restored_segments
-                    if segment.text.strip()
-                )
+                raw_join = self._joined_raw_segment_text(restored_segments)
                 if raw_join != transcript.raw_text:
                     raise ValueError("stored manual edit revision is invalid")
                 if document_text_from_segments(restored_segments) != corrected_text:
