@@ -60,7 +60,21 @@ class OllamaClient:
                     detail = ""
             suffix = f": {detail}" if detail else ""
             raise RuntimeError(f"Ollama returned HTTP {exc.code}{suffix}") from exc
-        except (OSError, URLError) as exc:
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Local Ollama did not answer within {timeout:.0f} s. The model may still be "
+                "loading or the recording is long; retry or choose a smaller model."
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, TimeoutError):
+                raise RuntimeError(
+                    f"Local Ollama did not answer within {timeout:.0f} s. The model may still "
+                    "be loading or the recording is long; retry or choose a smaller model."
+                ) from exc
+            raise RuntimeError(
+                "Local Ollama is unavailable at 127.0.0.1:11434. Start Ollama and retry."
+            ) from exc
+        except OSError as exc:
             raise RuntimeError(
                 "Local Ollama is unavailable at 127.0.0.1:11434. Start Ollama and retry."
             ) from exc
@@ -83,7 +97,9 @@ class OllamaClient:
             raise ValueError("Ollama model cannot be empty")
         return self._request("/api/show", payload={"model": model_name}, timeout=10.0)
 
-    def audio_chat(self, model: str, wav_bytes: bytes, prompt: str) -> str:
+    def audio_chat(
+        self, model: str, wav_bytes: bytes, prompt: str, timeout: float | None = None
+    ) -> str:
         model_name = model.strip()
         if not model_name:
             raise ValueError("Ollama model cannot be empty")
@@ -114,7 +130,7 @@ class OllamaClient:
                     }
                 ],
             },
-            timeout=240.0,
+            timeout=240.0 if timeout is None else timeout,
         )
         choices = result.get("choices")
         if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):

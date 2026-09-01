@@ -122,6 +122,30 @@ def test_building_the_settings_page_stops_the_global_hotkey() -> None:
     assert app.hotkey is None
 
 
+def test_reentering_settings_before_the_deferred_hotkey_restart_fires_cancels_it() -> None:
+    """A quick re-entry to Settings must not let a stale after_idle restart the hotkey mid-edit."""
+
+    app = object.__new__(VoiceStudioApp)
+    hotkey = FakeHotkey()
+    app.hotkey = hotkey
+    app._hotkey_restart_handle = "pending-idle-1"
+    cancelled: list[object] = []
+    app.after_cancel = cancelled.append
+
+    class Built(Exception):
+        pass
+
+    app.settings_page = SimpleNamespace(
+        winfo_children=lambda: (_ for _ in ()).throw(Built()),
+    )
+
+    with pytest.raises(Built):
+        VoiceStudioApp._build_settings_page(app)
+
+    assert cancelled == ["pending-idle-1"]
+    assert app._hotkey_restart_handle is None
+
+
 def _dirty_settings_app(current_page: str = "settings") -> VoiceStudioApp:
     app = _page_app(current_page)
     app._settings_baseline = {"hotkey": "<f13>"}
@@ -224,6 +248,46 @@ def test_help_is_built_on_entry_and_reused_on_the_next_visit() -> None:
     build_help()
 
     assert builds == ["build", "build"]
+
+
+def test_close_is_blocked_by_unsaved_settings_on_the_settings_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches window shutdown bypassing unsaved Settings edits."""
+
+    app = _dirty_settings_app()
+    app._closing = False
+    app._maintenance_thread = None
+    app._confirm_dictionary_transition = lambda: True
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *_a, **_k: None)
+
+    VoiceStudioApp._close(app)
+
+    assert app._closing is False
+
+
+def test_close_proceeds_once_unsaved_settings_are_saved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _dirty_settings_app()
+    app._closing = False
+    app._maintenance_thread = None
+    app._confirm_dictionary_transition = lambda: True
+    app._settings_save = lambda: True
+    monkeypatch.setattr(app_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
+    app.destroy = lambda: None
+    app._shutdown_event = SimpleNamespace(set=lambda: None)
+    app._worker_lock = __import__("threading").RLock()
+    app._cancel_event = SimpleNamespace(set=lambda: None)
+    app.hotkey = None
+    app.recorder = SimpleNamespace(cancel=lambda: None)
+    app.job_controller = SimpleNamespace(close=lambda: None)
+    app._join_workers = lambda: ()
+    app.status = SimpleNamespace(set=lambda _message: None)
+
+    VoiceStudioApp._close(app)
+
+    assert app._closing is True
 
 
 def test_the_help_shortcut_opens_the_central_help_page() -> None:

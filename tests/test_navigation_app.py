@@ -111,6 +111,20 @@ def test_cancelled_leave_of_studio_preserves_page_and_sidebar_state() -> None:
     assert app.readiness_frame.events == []
 
 
+def test_dictionary_reload_failure_prevents_a_dirty_editor_confirm_prompt() -> None:
+    """The dictionary precondition must run before the destructive studio guard."""
+
+    app = _page_app("studio")
+    calls: list[str] = []
+    app._reload_dictionary = lambda: (calls.append("reload"), False)[1]
+    app._confirm_editor_transition = lambda: (calls.append("confirm"), True)[1]
+
+    assert VoiceStudioApp._show_page(app, "dictionary") is False
+    assert calls == ["reload"]
+    assert app._current_page == "studio"
+    assert all(frame.events == [] for frame in app._page_frames.values())
+
+
 def test_discarding_studio_edits_restores_persisted_editor_before_navigation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

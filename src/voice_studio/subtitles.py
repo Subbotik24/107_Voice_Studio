@@ -72,10 +72,17 @@ def sync_segments(
     # Align every non-empty editable segment with the old document. Positions
     # are searched in order, so separators between segments are not assumed.
     entries: list[list[int]] = []  # [segment index, span start, span end)
+    empty_from_start: list[int] = []
     cursor = 0
     for index, segment in enumerate(segments):
         text = editable_text(segment)
         if not text:
+            # This segment's editable text was already empty before this edit
+            # (e.g. a filler cleared by AI cleanup). It cannot be searched for
+            # in old_text, but its raw wording and interval are not deleted by
+            # this edit — they are absorbed into a neighbouring surviving cue
+            # below, exactly like a cue whose text becomes empty by editing.
+            empty_from_start.append(index)
             continue
         position = old_text.find(text, cursor)
         if position < 0:
@@ -158,7 +165,7 @@ def sync_segments(
     if replace_all and touched == set(range(len(entries))) and len(entries) > 1:
         merge_run(0, len(entries) - 1)
 
-    candidates: list[tuple[list[Segment], str]] = []
+    slots: list[tuple[int, list[Segment], str]] = []
     for group in groups:
         group_start = entries[group[0]][1]
         group_end = entries[group[-1]][2]
@@ -181,7 +188,13 @@ def sync_segments(
                     pieces.append(new_text[j1:j2])
         text = "".join(pieces).strip()
         member_segments = [segments[entries[k][0]] for k in group]
-        candidates.append((member_segments, text))
+        slots.append((entries[group[0]][0], member_segments, text))
+    for index in empty_from_start:
+        slots.append((index, [segments[index]], ""))
+    slots.sort(key=lambda slot: slot[0])
+    candidates: list[tuple[list[Segment], str]] = [
+        (member_segments, text) for _order, member_segments, text in slots
+    ]
 
     surviving = [index for index, (_members, text) in enumerate(candidates) if text]
     if not surviving:

@@ -989,6 +989,66 @@ def test_editor_state_update_rolls_back_when_database_write_fails(tmp_path):
     assert "editor_formatting" not in persisted.metadata
 
 
+def test_update_editor_state_preserves_segment_empty_from_start_across_an_edit(tmp_path):
+    from voice_studio.models import Segment
+
+    store = LocalStore(tmp_path)
+    item = transcript()
+    item.raw_text = "привіт світ ем як справи"
+    item.corrected_text = "Привіт світ як справи"
+    item.segments = [
+        Segment(start=0.0, end=1.0, text="привіт світ", corrected_text="Привіт світ"),
+        Segment(start=1.0, end=1.5, text="ем", corrected_text=""),
+        Segment(start=1.5, end=2.5, text="як справи", corrected_text=None),
+    ]
+    store.save(item)
+    joined_raw_before = " ".join(s.text for s in item.segments)
+
+    updated = store.update_editor_state("1", "Привіт світ! як справи", {})
+
+    joined_raw_after = " ".join(s.text for s in updated.segments)
+    assert joined_raw_after == joined_raw_before
+    assert updated.raw_text == item.raw_text
+    assert store.get("1").raw_text == item.raw_text
+    intervals = [(s.start, s.end) for s in updated.segments]
+    assert (1.0, 1.5) not in intervals
+    assert any(start <= 1.0 and 1.5 <= end for start, end in intervals)
+
+    restored = store.undo_last_manual_edit("1")
+    assert [s.to_dict() for s in restored.segments] == [s.to_dict() for s in item.segments]
+
+
+def test_update_editor_state_rejects_a_sync_result_that_changes_raw_text(tmp_path, monkeypatch):
+    from voice_studio.models import Segment
+
+    store = LocalStore(tmp_path)
+    item = transcript()
+    item.segments = [
+        Segment(start=0.0, end=1.0, text="one", corrected_text="one"),
+        Segment(start=1.0, end=2.0, text="two", corrected_text="two"),
+    ]
+    store.save(item)
+
+    def corrupting_sync_segments(old_text, new_text, segments):
+        corrupted = list(segments)
+        corrupted[0] = Segment(
+            start=corrupted[0].start,
+            end=corrupted[0].end,
+            text="mutated",
+            corrected_text=new_text,
+        )
+        return corrupted
+
+    monkeypatch.setattr(storage_module, "sync_segments", corrupting_sync_segments)
+
+    with pytest.raises(ValueError, match="raw"):
+        store.update_editor_state("1", "one changed two", {})
+
+    persisted = store.get("1")
+    assert [s.text for s in persisted.segments] == ["one", "two"]
+    assert persisted.corrected_text == item.corrected_text
+
+
 def test_schema_version_and_legacy_engine_migration(tmp_path):
     db_path = tmp_path / "history.sqlite3"
     with sqlite3.connect(db_path) as db:
@@ -1010,6 +1070,40 @@ def test_schema_version_and_legacy_engine_migration(tmp_path):
         assert db.execute("PRAGMA user_version").fetchone()[0] == 1
         columns = {row[1] for row in db.execute("PRAGMA table_info(transcripts)")}
     assert "engine" in columns
+
+
+def test_invalid_payload_rows_are_skipped_not_raised(tmp_path):
+    from voice_studio.backup import create_backup
+
+    store = LocalStore(tmp_path / "data")
+    good = []
+    for item_id in ("row-a", "row-b"):
+        item = transcript()
+        item.id = item_id
+        store.save(item)
+        good.append(item_id)
+    bad = transcript()
+    bad.id = "row-bad"
+    store.save(bad)
+    with store._connect() as db:
+        db.execute(
+            "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+            ("not json", bad.id),
+        )
+
+    listed = store.list(limit=5)
+    assert sorted(item.id for item in listed) == sorted(good)
+
+    audit = store.audit()
+    assert audit["invalid_records"] == 1
+    assert audit["records"] == 3
+
+    result = create_backup(store, tmp_path / "backup.voice-backup", include_audio=False)
+    assert (tmp_path / "backup.voice-backup").exists()
+    assert result
+
+    cleanup = store.cleanup_orphans(confirmed=True)
+    assert cleanup["count"] == 0
 
 
 def test_storage_audit_and_explicit_orphan_cleanup(tmp_path):

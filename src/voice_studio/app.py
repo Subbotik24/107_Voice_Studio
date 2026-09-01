@@ -709,6 +709,14 @@ class VoiceStudioApp(tk.Tk):
         self.page_host.grid_rowconfigure(0, weight=1)
         self.page_host.grid_columnconfigure(0, weight=1)
 
+        self.status = tk.StringVar(value=self._t("ready_local"))
+        self.status_bar = ttk.Frame(self.workspace_body, padding=(12, 8), style="Status.TFrame")
+        self.status_bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Label(self.status_bar, text="●", style="StatusDot.TLabel").pack(side="left")
+        ttk.Label(self.status_bar, textvariable=self.status, style="Status.TLabel").pack(
+            side="left", padx=(7, 0)
+        )
+
         self.dashboard_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
         self.dashboard_page.grid(row=0, column=0, sticky="nsew")
         self.dashboard_page.grid_columnconfigure(0, weight=1)
@@ -871,14 +879,6 @@ class VoiceStudioApp(tk.Tk):
             style="CompactAction.TButton",
         )
         self.copy_button.pack(side="right")
-
-        self.status = tk.StringVar(value=self._t("ready_local"))
-        status_bar = ttk.Frame(main_area, padding=(12, 8), style="Status.TFrame")
-        status_bar.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        ttk.Label(status_bar, text="●", style="StatusDot.TLabel").pack(side="left")
-        ttk.Label(status_bar, textvariable=self.status, style="Status.TLabel").pack(
-            side="left", padx=(7, 0)
-        )
 
         self.editor_frame = ttk.Labelframe(
             main_area, text=self._t("transcript"), padding=14, style="Card.TLabelframe"
@@ -1503,6 +1503,9 @@ class VoiceStudioApp(tk.Tk):
         if page == "settings" and entering and self.__dict__.get("_busy", False):
             self.status.set(self._t("task_already_running"))
             return False
+        if page == "dictionary" and entering:
+            if not self._reload_dictionary():
+                return False
         if self._current_page == "studio" and page != "studio":
             if not self._confirm_editor_transition():
                 return False
@@ -1511,9 +1514,6 @@ class VoiceStudioApp(tk.Tk):
                 return False
         if self._current_page == "settings" and page != "settings":
             if not self._confirm_settings_transition():
-                return False
-        if page == "dictionary" and entering:
-            if not self._reload_dictionary():
                 return False
         if page == "settings" and entering:
             self._settings_return_page = self._current_page
@@ -2672,8 +2672,13 @@ class VoiceStudioApp(tk.Tk):
                         if self.settings.ollama_model not in choices:
                             choices.insert(0, self.settings.ollama_model)
                         combo.configure(values=tuple(item for item in choices if item))
-                        if self.settings.ollama_model:
+                        page_variable = self._settings_variables.get("ollama_model")
+                        current_value = page_variable.get() if page_variable is not None else ""
+                        baseline_value = self._settings_baseline.get("ollama_model")
+                        untouched = not current_value or current_value == baseline_value
+                        if self.settings.ollama_model and untouched:
                             combo.set(self.settings.ollama_model)
+                            self._settings_baseline["ollama_model"] = self.settings.ollama_model
                     if self._ollama_discovery_error:
                         message = self._ollama_discovery_error
                     elif models:
@@ -2693,7 +2698,10 @@ class VoiceStudioApp(tk.Tk):
                             (),
                             (),
                             ("auto", "default"),
-                            self._t("hardware_detection_degraded"),
+                            self._t(
+                                "hardware_detection_degraded",
+                                detail=str(value)[:200],
+                            ),
                         )
                     info = self._settings_info_var
                     if info is not None:
@@ -3269,8 +3277,17 @@ class VoiceStudioApp(tk.Tk):
         return body.replace("\n", " ")
 
     def _apply_filler_removal(
-        self, matches: Sequence[FillerMatch], selected: Sequence[bool]
+        self,
+        matches: Sequence[FillerMatch],
+        selected: Sequence[bool],
+        *,
+        snapshot: tuple[str | None, str] | None = None,
     ) -> None:
+        if snapshot is not None:
+            current_id = self.current.id if self.current else None
+            if (current_id, self._editor_text()) != snapshot:
+                self.status.set(self._t("editor_filler_stale"))
+                return
         chosen = [
             match for match, keep in zip(matches, selected, strict=True) if keep
         ]
@@ -3285,6 +3302,7 @@ class VoiceStudioApp(tk.Tk):
             self.status.set(self._t("editor_filler_none"))
             return
         text = self._editor_text()
+        snapshot = (self.current.id if self.current else None, text)
         window = tk.Toplevel(self)
         window.title(self._t("editor_filler_title"))
         window.transient(self)
@@ -3303,7 +3321,7 @@ class VoiceStudioApp(tk.Tk):
         def apply_selected() -> None:
             flags = [bool(variable.get()) for variable in variables]
             window.destroy()
-            self._apply_filler_removal(matches, flags)
+            self._apply_filler_removal(matches, flags, snapshot=snapshot)
 
         ttk.Button(
             actions, text=self._t("editor_filler_apply"), command=apply_selected
@@ -3351,6 +3369,9 @@ class VoiceStudioApp(tk.Tk):
         return f"{score} · {snippet}"
 
     def _refresh_confidence_panel(self) -> None:
+        self._confidence_entries = []
+        self.confidence_list.delete(0, "end")
+        self.editor.tag_remove(EDITOR_CONFIDENCE_TAG, "1.0", "end")
         threshold = self._confidence_threshold()
         if threshold is None:
             self.status.set(self._t("editor_confidence_threshold_invalid"))
@@ -3358,8 +3379,6 @@ class VoiceStudioApp(tk.Tk):
         segments = self._confidence_segments()
         entries = confidence_entries(segments, threshold)
         self._confidence_entries = entries
-        self.editor.tag_remove(EDITOR_CONFIDENCE_TAG, "1.0", "end")
-        self.confidence_list.delete(0, "end")
         for entry in entries:
             self.confidence_list.insert("end", self._confidence_row(entry, segments))
         self.confidence_count_var.set(
@@ -3797,12 +3816,8 @@ class VoiceStudioApp(tk.Tk):
             delete_audio = bool(choice)
         self.store.delete(transcript.id, delete_audio=delete_audio)
         if self.current and self.current.id == transcript.id:
-            self.current = None
-            self.editor.delete("1.0", "end")
-            self._apply_editor_formatting({})
-            self._editor_baseline = snapshot_editor("", {})
-            self._set_readonly_text(self.raw_editor, "")
-            self._set_readonly_text(self.details, "")
+            self._stop_playback()
+            self._clear_current_transcript_view()
         self._refresh_history()
         self._refresh_dashboard()
         self.status.set(self._t("delete_complete"))
@@ -4202,7 +4217,7 @@ class VoiceStudioApp(tk.Tk):
         if self._settings_capture_binding is not None:
             self.unbind("<KeyPress>", self._settings_capture_binding)
             self._settings_capture_binding = None
-        self.after_idle(self._start_hotkey)
+        self._hotkey_restart_handle = self.after_idle(self._start_hotkey)
 
     def _refresh_after_settings_save(self, previous_ui_language: str) -> None:
         self.job_controller.close()
@@ -4231,6 +4246,10 @@ class VoiceStudioApp(tk.Tk):
                 info.set(self._t("hardware_detection_busy"))
 
     def _build_settings_page(self) -> None:
+        handle = self.__dict__.get("_hotkey_restart_handle")
+        if handle is not None:
+            self.after_cancel(handle)
+            self._hotkey_restart_handle = None
         # Do not let the currently configured global shortcut start a recording
         # while the user is choosing a new shortcut on this page.
         if self.hotkey is not None and self.hotkey.stop():
@@ -5048,12 +5067,18 @@ class VoiceStudioApp(tk.Tk):
     def _reload_after_restore(self) -> None:
         self._stop_playback()
         self._restart_runtime()
+        previous_ui_language = self.settings.ui_language
         self.settings = load_settings()
         self._clear_current_transcript_view()
         self._refresh_history()
         self._refresh_dashboard()
+        if previous_ui_language != self.settings.ui_language:
+            self._reset_help_page()
         self._refresh_ui_text()
-        self._start_hotkey()
+        if self._current_page == "settings":
+            self._build_settings_page()
+        else:
+            self._start_hotkey()
 
     def _close(self) -> None:
         if self.__dict__.get("_closing", False):
@@ -5069,6 +5094,11 @@ class VoiceStudioApp(tk.Tk):
         if not self._confirm_editor_transition():
             return
         if not self._confirm_dictionary_transition():
+            return
+        if (
+            self.__dict__.get("_current_page") == "settings"
+            and not self._confirm_settings_transition()
+        ):
             return
         self._closing = True
         shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())

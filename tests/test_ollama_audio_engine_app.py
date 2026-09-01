@@ -173,6 +173,54 @@ def test_engine_manager_uses_the_saved_ollama_model(monkeypatch, tmp_path):
     assert created == ["gemma4:12b"]
 
 
+def test_ollama_timeout_reports_a_retryable_message_not_unavailable(monkeypatch):
+    import socket
+    import threading
+    import time
+
+    from voice_studio import ollama_local
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(1)
+    port = server.getsockname()[1]
+
+    def accept_and_hang():
+        try:
+            conn, _ = server.accept()
+        except OSError:
+            return
+        time.sleep(2)
+        conn.close()
+
+    thread = threading.Thread(target=accept_and_hang, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setattr(ollama_local, "OLLAMA_BASE_URL", f"http://127.0.0.1:{port}")
+
+        with pytest.raises(RuntimeError, match="did not answer within 0 s"):
+            OllamaClient()._request("/api/tags", timeout=0.5)
+    finally:
+        server.close()
+        thread.join(timeout=5)
+
+
+def test_ollama_connection_refused_still_reports_unavailable(monkeypatch):
+    import socket
+
+    from voice_studio import ollama_local
+
+    closed = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    closed.bind(("127.0.0.1", 0))
+    port = closed.getsockname()[1]
+    closed.close()
+
+    monkeypatch.setattr(ollama_local, "OLLAMA_BASE_URL", f"http://127.0.0.1:{port}")
+
+    with pytest.raises(RuntimeError, match="Local Ollama is unavailable"):
+        OllamaClient()._request("/api/tags", timeout=3.0)
+
+
 def test_loopback_client_bypasses_system_proxy_variables(monkeypatch):
     import http.server
     import json as json_module

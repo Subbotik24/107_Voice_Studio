@@ -247,18 +247,21 @@ def test_raising_the_threshold_refilters_the_list() -> None:
     ]
 
 
-def test_an_invalid_threshold_reports_a_status_and_keeps_the_list() -> None:
+def test_an_invalid_threshold_reports_a_status_and_clears_the_stale_list() -> None:
+    """A rejected threshold must not leave a list next to it that ignores the rejection."""
+
     app = _mixed_app()
     app._refresh_confidence_panel()
-    listed = list(app.confidence_list.rows)
-    entries = app._confidence_entries
+    assert app.confidence_list.rows
+    assert app._confidence_entries
 
     for value in ("", "abc", "-0.1", "1.4"):
         app.confidence_threshold_var.set(value)
         app._refresh_confidence_panel()
         assert app.status.get() == translate("en", "editor_confidence_threshold_invalid")
-        assert app.confidence_list.rows == listed
-        assert app._confidence_entries == entries
+        assert app.confidence_list.rows == []
+        assert app._confidence_entries == []
+        assert app.editor.tags[EDITOR_CONFIDENCE_TAG] == []
 
 
 def test_the_threshold_is_page_state_and_never_reaches_settings(monkeypatch) -> None:

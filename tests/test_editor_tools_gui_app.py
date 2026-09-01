@@ -512,6 +512,44 @@ def test_apply_filler_removal_with_nothing_selected_is_a_no_op() -> None:
     assert app.status.get() == ""
 
 
+def test_apply_filler_removal_refuses_when_the_editor_text_changed_since_the_snapshot() -> None:
+    text = "um one um two"
+    app = _editor_app(text, language="en", current=SimpleNamespace(id="t1"))
+    matches = find_filler_matches(text, "en")
+    snapshot = ("t1", text)
+    app.editor.text = "a completely different transcript now"
+
+    app._apply_filler_removal(matches, [True, True], snapshot=snapshot)
+
+    assert app.editor.text == "a completely different transcript now"
+    assert app.status.get() == translate("en", "editor_filler_stale")
+
+
+def test_apply_filler_removal_refuses_when_the_current_transcript_changed() -> None:
+    text = "um one um two"
+    app = _editor_app(text, language="en", current=SimpleNamespace(id="t1"))
+    matches = find_filler_matches(text, "en")
+    snapshot = ("t1", text)
+    app.current = SimpleNamespace(id="t2")
+
+    app._apply_filler_removal(matches, [True, True], snapshot=snapshot)
+
+    assert app.editor.text == text
+    assert app.status.get() == translate("en", "editor_filler_stale")
+
+
+def test_apply_filler_removal_with_a_matching_snapshot_still_applies() -> None:
+    text = "um one um two"
+    app = _editor_app(text, language="en", current=SimpleNamespace(id="t1"))
+    matches = find_filler_matches(text, "en")
+    snapshot = ("t1", text)
+
+    app._apply_filler_removal(matches, [True, True], snapshot=snapshot)
+
+    assert app.editor.text == "one two"
+    assert app.status.get() == translate("en", "editor_filler_removed", count=2)
+
+
 def test_filler_context_snippet_is_bounded_and_single_line() -> None:
     text = "a" * 60 + "\num\n" + "b" * 60
     match = FillerMatch(61, 63, "um")

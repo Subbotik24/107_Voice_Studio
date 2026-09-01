@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import fractions
 import sys
 import threading
 import time
+import wave
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 import voice_studio.playback as playback_module
@@ -457,6 +460,95 @@ def test_playback_worker_failing_to_stop_is_reported(
     sink.close()
     assert wait_until(lambda: player.stop(timeout=0.5) is True)
     assert_no_playback_threads()
+
+
+def _write_wav(path: Path, duration_s: float, sample_rate: int = 16_000) -> Path:
+    frame_count = int(duration_s * sample_rate)
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b"\0\0" * frame_count)
+    return path
+
+
+def _write_offset_mkv(
+    path: Path, duration_s: float, offset_s: float, sample_rate: int = 16_000
+) -> Path:
+    """Mux mono PCM audio into an MKV whose audio stream pts starts at ``offset_s``.
+
+    Reproduces the real-world case the auditor found: a container where the
+    audio stream's ``start_time`` is not zero, so playback positions must be
+    translated into the stream's own timestamp space before seeking.
+    """
+
+    import av
+
+    container = av.open(str(path), mode="w")
+    stream = container.add_stream("pcm_s16le", rate=sample_rate)
+    stream.layout = "mono"
+    total_samples = int(duration_s * sample_rate)
+    offset_samples = int(offset_s * sample_rate)
+    samples_per_frame = 1024
+    written = 0
+    while written < total_samples:
+        count = min(samples_per_frame, total_samples - written)
+        arr = np.zeros((1, count), dtype=np.int16)
+        frame = av.AudioFrame.from_ndarray(arr, format="s16", layout="mono")
+        frame.sample_rate = sample_rate
+        frame.pts = offset_samples + written
+        frame.time_base = fractions.Fraction(1, sample_rate)
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        written += count
+    for packet in stream.encode(None):
+        container.mux(packet)
+    container.close()
+    return path
+
+
+def _chunk_seconds(source: AvPcmSource, start: float) -> float:
+    total_bytes = sum(len(chunk) for chunk in source.chunks(start, 1.0))
+    return total_bytes / (source.sample_rate * source.channels * 2)
+
+
+def test_av_source_seeks_correctly_when_stream_start_time_is_zero(tmp_path: Path) -> None:
+    media = _write_wav(tmp_path / "sample.wav", duration_s=10.0)
+    source = AvPcmSource(media)
+
+    assert source.duration == pytest.approx(10.0, abs=0.05)
+    seconds = _chunk_seconds(source, 2.0)
+    source.close()
+
+    assert seconds == pytest.approx(8.0, abs=playback_module.CHUNK_SECONDS)
+
+
+def test_av_source_seek_and_duration_account_for_a_nonzero_stream_start_time(
+    tmp_path: Path,
+) -> None:
+    media = _write_offset_mkv(tmp_path / "offset.mkv", duration_s=10.0, offset_s=5.0)
+    source = AvPcmSource(media)
+
+    # The reported duration must exclude the stream's own start-time offset.
+    assert source.duration == pytest.approx(10.0, abs=0.05)
+    seconds = _chunk_seconds(source, 6.0)
+    source.close()
+
+    assert seconds == pytest.approx(4.0, abs=playback_module.CHUNK_SECONDS)
+
+
+def test_av_source_with_a_none_time_base_still_decodes_from_the_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    media = _write_wav(tmp_path / "sample.wav", duration_s=0.5)
+    source = AvPcmSource(media)
+    monkeypatch.setattr(type(source._stream), "time_base", property(lambda self: None))
+
+    chunks = list(source.chunks(0.0, 1.0))
+    source.close()
+
+    assert chunks
+    assert sum(len(chunk) for chunk in chunks) > 0
 
 
 def test_av_source_reports_an_unopenable_file(tmp_path: Path) -> None:

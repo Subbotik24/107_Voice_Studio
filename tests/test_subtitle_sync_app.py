@@ -14,6 +14,7 @@ from voice_studio.exporters import export_transcript
 from voice_studio.models import Segment, Transcript
 from voice_studio.service import PreparedSource, TranscriptionService
 from voice_studio.storage import LocalStore
+from voice_studio.subtitles import sync_segments
 
 
 def _segmented_transcript() -> Transcript:
@@ -199,6 +200,39 @@ def test_raw_segment_sequence_survives_an_edit_after_deletion(tmp_path):
 
     assert " ".join(s.text for s in updated.segments) == updated.raw_text
     assert [s.display_text for s in updated.segments] == ["hello", "planet"]
+
+
+def test_segment_empty_from_the_start_absorbs_into_the_preceding_group():
+    # A segment whose editable text is already empty before any edit (e.g. an
+    # "ем" filler cleared by AI cleanup) must not vanish from the document: its
+    # raw wording and interval are carried into the neighbouring surviving cue.
+    segments = [
+        Segment(start=0.0, end=1.0, text="привіт світ", corrected_text="Привіт світ"),
+        Segment(start=1.0, end=1.5, text="ем", corrected_text=""),
+        Segment(start=1.5, end=2.5, text="як справи", corrected_text=None),
+    ]
+    old_text = "Привіт світ як справи"
+
+    result = sync_segments(old_text, "Привіт світ! як справи", segments)
+
+    assert [s.display_text for s in result] == ["Привіт світ!", "як справи"]
+    assert [(s.start, s.end) for s in result] == [(0.0, 1.5), (1.5, 2.5)]
+    assert result[0].text == "привіт світ ем"
+    assert " ".join(s.text for s in result) == "привіт світ ем як справи"
+
+
+def test_segment_empty_from_the_start_absorbs_into_the_following_group_when_first():
+    segments = [
+        Segment(start=0.0, end=0.5, text="ем", corrected_text=""),
+        Segment(start=0.5, end=1.5, text="привіт світ", corrected_text="Привіт світ"),
+    ]
+    old_text = "Привіт світ"
+
+    result = sync_segments(old_text, "Привіт світе", segments)
+
+    assert [s.display_text for s in result] == ["Привіт світе"]
+    assert (result[0].start, result[0].end) == (0.0, 1.5)
+    assert result[0].text == "ем привіт світ"
 
 
 def test_delete_all_removes_every_segment_and_interval(tmp_path):

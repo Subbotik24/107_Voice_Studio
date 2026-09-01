@@ -103,6 +103,7 @@ def _managed_file(tmp_path: Path) -> Path:
 def _playback_app(tmp_path: Path, transcript: Transcript | None) -> VoiceStudioApp:
     app = object.__new__(VoiceStudioApp)
     app.settings = Settings(ui_language="en")
+    app._current_page = "dashboard"
     app.current = transcript
     app.store = FakeStore(tmp_path / "sources")
     app.status = FakeVar("")

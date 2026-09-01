@@ -249,6 +249,26 @@ def test_remove_matches_keeps_double_spaces_away_from_removals():
     assert remove_matches(text, find_filler_matches(text, "uk")) == "а  б в"
 
 
+def test_remove_matches_normalizes_crlf_like_lf():
+    text = "we um\r\nnext"
+    assert remove_matches(text, find_filler_matches(text, "en")) == "we\r\nnext"
+
+
+def test_remove_matches_normalizes_bare_cr_like_lf():
+    text = "we um\rnext"
+    assert remove_matches(text, find_filler_matches(text, "en")) == "we\rnext"
+
+
+def test_remove_matches_collapses_tabs_like_spaces():
+    text = "we\tum\tnext"
+    assert remove_matches(text, find_filler_matches(text, "en")) == "we\tnext"
+
+
+def test_remove_matches_keeps_the_left_separator_around_nbsp():
+    text = "we\xa0um next"
+    assert remove_matches(text, find_filler_matches(text, "en")) == "we\xa0next"
+
+
 def test_remove_matches_rejects_invalid_spans():
     with pytest.raises(ValueError):
         remove_matches("а ем б", [FillerMatch(2, 4, "ем"), FillerMatch(0, 3, "а")])

@@ -715,11 +715,26 @@ class LocalStore:
                         "editor_formatting": previous_formatting,
                     },
                 }
-                transcript.segments = sync_segments(
+                previous_raw_join = self._joined_raw_segment_text(transcript.segments)
+                new_segments = sync_segments(
                     transcript.corrected_text,
                     corrected_text,
                     transcript.segments,
                 )
+                # A deliberate full clear of the editor intentionally empties
+                # the segment list (the top-level raw_text stays the immutable
+                # record). Any other edit must keep every segment's raw
+                # wording intact — only that case is exempt from the check.
+                deliberate_full_clear = not corrected_text.strip()
+                if (
+                    not deliberate_full_clear
+                    and self._joined_raw_segment_text(new_segments) != previous_raw_join
+                ):
+                    raise ValueError(
+                        "immutable segment raw text cannot be changed: "
+                        "joined raw segment text differs from the stored transcript"
+                    )
+                transcript.segments = new_segments
                 transcript.corrected_text = (
                     document_text_from_segments(transcript.segments)
                     if had_segments
@@ -880,7 +895,13 @@ class LocalStore:
         args += (limit,)
         with self._connect() as db:
             rows = db.execute(sql, args).fetchall()
-        return [Transcript.from_dict(json.loads(row["payload_json"])) for row in rows]
+        results: list[Transcript] = []
+        for row in rows:
+            try:
+                results.append(Transcript.from_dict(json.loads(row["payload_json"])))
+            except Exception:
+                continue
+        return results
 
     def _list_filtered(
         self, query: str, limit: int, filters: HistoryFilter
@@ -940,9 +961,14 @@ class LocalStore:
         mismatched: list[str] = []
         unsafe: list[str] = []
         transcript_ids: set[str] = set()
+        invalid_records = 0
         source_root = self.sources.resolve()
         for row in rows:
-            transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            try:
+                transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            except Exception:
+                invalid_records += 1
+                continue
             try:
                 transcript_id = str(uuid.UUID(transcript.id))
             except (ValueError, AttributeError):
@@ -1053,6 +1079,7 @@ class LocalStore:
             "schema_version": SCHEMA_VERSION,
             "integrity": integrity,
             "records": len(rows),
+            "invalid_records": invalid_records,
             "orphans": sorted(orphans),
             "missing": sorted(missing),
             "missing_records": sorted(missing_records, key=lambda item: (item["path"], item["id"])),

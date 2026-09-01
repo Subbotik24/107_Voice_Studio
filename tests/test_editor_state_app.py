@@ -121,6 +121,9 @@ class FakeStore:
     def list(self, **_kwargs: object) -> list[Transcript]:
         return list(self.history)
 
+    def delete(self, transcript_id: str, *, delete_audio: bool = False) -> None:
+        self.calls.append(("delete", (transcript_id, delete_audio)))
+
 
 class FakeReadonly:
     def __init__(self) -> None:
@@ -162,7 +165,10 @@ def _app(*, text: str = "original", fail: Exception | None = None) -> VoiceStudi
     app.store = FakeStore(transcript, fail=fail)
     app.status = SimpleNamespace(values=[], set=lambda value: app.status.values.append(value))
     app._editor_baseline = snapshot_editor(text, app.editor.tags)
-    app.settings = SimpleNamespace(auto_copy=False, openai_cleanup_model="test-model")
+    app.settings = SimpleNamespace(
+        auto_copy=False, openai_cleanup_model="test-model", ui_language="uk"
+    )
+    app._current_page = "dashboard"
     app.confidence_panel_visible = False
     app._history_items = [transcript, _transcript("other")]
     app.history = FakeHistory(0)
@@ -297,6 +303,36 @@ def test_history_cancel_clears_selection_when_current_is_not_in_filtered_history
     app._select_history()
     assert app.history.curselection() == ()
     assert app.history.selection_events == ["clear"]
+
+
+def test_delete_selected_history_stops_playback_and_clears_the_current_view(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches an inline editor reset that skips stopping playback or clearing cleanup state."""
+
+    app = _app()
+    app.current.audio_retained = False
+    app.history.selected = 0
+    app._confirm_editor_transition = lambda: True
+    app._refresh_history = lambda: None
+    app._refresh_dashboard = lambda: None
+    app._cleanup_snapshot = snapshot_editor("stale", app.editor.tags)
+    app._cleanup_transcript_id = app.current.id
+    calls: list[object] = []
+    app._stop_playback = lambda: calls.append("stop_playback")
+    monkeypatch.setattr(app_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+
+    app._delete_selected_history()
+
+    assert calls == ["stop_playback"]
+    assert app.store.calls == [("delete", ("id-1", False))]
+    assert app.current is None
+    assert app.editor.text == ""
+    assert app.editor.tags == {"bold": [], "italic": []}
+    assert app.raw_editor.text == ""
+    assert app.details.text == ""
+    assert app._cleanup_snapshot is None
+    assert app._cleanup_transcript_id is None
 
 
 def test_current_none_draft_is_dirty_and_save_cancel_reports_error(
@@ -625,7 +661,7 @@ def test_restore_reload_clears_stale_transcript_and_editor_state(
     app._cleanup_snapshot = snapshot_editor("stale pre-restore edit", app.editor.tags)
     app._cleanup_transcript_id = app.current.id
     calls: list[str] = []
-    restored_settings = SimpleNamespace(ui_language="en")
+    restored_settings = SimpleNamespace(ui_language="uk")
     monkeypatch.setattr(app_module, "load_settings", lambda: restored_settings)
     app._restart_runtime = lambda: calls.append("runtime")
     app._refresh_history = lambda: calls.append("history")
@@ -644,6 +680,47 @@ def test_restore_reload_clears_stale_transcript_and_editor_state(
     assert app._cleanup_transcript_id is None
     assert app._editor_is_dirty() is False
     assert calls == ["runtime", "history", "ui", "hotkey"]
+
+
+def test_restore_reload_rebuilds_the_settings_page_instead_of_the_hotkey(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restore while parked on Settings must not restart the hotkey behind a stale page."""
+
+    app = _app()
+    app._current_page = "settings"
+    calls: list[str] = []
+    restored_settings = SimpleNamespace(ui_language="uk")
+    monkeypatch.setattr(app_module, "load_settings", lambda: restored_settings)
+    app._restart_runtime = lambda: calls.append("runtime")
+    app._refresh_history = lambda: calls.append("history")
+    app._refresh_ui_text = lambda: calls.append("ui")
+    app._start_hotkey = lambda: calls.append("hotkey")
+    app._build_settings_page = lambda: calls.append("settings_page")
+
+    app._reload_after_restore()
+
+    assert "hotkey" not in calls
+    assert "settings_page" in calls
+
+
+def test_restore_reload_resets_the_help_page_when_ui_language_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _app()
+    app.settings.ui_language = "uk"
+    calls: list[str] = []
+    restored_settings = SimpleNamespace(ui_language="cs")
+    monkeypatch.setattr(app_module, "load_settings", lambda: restored_settings)
+    app._restart_runtime = lambda: calls.append("runtime")
+    app._refresh_history = lambda: calls.append("history")
+    app._refresh_ui_text = lambda: calls.append("ui")
+    app._start_hotkey = lambda: calls.append("hotkey")
+    app._reset_help_page = lambda: calls.append("reset_help")
+
+    app._reload_after_restore()
+
+    assert calls.index("reset_help") < calls.index("ui")
 
 
 @pytest.mark.parametrize(

@@ -188,6 +188,10 @@ def find_filler_matches(
     )
 
 
+_LINE_END_CHARS = "\n\r"
+_SPACE_CHARS = " \t\xa0"
+
+
 def remove_matches(text: str, matches: Sequence[FillerMatch]) -> str:
     """Remove the listed spans, tidying whitespace only at each removal point."""
 
@@ -199,15 +203,15 @@ def remove_matches(text: str, matches: Sequence[FillerMatch]) -> str:
     for match in matches:
         out += text[cursor : match.start]
         end = match.end
-        at_line_start = not out or out.endswith("\n")
-        at_line_end = end >= len(text) or text[end] == "\n"
+        at_line_start = not out or out[-1] in _LINE_END_CHARS
+        at_line_end = end >= len(text) or text[end] in _LINE_END_CHARS
         if at_line_start:
-            cursor = end + 1 if end < len(text) and text[end] == " " else end
+            cursor = end + 1 if end < len(text) and text[end] in _SPACE_CHARS else end
         elif at_line_end:
-            if out.endswith(" "):
+            if out and out[-1] in _SPACE_CHARS:
                 out = out[:-1]
             cursor = end
-        elif out.endswith(" ") and text[end] == " ":
+        elif out and out[-1] in _SPACE_CHARS and text[end] in _SPACE_CHARS:
             cursor = end + 1
         else:
             cursor = end

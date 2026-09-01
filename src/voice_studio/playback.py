@@ -139,16 +139,23 @@ class AvPcmSource:
         resampler = self._av.AudioResampler(format="s16", layout=layout, rate=output_rate)
         pending = bytearray()
         skip_bytes: int | None = None
+        offset = self._stream_offset()
+        time_base = self._stream.time_base
 
         try:
-            self._container.seek(
-                max(0, int(start / self._stream.time_base)),
-                stream=self._stream,
-            )
+            if start > 0 and time_base:
+                self._container.seek(
+                    max(0, int((start + offset) / time_base)),
+                    stream=self._stream,
+                )
             for frame in self._container.decode(self._stream):
                 if skip_bytes is None:
                     frame_time = frame.time
-                    lead = 0.0 if frame_time is None else max(0.0, start - float(frame_time))
+                    lead = (
+                        0.0
+                        if frame_time is None
+                        else max(0.0, start - (float(frame_time) - offset))
+                    )
                     skip_bytes = int(lead * output_rate) * self._frame_bytes
                 for resampled in resampler.resample(frame):
                     pending += resampled.to_ndarray().tobytes()
@@ -192,6 +199,13 @@ class AvPcmSource:
         except BaseException:
             pass
 
+    def _stream_offset(self) -> float:
+        start_time = getattr(self._stream, "start_time", None)
+        time_base = getattr(self._stream, "time_base", None)
+        if start_time is not None and time_base:
+            return float(start_time * time_base)
+        return 0.0
+
     def _stream_duration(self) -> float | None:
         duration = getattr(self._stream, "duration", None)
         time_base = getattr(self._stream, "time_base", None)
@@ -199,7 +213,7 @@ class AvPcmSource:
             return float(duration * time_base)
         container_duration = getattr(self._container, "duration", None)
         if container_duration is not None:
-            return float(container_duration) / 1_000_000
+            return max(0.0, float(container_duration) / 1_000_000 - self._stream_offset())
         return None
 
 

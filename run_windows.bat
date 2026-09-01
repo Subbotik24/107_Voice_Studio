@@ -1,20 +1,31 @@
 @echo off
-setlocal
+setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
 rem Self-update a developer checkout: sync to the latest main before the
 rem launch. Offline or without git the launcher just starts what is here.
 rem Local edits inside the checkout are discarded by the sync.
+set "UPDATE_MOVED_HEAD=0"
 if exist ".git" (
   git --version >nul 2>nul
   if not errorlevel 1 (
     echo Updating VOICE Studio to the latest version...
+    set "HAS_LOCAL_CHANGES="
+    for /f "delims=" %%s in ('git status --porcelain 2^>nul') do set "HAS_LOCAL_CHANGES=1"
+    if defined HAS_LOCAL_CHANGES echo Local changes in this folder are discarded by the update.
+    set "BEFORE_REV="
+    for /f "delims=" %%h in ('git rev-parse HEAD 2^>nul') do set "BEFORE_REV=%%h"
+    set "GIT_TERMINAL_PROMPT=0"
     git fetch origin
     if errorlevel 1 (
       echo Offline or fetch failed - starting the current version.
     ) else (
       git checkout -f -B main origin/main
+      if errorlevel 1 echo Update could not be applied - starting the current version.
     )
+    set "AFTER_REV="
+    for /f "delims=" %%h in ('git rev-parse HEAD 2^>nul') do set "AFTER_REV=%%h"
+    if not "!BEFORE_REV!"=="!AFTER_REV!" if not "!AFTER_REV!"=="" set "UPDATE_MOVED_HEAD=1"
   )
 )
 
@@ -45,6 +56,11 @@ if errorlevel 1 (
 .venv\Scripts\python.exe -c "import voice_studio" >nul 2>nul
 if errorlevel 1 (
   echo Installing VOICE Studio into .venv ^(first run only^)...
+  .venv\Scripts\python.exe -m pip install -e ".[cloud]"
+  if errorlevel 1 exit /b 1
+)
+if not "!UPDATE_MOVED_HEAD!"=="0" (
+  echo Update changed the code - reinstalling dependencies...
   .venv\Scripts\python.exe -m pip install -e ".[cloud]"
   if errorlevel 1 exit /b 1
 )

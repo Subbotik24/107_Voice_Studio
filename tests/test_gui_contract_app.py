@@ -153,6 +153,23 @@ def test_leaving_the_settings_page_releases_its_bindings_before_the_global_hotke
     assert scheduled == [app._start_hotkey], "the real hotkey starter must be the deferred call"
     assert app._settings_capture_binding is None
     assert app._settings_ollama_combo is None
+
+
+def test_leaving_settings_records_the_deferred_hotkey_restart_handle() -> None:
+    """The handle must be kept so a quick re-entry to Settings can cancel it."""
+
+    app = object.__new__(VoiceStudioApp)
+    app._settings_ollama_combo = None
+    app._settings_hardware_device_combo = None
+    app._settings_hardware_compute_combo = None
+    app._settings_info_var = None
+    app._settings_ollama_status_var = None
+    app._settings_capture_binding = None
+    app.after_idle = lambda _callback: "idle-handle-42"
+
+    VoiceStudioApp._leave_settings_page(app)
+
+    assert app._hotkey_restart_handle == "idle-handle-42"
     assert app._settings_info_var is None
     assert app._settings_ollama_status_var is None
 
@@ -796,7 +813,18 @@ def test_exactly_one_engine_page_is_gridded_for_the_selected_profile() -> None:
     assert pages["whisper-local"].calls == ["grid_remove", "grid", "grid_remove"]
 
 
-def _ollama_event_stub(settings) -> VoiceStudioApp:
+class _FakeOllamaModelVar:
+    def __init__(self, value: str = "") -> None:
+        self.value = value
+
+    def get(self) -> str:
+        return self.value
+
+    def set(self, value: str) -> None:
+        self.value = value
+
+
+def _ollama_event_stub(settings, *, ollama_model_variable: str | None = "") -> VoiceStudioApp:
     app = _worker_registry_stub()
     app.settings = settings
     app._installed_ollama_audio_models = []
@@ -814,11 +842,20 @@ def _ollama_event_stub(settings) -> VoiceStudioApp:
         values=[],
         set=lambda value: app._settings_ollama_status_var.values.append(value),
     )
+    app._settings_baseline = {}
+    app._settings_variables = {}
+    if ollama_model_variable is not None:
+        variable = _FakeOllamaModelVar(ollama_model_variable)
+        app._settings_variables["ollama_model"] = variable
+        app._settings_baseline["ollama_model"] = ollama_model_variable
+    else:
+        variable = None
 
     class Combo:
-        def __init__(self):
+        def __init__(self, linked_variable=None):
             self.values = ()
             self.selected = ""
+            self._linked_variable = linked_variable
 
         def winfo_exists(self):
             return True
@@ -828,8 +865,10 @@ def _ollama_event_stub(settings) -> VoiceStudioApp:
 
         def set(self, value):
             self.selected = value
+            if self._linked_variable is not None:
+                self._linked_variable.set(value)
 
-    app._settings_ollama_combo = Combo()
+    app._settings_ollama_combo = Combo(variable)
     return app
 
 
@@ -886,6 +925,53 @@ def test_an_unreachable_ollama_still_reports_its_error_in_the_settings_status() 
     assert app._settings_ollama_combo.values == ()
 
 
+def test_a_user_edited_ollama_model_field_survives_a_discovery_event() -> None:
+    """A running discovery must not clobber a choice the user is mid-editing."""
+
+    app = _ollama_event_stub(
+        app_module.Settings(ollama_model="gemma4:12b"),
+        ollama_model_variable="llama4:custom",
+    )
+    app._settings_baseline["ollama_model"] = "gemma4:12b"
+    app.events.put(
+        (
+            "ollama_models",
+            {"models": ["gemma4:12b"], "all_models": ["gemma4:12b"], "error": ""},
+        )
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._settings_ollama_combo.selected == ""
+    assert app._settings_variables["ollama_model"].get() == "llama4:custom"
+    assert app._settings_baseline["ollama_model"] == "gemma4:12b"
+    assert VoiceStudioApp._settings_page_is_dirty(app) is True
+
+
+def test_an_untouched_ollama_model_field_adopts_the_auto_picked_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page the user has not touched should keep reflecting the discovered model."""
+
+    app = _ollama_event_stub(app_module.Settings(ollama_model=""), ollama_model_variable="")
+    monkeypatch.setattr(app_module, "save_settings", lambda _settings: None)
+    app._refresh_ui_text = lambda: None
+    app.events.put(
+        (
+            "ollama_models",
+            {"models": ["gemma4:12b"], "all_models": ["gemma4:12b"], "error": ""},
+        )
+    )
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app.settings.ollama_model == "gemma4:12b"
+    assert app._settings_ollama_combo.selected == "gemma4:12b"
+    assert app._settings_variables["ollama_model"].get() == "gemma4:12b"
+    assert app._settings_baseline["ollama_model"] == "gemma4:12b"
+    assert VoiceStudioApp._settings_page_is_dirty(app) is False
+
+
 def test_settings_hardware_controls_are_readonly_and_detection_is_explicit() -> None:
     settings_page = inspect.getsource(VoiceStudioApp._build_settings_page)
 
@@ -936,6 +1022,39 @@ def test_hardware_event_updates_advisory_choices_without_selecting_settings() ->
         "int8",
         "float16",
     ]
+
+
+def test_a_malformed_hardware_detection_event_reports_a_bounded_detail() -> None:
+    """A payload that fails HardwareDetectionResult validation must not crash while reporting it."""
+
+    from voice_studio.i18n import translate
+
+    app = _worker_registry_stub()
+    app._t = lambda key, **values: translate("en", key, **values)
+    app._settings_info_var = SimpleNamespace(
+        values=[],
+        set=lambda value: app._settings_info_var.values.append(value),
+    )
+
+    class Combo:
+        def __init__(self):
+            self.values = []
+
+        def winfo_exists(self):
+            return True
+
+        def configure(self, **kwargs):
+            self.values = list(kwargs["values"])
+
+    app._settings_hardware_device_combo = Combo()
+    app._settings_hardware_compute_combo = Combo()
+    app.after = lambda *_args: None
+    app.events.put(("hardware_detection", "not-a-result"))
+
+    VoiceStudioApp._poll_events(app)
+
+    assert app._settings_info_var.values
+    assert "not-a-result" in app._settings_info_var.values[0]
 
 
 def test_hardware_detection_is_single_worker_and_probe_runs_off_tk_thread(monkeypatch):

@@ -5,14 +5,26 @@ cd "$(dirname "$0")"
 # Self-update a developer checkout: sync to the latest main before the
 # launch. Offline or without git the launcher just starts what is here.
 # Local edits inside the checkout are discarded by the sync.
+# --- self-update: begin ---
+update_moved_head=0
 if [ -d .git ] && command -v git >/dev/null 2>&1; then
   echo "Updating VOICE Studio to the latest version…"
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "Local changes in this folder are discarded by the update."
+  fi
+  before_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+  export GIT_TERMINAL_PROMPT=0
   if git fetch origin; then
-    git checkout -f -B main origin/main
+    git checkout -f -B main origin/main || echo "Update could not be applied - starting the current version."
   else
     echo "Offline or fetch failed — starting the current version."
   fi
+  after_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [ -n "$before_rev" ] && [ -n "$after_rev" ] && [ "$before_rev" != "$after_rev" ]; then
+    update_moved_head=1
+  fi
 fi
+# --- self-update: end ---
 
 if [ -z "${PYTHON_BIN:-}" ]; then
   for candidate in python3.12 python3.11 python3; do
@@ -46,6 +58,10 @@ fi
   echo "Installing VOICE Studio into .venv (first run only)…"
   .venv/bin/python -m pip install -e ".[cloud]"
 }
+if [ "$update_moved_head" = "1" ]; then
+  echo "Update changed the code — reinstalling dependencies…"
+  .venv/bin/python -m pip install -e ".[cloud]"
+fi
 # Always run the source tree sitting in this folder, never a stale copy
 # installed inside .venv: right after `git pull` this launcher starts
 # exactly the pulled code.
