@@ -22,6 +22,8 @@ def registry_url() -> str | None:
 
 
 def fetch_registry(url: str, *, timeout_seconds: int) -> dict[str, Any]:
+    if not str(url).startswith("https://"):
+        raise ValueError("model registry URL must use HTTPS")
     request = urllib.request.Request(url, headers={"User-Agent": "VOICE-Studio"})
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
         payload = json.loads(response.read().decode("utf-8"))

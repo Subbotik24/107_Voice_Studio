@@ -12,8 +12,13 @@ from voice_studio.cloud_cleanup import (
     propose_cleanup,
     validate_cleanup_payload,
 )
-from voice_studio.engines.openai_cloud import MAX_CLOUD_AUDIO_BYTES, OpenAICloudEngine
-from voice_studio.model_release import find_asset, unpack_verified_archive
+from voice_studio.engines.openai_cloud import (
+    MAX_CLOUD_AUDIO_BYTES,
+    SUPPORTED_OPENAI_MEDIA_EXTENSIONS,
+    OpenAICloudEngine,
+)
+from voice_studio.media import SUPPORTED_MEDIA_EXTENSIONS
+from voice_studio.model_release import fetch_registry, find_asset, unpack_verified_archive
 from voice_studio.models import Segment, Settings, Transcript
 from voice_studio.ollama_local import OllamaClient
 from voice_studio.storage import LocalStore
@@ -190,6 +195,27 @@ def test_model_registry_rejects_invalid_asset_metadata() -> None:
     }
     with pytest.raises(ValueError, match="SHA-256"):
         find_asset(registry, "tiny")
+
+
+def test_cloud_media_extensions_are_a_subset_of_supported_media_extensions() -> None:
+    # Any extension the cloud engine accepts must also be a format
+    # validate_media_file() accepts locally, or the job passes consent and
+    # then fails mid-job in validate_media_file for a "supported" format.
+    assert SUPPORTED_OPENAI_MEDIA_EXTENSIONS <= SUPPORTED_MEDIA_EXTENSIONS
+
+
+def test_fetch_registry_rejects_non_https_url_without_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unexpected_urlopen(*_args, **_kwargs):
+        raise AssertionError("fetch_registry must not open a connection for a rejected URL")
+
+    monkeypatch.setattr(
+        "voice_studio.model_release.urllib.request.urlopen", _unexpected_urlopen
+    )
+
+    with pytest.raises(ValueError, match="HTTPS"):
+        fetch_registry("http://example.invalid/model-registry-v1.json", timeout_seconds=5)
 
 
 def test_model_archive_requires_exact_declared_unpacked_size(tmp_path: Path) -> None:

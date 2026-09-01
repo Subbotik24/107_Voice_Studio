@@ -15,7 +15,7 @@ from ..models import Segment
 from .base import EngineResult
 
 MAX_CLOUD_AUDIO_BYTES = 25 * 1024 * 1024
-SUPPORTED_OPENAI_MEDIA_EXTENSIONS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+SUPPORTED_OPENAI_MEDIA_EXTENSIONS = {".mp3", ".mp4", ".m4a", ".wav", ".webm"}
 
 
 def _response_value(response: Any, name: str, default: Any = None) -> Any:
@@ -64,7 +64,7 @@ class OpenAICloudEngine:
             raise FileNotFoundError(source)
         if source.suffix.lower() not in SUPPORTED_OPENAI_MEDIA_EXTENSIONS:
             raise ValueError(
-                "OpenAI transcription accepts mp3, mp4, mpeg, mpga, m4a, wav, or webm files"
+                "OpenAI transcription accepts mp3, mp4, m4a, wav, or webm files"
             )
         size = source.stat().st_size
         if size <= 0:
