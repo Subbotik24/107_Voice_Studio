@@ -93,6 +93,20 @@ R1/R2 capabilities are not part of the current completion scope.
      (`1135 passed`, 14 junction skips, 2026-09-01); packaged/native acceptance,
      фізичний Tk smoke і відтворення на реальному аудіопристрої — NOT RUN.
 
+12. **Черга, Розумний текст, папка синхронізації (feature pack 2026-09)**
+   - черга файлів у пам'яті на тому самому job path, без паралельних задач;
+   - абзаци за паузами, часові мітки, ручні мітки спікерів у metadata;
+   - локальне дзеркало у папку користувача з валідацією кореня при збереженні
+     та перед кожним записом; нічого не видаляє, ключів і `source_path` не пише;
+   - стан: реалізовано й перевірено source/headless (`1379 passed`, R0.11
+     фікси 2026-09-02); рішенням власника включено до R0 як amendment до
+     `docs/superpowers/specs/2026-08-30-voice-studio-r0-completion-design.md`;
+     реальний cloud-клієнт, реальний движок у черзі й native acceptance — NOT RUN.
+
+Повний поетапний план до кінцевого стану, включно з протоколами native
+acceptance, `models-v1`, підпису та go/no-go:
+`docs/superpowers/plans/2026-09-02-completion-plan.md`.
+
 Наступні кроки P0: native/packaged acceptance на Windows 10/11 x64 і macOS
 Apple Silicon (пункти 1 і 4), release assets `models-v1` через
 `scripts/build_model_release.py`, далі signing/notarization.
@@ -102,7 +116,8 @@ Apple Silicon (пункти 1 і 4), release assets `models-v1` через
 - speaker diarization;
 - word timestamps;
 - повний segment editor із split/retime і ручною корекцією часових меж;
-- batch transcription;
+- відновлення черги після перезапуску, scheduler/budgets і per-item retry
+  (сама черга в пам'яті вже в R0);
 - profiles словників за проєктами;
 - автоматичне вставлення в active app після окремого security review;
 - локальний REST/IPC adapter лише після окремого security review.

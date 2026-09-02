@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -59,11 +60,23 @@ def test_launchers_survive_a_failed_checkout_and_still_launch() -> None:
         assert fallback_index > checkout_index
 
 
+def test_launchers_self_update_is_opt_in_and_off_by_default() -> None:
+    """A launch must not contact the network unless the user asked for it."""
+
+    mac = (PROJECT_ROOT / "run_mac.command").read_text(encoding="utf-8")
+    windows = (PROJECT_ROOT / "run_windows.bat").read_text(encoding="utf-8")
+    assert '[ "${VOICE_STUDIO_AUTO_UPDATE:-0}" = "1" ]' in mac
+    assert 'if "%VOICE_STUDIO_AUTO_UPDATE%"=="1" if exist ".git"' in windows
+    for launcher in (mac, windows):
+        assert launcher.index("VOICE_STUDIO_AUTO_UPDATE") < launcher.index("git fetch origin")
+
+
 def test_launchers_warn_before_discarding_local_edits() -> None:
     for name in ("run_windows.bat", "run_mac.command"):
         launcher = (PROJECT_ROOT / name).read_text(encoding="utf-8")
         assert "git status --porcelain" in launcher
-        assert "Local changes in this folder are discarded by the update." in launcher
+        assert "Local changes in this folder are kept - the update is skipped." in launcher
+        assert "discarded by the update" not in launcher
 
 
 def test_launchers_reinstall_dependencies_when_the_update_moved_head() -> None:
@@ -114,7 +127,51 @@ def test_mac_launcher_update_block_survives_a_missing_origin_main(tmp_path: Path
     update_block = launcher[begin:end]
 
     repo = _write_git_repo_with_master_only(tmp_path)
-    script = repo / "update_block.sh"
+    script = tmp_path / "update_block.sh"
+    script.write_text(
+        "#!/bin/bash\nset -euo pipefail\n" + update_block + "\necho LAUNCH_REACHED\n",
+        encoding="utf-8",
+    )
+
+    environment = {**os.environ, "VOICE_STUDIO_AUTO_UPDATE": "1"}
+    result = subprocess.run(
+        ["bash", str(script)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "LAUNCH_REACHED" in result.stdout
+    assert "Update could not be applied" in result.stdout
+
+    # Without the opt-in the block is inert: no fetch attempt, no message.
+    quiet = subprocess.run(
+        ["bash", str(script)],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={key: value for key, value in os.environ.items() if key != "VOICE_STUDIO_AUTO_UPDATE"},
+    )
+    assert quiet.returncode == 0, quiet.stdout + quiet.stderr
+    assert "LAUNCH_REACHED" in quiet.stdout
+    assert "Updating VOICE Studio" not in quiet.stdout
+
+
+def test_mac_launcher_update_block_keeps_local_edits(tmp_path: Path) -> None:
+    """A dirty checkout is never overwritten: the update is skipped instead."""
+
+    launcher = (PROJECT_ROOT / "run_mac.command").read_text(encoding="utf-8")
+    begin = launcher.index("# --- self-update: begin ---")
+    end = launcher.index("# --- self-update: end ---") + len("# --- self-update: end ---")
+    update_block = launcher[begin:end]
+
+    repo = _write_git_repo_with_master_only(tmp_path)
+    (repo / "file.txt").write_text("edited locally\n", encoding="utf-8")
+    script = tmp_path / "update_block.sh"
     script.write_text(
         "#!/bin/bash\nset -euo pipefail\n" + update_block + "\necho LAUNCH_REACHED\n",
         encoding="utf-8",
@@ -126,11 +183,13 @@ def test_mac_launcher_update_block_survives_a_missing_origin_main(tmp_path: Path
         capture_output=True,
         text=True,
         timeout=30,
+        env={**os.environ, "VOICE_STUDIO_AUTO_UPDATE": "1"},
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "the update is skipped" in result.stdout
     assert "LAUNCH_REACHED" in result.stdout
-    assert "Update could not be applied" in result.stdout
+    assert (repo / "file.txt").read_text(encoding="utf-8") == "edited locally\n"
 
 
 def test_windows_launcher_always_runs_the_checked_out_source_tree() -> None:

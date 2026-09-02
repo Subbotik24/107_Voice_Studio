@@ -2,26 +2,30 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# Self-update a developer checkout: sync to the latest main before the
-# launch. Offline or without git the launcher just starts what is here.
-# Local edits inside the checkout are discarded by the sync.
+# Optional self-update of a developer checkout: only when the user sets
+# VOICE_STUDIO_AUTO_UPDATE=1 the launcher contacts origin and syncs to the
+# latest main before the launch. It is off by default because the product is
+# local/private by default and a launch must not make a network call on its
+# own. Offline or without git the launcher just starts what is here, and a
+# checkout with local edits is never overwritten.
 # --- self-update: begin ---
 update_moved_head=0
-if [ -d .git ] && command -v git >/dev/null 2>&1; then
+if [ "${VOICE_STUDIO_AUTO_UPDATE:-0}" = "1" ] && [ -d .git ] && command -v git >/dev/null 2>&1; then
   echo "Updating VOICE Studio to the latest version…"
   if [ -n "$(git status --porcelain)" ]; then
-    echo "Local changes in this folder are discarded by the update."
-  fi
-  before_rev="$(git rev-parse HEAD 2>/dev/null || true)"
-  export GIT_TERMINAL_PROMPT=0
-  if git fetch origin; then
-    git checkout -f -B main origin/main || echo "Update could not be applied - starting the current version."
+    echo "Local changes in this folder are kept - the update is skipped."
   else
-    echo "Offline or fetch failed — starting the current version."
-  fi
-  after_rev="$(git rev-parse HEAD 2>/dev/null || true)"
-  if [ -n "$before_rev" ] && [ -n "$after_rev" ] && [ "$before_rev" != "$after_rev" ]; then
-    update_moved_head=1
+    before_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+    export GIT_TERMINAL_PROMPT=0
+    if git fetch origin; then
+      git checkout -f -B main origin/main || echo "Update could not be applied - starting the current version."
+    else
+      echo "Offline or fetch failed — starting the current version."
+    fi
+    after_rev="$(git rev-parse HEAD 2>/dev/null || true)"
+    if [ -n "$before_rev" ] && [ -n "$after_rev" ] && [ "$before_rev" != "$after_rev" ]; then
+      update_moved_head=1
+    fi
   fi
 fi
 # --- self-update: end ---

@@ -89,6 +89,27 @@ def test_test_rc_build_is_atomic_and_refuses_overwrite() -> None:
     assert '"$PYTHON_BIN" -m pip wheel' not in build_script
 
 
+def test_the_project_version_is_identical_in_every_release_surface() -> None:
+    """pyproject, package, PyInstaller bundle, manifest script and build scripts agree."""
+
+    import tomllib
+
+    import voice_studio
+
+    pyproject = tomllib.loads((PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    version = pyproject["project"]["version"]
+    assert voice_studio.__version__ == version
+    spec = (PROJECT_ROOT / "packaging" / "voice_studio.spec").read_text(encoding="utf-8")
+    assert f'"CFBundleShortVersionString": "{version}"' in spec
+    manifest = (PROJECT_ROOT / "scripts" / "create_release_manifest.py").read_text(
+        encoding="utf-8"
+    )
+    assert f'_PROJECT_VERSION = "{version}"' in manifest
+    for script_name in ("build_windows.ps1", "build_test_rc.sh"):
+        script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
+        assert f'--project-version "{version}"' in script
+
+
 @pytest.mark.parametrize(
     "script_name",
     ["build_windows.ps1", "build_test_rc.sh"],

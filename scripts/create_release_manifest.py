@@ -19,6 +19,7 @@ else:
     from release_filesystem import file_fingerprint, read_file_within_root
 
 _PROJECT_VERSION = "0.3.0rc1"
+RELEASE_KINDS = ("unsigned-macos-test-rc", "unsigned-windows-test-rc")
 _FILE_ATTRIBUTE_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 
 
@@ -154,11 +155,14 @@ def create_manifest(
     release_label: str,
     acceptance_result: Path,
     repository_root: Path,
+    release_kind: str = RELEASE_KINDS[0],
 ) -> dict[str, Any]:
     acceptance_sha256, _ = _hash_file(acceptance_result)
     acceptance = json.loads(acceptance_result.read_text(encoding="utf-8"))
     if acceptance.get("status") != "PASS" or acceptance.get("tasks", 0) < 50:
         raise ValueError("release manifest requires a passing 50-task acceptance result")
+    if release_kind not in RELEASE_KINDS:
+        raise ValueError(f"unknown release kind: {release_kind!r}")
     sbom_bytes, sbom_path = _read_sbom_bytes(release_directory, sbom)
     try:
         sbom_document = json.loads(sbom_bytes.decode("utf-8"))
@@ -174,7 +178,7 @@ def create_manifest(
         "manifest_version": 1,
         "project_version": _PROJECT_VERSION,
         "release_label": release_label,
-        "release_kind": "unsigned-macos-test-rc",
+        "release_kind": release_kind,
         "created_at": datetime.now(UTC).isoformat(),
         "platform": {
             "system": platform.system(),
@@ -218,6 +222,7 @@ def main() -> int:
     parser.add_argument("--artifact", type=Path, action="append", required=True)
     parser.add_argument("--sbom", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--release-kind", choices=RELEASE_KINDS, default=RELEASE_KINDS[0])
     args = parser.parse_args()
     manifest = create_manifest(
         args.release_directory,
@@ -226,6 +231,7 @@ def main() -> int:
         release_label=args.release_label,
         acceptance_result=args.acceptance_result,
         repository_root=args.repository_root,
+        release_kind=args.release_kind,
     )
     args.output.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

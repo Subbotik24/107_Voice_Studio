@@ -2064,7 +2064,12 @@ class VoiceStudioApp(tk.Tk):
 
         updated.validate()
         if updated.sync_enabled:
-            validate_sync_root(Path(updated.sync_folder), data_root=data_dir())
+            # Persist the resolved absolute path, never the typed spelling: a
+            # ``~/...`` or relative entry validates fine but would otherwise be
+            # mirrored relative to the process working directory later.
+            updated.sync_folder = str(
+                validate_sync_root(Path(updated.sync_folder), data_root=data_dir())
+            )
 
     def _apply_settings_update(self, updated: Settings) -> bool:
         previous_ui_language = self.settings.ui_language
@@ -4834,6 +4839,7 @@ class VoiceStudioApp(tk.Tk):
                 Path(self.settings.sync_folder),
                 include_audio=self.settings.sync_include_audio,
                 sources_root=self.store.sources,
+                data_root=data_dir(),
             )
         except Exception as exc:  # noqa: BLE001 - surfaced on the status bar only
             self.status.set(self._t("sync_failed", error=str(exc)))
@@ -4855,6 +4861,7 @@ class VoiceStudioApp(tk.Tk):
             return
         include_audio = self.settings.sync_include_audio
         sources_root = self.store.sources
+        data_root = data_dir()
         self._set_busy(True)
         self.status.set(self._t("sync_running"))
 
@@ -4862,7 +4869,11 @@ class VoiceStudioApp(tk.Tk):
             try:
                 transcripts = self.store.list(limit=1_000_000)
                 summary = mirror_all(
-                    transcripts, root, include_audio=include_audio, sources_root=sources_root
+                    transcripts,
+                    root,
+                    include_audio=include_audio,
+                    sources_root=sources_root,
+                    data_root=data_root,
                 )
                 self._post_event("sync_done", summary)
             except Exception as exc:  # noqa: BLE001 - reported through the event, never raised

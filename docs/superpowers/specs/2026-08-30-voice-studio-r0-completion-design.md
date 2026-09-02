@@ -242,3 +242,23 @@ R0 is code-complete only when:
 
 R0 code completion produces an unsigned Test RC. Calling it a signed production
 release still requires the external gates.
+
+## Amendment 2026-09-02 — feature pack included in R0
+
+By product-owner decision the following user-requested capabilities, delivered
+on 2026-09-01/02 (`2718096`, `767bd7f`, `a35ff50`, `7a18328`), are part of R0
+and no longer listed under "Excluded from R0":
+
+- an in-memory batch queue on the existing single-job path (no scheduler, no
+  persistence across restarts, no parallel jobs);
+- Smart text rendering with manual speaker labels stored in transcript
+  metadata only;
+- a local sync-folder mirror (Markdown + JSON, optional managed audio copy)
+  with root validation on Save and before every write;
+- Dashboard dynamics charts, the playback position slider and the status-bar
+  progress indicator;
+- in-window Settings and Help pages and an opt-in launcher self-update.
+
+The R0 invariants in § 3 apply unchanged. Queue persistence, scheduling
+budgets and per-item retry remain R1 (`FUTURE_GROWTH.md`). The audit-driven
+completion plan is `docs/superpowers/plans/2026-09-02-completion-plan.md`.

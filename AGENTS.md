@@ -21,7 +21,8 @@
 
 1. Прочитати `README.md`, `ARCHITECTURE.md`, `IMPLEMENTATION_STATUS.md`,
    `ROADMAP.md`, `SECURITY.md` і `VERIFICATION.md`.
-2. Виконати:
+2. Виконати (набір тестів імпортує `tkinter` під час збирання: потрібен Python
+   із Tk; на headless Linux — `python3-tk`, `xvfb` і `xvfb-run -a` перед pytest):
 
 ```bash
 python -m compileall -q src tests

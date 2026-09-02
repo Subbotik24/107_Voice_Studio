@@ -13,6 +13,15 @@ release issue:
   selection to dictionary and filler preview on a real transcript; confidence
   panel focus and segment playback; playback bar play/pause/seek/speed through
   a real audio device with an external original untouched on disk;
+- feature-pack smoke on each OS: a queue of at least four mixed-format files
+  with one corrupt file (error recorded, queue continues), Cancel mid-queue and
+  Skip; Smart text with a speaker label and an MD export; the sync folder
+  pointed at a real Google Drive or OneDrive client folder (files appear only
+  through that client, no `source_path` in the JSON, a `~/...` entry is stored
+  absolute, deleting a record leaves the mirror), Dashboard dynamics charts,
+  the playback position slider, the status-bar progress during a queue, the
+  in-window Settings/Help pages, and one launcher start with
+  `VOICE_STUDIO_AUTO_UPDATE=1` online and one offline;
 - 50 local tasks per OS, zero crashes and originals unchanged;
 - one manual public-domain OpenAI STT call and cleanup proposal/apply/undo pass;
 - checksums, release manifest and `models-v1` provenance are attached;

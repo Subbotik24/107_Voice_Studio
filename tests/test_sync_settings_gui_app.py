@@ -153,6 +153,58 @@ def test_a_disabled_or_valid_sync_configuration_is_not_refused(
     )
 
 
+def test_save_persists_the_resolved_absolute_sync_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``~/...`` or relative entry must not be stored as typed (audit F-2)."""
+
+    monkeypatch.setattr(app_module, "data_dir", lambda: tmp_path / "data")
+    home = tmp_path / "home"
+    (home / "Drive").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    app = object.__new__(VoiceStudioApp)
+
+    updated = Settings(sync_enabled=True, sync_folder="~/Drive")
+    VoiceStudioApp._validate_settings_for_save(app, updated)
+
+    assert updated.sync_folder == str((home / "Drive").resolve())
+    assert "~" not in updated.sync_folder
+
+
+def test_mirror_quietly_revalidates_the_root_against_the_data_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Settings pointing inside the data root (hand-edited/restored) never mirror (F-1)."""
+
+    data_root = tmp_path / "data"
+    sources = data_root / "sources"
+    sources.mkdir(parents=True)
+    monkeypatch.setattr(app_module, "data_dir", lambda: data_root)
+    app = object.__new__(VoiceStudioApp)
+    app.settings = Settings(sync_enabled=True, sync_folder=str(sources))
+    app.store = SimpleNamespace(sources=sources)
+    messages: list[str] = []
+    app.status = SimpleNamespace(set=messages.append)
+    app._t = lambda key, **kw: f"{key}:{kw.get('error', '')}"
+    item = Transcript(
+        id="abcdef1234567890",
+        created_at="2026-09-02T10:00:00",
+        source_name="rec.wav",
+        source_sha256="0" * 64,
+        language="uk",
+        engine="ollama",
+        model="m",
+        raw_text="raw",
+        corrected_text="corr",
+    )
+
+    VoiceStudioApp._mirror_transcript_quietly(app, item)
+
+    assert list(sources.iterdir()) == []
+    assert messages and messages[-1].startswith("sync_failed:")
+
+
 # --- _mirror_transcript_quietly ----------------------------------------------
 
 

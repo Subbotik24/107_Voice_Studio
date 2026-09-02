@@ -3,6 +3,52 @@
 Only checks that were actually run are recorded here. A source check does not
 stand in for a packaged Windows executable check.
 
+## In-repo completion gate R0.11–R0.14 — 2026-09-02
+
+Environment: Linux x86_64 cloud VM, CPython 3.12.3 with `python3-tk`, Xvfb; a
+second CPython 3.11 venv for the wheel build. Source/headless only. Audit and
+plan: `docs/superpowers/plans/2026-09-02-completion-plan.md`.
+
+| Check | Result |
+| --- | --- |
+| `python -m compileall -q src tests scripts packaging` | PASS |
+| `python -m ruff check src tests scripts packaging` | PASS |
+| `python scripts/check_help.py` | PASS, 13 Markdown files |
+| `python scripts/check_workflow_pins.py .github/workflows` | PASS |
+| `bash -n run_mac.command` | PASS |
+| `PYTHONPATH=src xvfb-run -a python -m pytest -q -rs` | PASS, 1389 passed, 14 skipped (Windows junctions unavailable), 144.8 s |
+| `python -m build --wheel --no-isolation` | PASS, `voice_studio-0.3.0rc1-py3-none-any.whl` |
+| `python -m pip check` | PASS |
+| SBOM determinism (two `generate_sbom.py` runs) | PASS, byte-identical |
+| `git diff --check` | PASS |
+
+Failing-first evidence for the audit findings: before the fix
+`mirror_transcript` wrote inside the data root and recreated a removed root
+(scratch reproduction), and `validate_sync_root("~/Drive")` passed while the
+typed string was persisted; the new tests in `tests/test_sync_folder_app.py`,
+`tests/test_sync_settings_gui_app.py`, `tests/test_storage_app.py` and
+`tests/test_launchers_app.py` pin the corrected contracts (10 new tests, 1379 →
+1389).
+
+Changed in this round: sync mirror root re-validation at write time and no
+root creation (`sync_folder.py`, `app.py`); resolved absolute sync path on
+Save; `update_speaker_labels` under one `BEGIN IMMEDIATE`; launcher
+self-update opt-in via `VOICE_STUDIO_AUTO_UPDATE=1` and never over local
+edits; CodeQL `timeout-minutes` and 4.37.9 pins (Dependabot #6/#7 ported);
+Linux CI job with Tk under Xvfb; `create_release_manifest.py --release-kind`
+and an optional release manifest in `build_windows.ps1`; one
+version-consistency test; README (EN/UK parity restored), ARCHITECTURE,
+SECURITY, IMPLEMENTATION_STATUS, ROADMAP, FUTURE_GROWTH, RELEASE_ACCEPTANCE,
+R0 spec amendment, CLAUDE/AGENTS baseline and uk/cs/en Help aligned with the
+2026-09 feature pack.
+
+Not run and not claimed: any packaged or native run, a real audio device, a
+real Ollama/Whisper transcription, a real cloud-sync client, the new Linux CI
+job on GitHub (first execution happens on this push), deletion of the five
+stray remote branches (the session git proxy accepts pushes to `main` only),
+Dependabot PR #5 (`openai <4`, not ported: compatibility with a 3.x client
+unverified), branch protection, signing, WER/CER.
+
 ## Deep program audit and fix round — 2026-09-01
 
 Environment: Linux x86_64 container, CPython 3.12.3 virtual environment,

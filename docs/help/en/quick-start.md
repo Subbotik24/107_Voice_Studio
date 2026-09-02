@@ -6,7 +6,11 @@ Goal: create your first private transcript with the installed local Ollama.
 
 Open **VOICE Studio.exe**. The main window opens directly; no initial AI setup
 wizard is shown. For the portable build, extract the whole ZIP and keep the
-neighboring **VOICE Studio** folder with the executable.
+neighboring **VOICE Studio** folder with the executable. Starting from source
+with `run_windows.bat` or `run_mac.command` makes no network call; only the
+`VOICE_STUDIO_AUTO_UPDATE=1` variable enables updating the checkout to the
+latest `main` before the start, and a folder with local edits is never
+overwritten.
 
 ## 2. Check the local model
 

@@ -25,7 +25,9 @@ This is a privacy-first desktop transcription application. Treat this file and
 1. Read `README.md`, `README.uk.md`, `ARCHITECTURE.md`,
    `IMPLEMENTATION_STATUS.md`, `ROADMAP.md`, and `AGENTS.md`.
 2. Inspect `git status --short --branch` before editing. Preserve user changes.
-3. Run the baseline:
+3. Run the baseline (the suite imports `tkinter` at collection time, so use a
+   Python with Tk; on headless Linux install `python3-tk` and `xvfb` and prefix
+   pytest with `xvfb-run -a`):
 
    ```bash
    python -m compileall -q src tests
@@ -78,18 +80,26 @@ or signed artifact build was performed. Do not represent those as verified.
 
 ## Highest-priority next work
 
-1. Run the Windows 10/11 x64 and macOS Apple Silicon acceptance checklist in
-   `RELEASE_ACCEPTANCE.md`; capture evidence without private data. All
-   source/headless R0 increments (W2-C2 included) are COMPLETE — see
-   `IMPLEMENTATION_STATUS.md`.
-2. Run the R0.10 packaged/native acceptance for encrypted backup v2 (the
-   PyInstaller crypto probe recorded as NOT RUN in `VERIFICATION.md`).
-3. Create Tiny/Small `models-v1` release assets with
-   `scripts/build_model_release.py`, including upstream revision, inventory,
-   license/model card and SHA256SUMS. Never add those archives to Git.
-4. Build unsigned Test RC artifacts only after acceptance is green, then
-   signing/notarization (W4). Do not tag or publish a release until checksums
-   and release manifest exist.
+The staged plan to the final state is
+`docs/superpowers/plans/2026-09-02-completion-plan.md`. In-repo stages
+R0.11–R0.14 are complete as of 2026-09-02; what remains needs the owner's
+machines and services:
+
+1. W5-A/W5-B: run the Windows 10/11 x64 and macOS Apple Silicon acceptance
+   protocol in the plan and `RELEASE_ACCEPTANCE.md`; capture evidence without
+   private data. Every packaged artifact predates the 2026-09 feature pack, so
+   rebuild first.
+2. W4-M: create Tiny/Small `models-v1` release assets with
+   `scripts/build_model_release.py` per `docs/release/MODELS_V1_RUNBOOK.md`.
+   Never add those archives to Git.
+3. W4-R: build unsigned Test RC artifacts on both OSes from one commit only
+   after acceptance is green; tag only with checksums, manifests and SBOM
+   attached.
+4. P0.6, W4-S, W6: licensed WER/CER corpus, signing/notarization per
+   `docs/release/SIGNING_KEY_CUSTODY.md`, independent go/no-go.
+5. Owner decisions still open: Dependabot policy (PR #5 `openai <4` was not
+   ported; CodeQL 4.37.9 pins were), the Ed25519 update channel for 0.4,
+   deletion of the stray remote branches, branch protection on `main`.
 
 ## Windows source launch
 

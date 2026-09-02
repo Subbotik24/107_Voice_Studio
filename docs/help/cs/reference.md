@@ -71,7 +71,12 @@ přístupové klíče. Neplatná složka (neexistuje, je to soubor, symlink, neb
 uvnitř/kolem privátní datové složky) se při ukládání odmítne s vysvětlením chyby.
 Zrcadlení se také spouští automaticky po dokončení rozpoznávání, uložení úprav v
 editoru, přiřazení mluvčího a po použití AI čištění; případná chyba zrcadlení se
-jen zobrazí ve stavovém řádku a nikdy nezruší samotný zápis.
+jen zobrazí ve stavovém řádku a nikdy nezruší samotný zápis. Cesta se ukládá
+jako rozvinutá absolutní (zápis `~/Drive` se převede na plnou cestu) a kontrola
+složky se opakuje před každým zápisem: složka, která zmizela, byla nahrazena
+symlinkem nebo přesunuta dovnitř datové složky, vyvolá jen zprávu ve stavovém
+řádku a aplikace ji nikdy nevytváří znovu. Smazání záznamu z Historie nesmaže
+jeho zrcadlené soubory.
 
 ## Rozpoznávání
 

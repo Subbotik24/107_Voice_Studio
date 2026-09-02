@@ -986,6 +986,25 @@ def test_clearing_the_last_speaker_label_removes_the_metadata_key(tmp_path):
     assert "speaker_labels" not in store.get("1").metadata
 
 
+def test_speaker_labels_do_not_round_trip_through_get_and_save(tmp_path, monkeypatch):
+    """Read and write happen under one BEGIN IMMEDIATE (audit F-6, lost-update guard)."""
+
+    store = LocalStore(tmp_path)
+    store.save(transcript())
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("update_speaker_labels must not use get()/save()")
+
+    monkeypatch.setattr(store, "get", refuse)
+    monkeypatch.setattr(store, "save", refuse)
+
+    updated = store.update_speaker_labels("1", {0: "Olga"})
+
+    assert updated.metadata["speaker_labels"] == {"0": "Olga"}
+    monkeypatch.undo()
+    assert store.get("1").metadata["speaker_labels"] == {"0": "Olga"}
+
+
 def test_speaker_labels_for_a_missing_transcript_fail_fast(tmp_path):
     store = LocalStore(tmp_path)
 

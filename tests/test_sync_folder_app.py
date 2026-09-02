@@ -151,6 +151,7 @@ def test_transcript_mirror_names_slug_is_cut_to_60_characters():
 def test_transcript_mirror_names_fall_back_to_undated_subfolder(tmp_path):
     transcript = _transcript(created_at="not-a-timestamp")
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
 
@@ -164,6 +165,7 @@ def test_transcript_mirror_names_fall_back_to_undated_subfolder(tmp_path):
 
 def test_mirror_transcript_markdown_has_no_absolute_path_or_source_path(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     transcript = _transcript(
@@ -185,6 +187,7 @@ def test_mirror_transcript_markdown_has_no_absolute_path_or_source_path(tmp_path
 
 def test_mirror_transcript_json_has_no_source_path(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     transcript = _transcript(source_path=str(sources / "secret-original.wav"))
@@ -203,6 +206,7 @@ def test_mirror_transcript_json_has_no_source_path(tmp_path):
 
 def test_mirror_transcript_include_audio_copies_managed_retained_file(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     audio = sources / "clip.wav"
@@ -219,6 +223,7 @@ def test_mirror_transcript_include_audio_copies_managed_retained_file(tmp_path):
 
 def test_mirror_transcript_include_audio_skips_when_audio_not_retained(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     audio = sources / "clip.wav"
@@ -232,6 +237,7 @@ def test_mirror_transcript_include_audio_skips_when_audio_not_retained(tmp_path)
 
 def test_mirror_transcript_include_audio_skips_external_source(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     external = tmp_path / "outside" / "original.wav"
@@ -247,6 +253,7 @@ def test_mirror_transcript_include_audio_skips_external_source(tmp_path):
 
 def test_mirror_transcript_include_audio_skips_missing_file(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     transcript = _transcript(source_path=str(sources / "missing.wav"), audio_retained=True)
@@ -261,6 +268,7 @@ def test_mirror_transcript_include_audio_skips_missing_file(tmp_path):
 
 def test_mirror_transcript_is_idempotent_on_rerun(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     audio = sources / "clip.wav"
@@ -294,6 +302,7 @@ def test_mirror_transcript_never_deletes_stray_files_in_root(tmp_path):
 
 def test_mirror_transcript_leaves_no_leftover_temp_files(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     audio = sources / "clip.wav"
@@ -311,6 +320,7 @@ def test_mirror_transcript_leaves_no_leftover_temp_files(tmp_path):
 
 def test_mirror_all_mirrors_every_transcript(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
     transcripts = [
@@ -363,9 +373,89 @@ def test_mirror_all_captures_a_failing_transcript_and_continues(tmp_path):
 
 def test_mirror_all_returns_empty_summary_for_no_transcripts(tmp_path):
     root = tmp_path / "drive"
+    root.mkdir()
     sources = tmp_path / "sources"
     sources.mkdir()
 
     summary = mirror_all([], root, include_audio=False, sources_root=sources)
 
     assert summary == SyncSummary(written=0, audio=0, failed=())
+
+
+# --- mirror root safety at write time (audit 2026-09-02, F-1) -----------------
+
+
+def _transcript_for_root_tests():
+    return Transcript(
+        id="abcdef1234567890",
+        created_at="2026-09-02T10:00:00",
+        source_name="rec.wav",
+        source_sha256="0" * 64,
+        language="uk",
+        engine="ollama",
+        model="m",
+        raw_text="raw",
+        corrected_text="corr",
+    )
+
+
+def test_mirror_transcript_never_creates_a_missing_root(tmp_path):
+    """A removed or unmounted sync folder is reported, not recreated on disk."""
+
+    root = tmp_path / "usb-mount"
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    with pytest.raises(SyncFolderError, match="does not exist"):
+        mirror_transcript(
+            _transcript_for_root_tests(), root, include_audio=False, sources_root=sources
+        )
+    assert not root.exists()
+
+
+def test_mirror_transcript_revalidates_containment_with_data_root(tmp_path):
+    """A hand-edited or restored settings.json cannot point the mirror inside data."""
+
+    data_root = tmp_path / "data"
+    sources = data_root / "sources"
+    sources.mkdir(parents=True)
+    with pytest.raises(SyncFolderError, match="inside the application data folder"):
+        mirror_transcript(
+            _transcript_for_root_tests(),
+            sources,
+            include_audio=False,
+            sources_root=sources,
+            data_root=data_root,
+        )
+    assert list(sources.iterdir()) == []
+
+
+def test_mirror_transcript_rejects_a_root_replaced_by_a_symlink(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "drive"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError) as exc:  # pragma: no cover - privilege-bound
+        pytest.skip(f"symlink creation unavailable: {exc}")
+    sources = tmp_path / "sources"
+    sources.mkdir()
+    with pytest.raises(SyncFolderError, match="not a real directory"):
+        mirror_transcript(
+            _transcript_for_root_tests(), link, include_audio=False, sources_root=sources
+        )
+    assert list(real.iterdir()) == []
+
+
+def test_mirror_all_fails_closed_on_an_unsafe_root(tmp_path):
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    sources = data_root / "sources"
+    sources.mkdir()
+    with pytest.raises(SyncFolderError):
+        mirror_all(
+            [_transcript_for_root_tests()],
+            data_root,
+            include_audio=False,
+            sources_root=sources,
+            data_root=data_root,
+        )

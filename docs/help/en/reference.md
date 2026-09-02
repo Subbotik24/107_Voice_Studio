@@ -72,7 +72,12 @@ directory, a symlink, or one inside/around the private data folder) is
 refused on Save with the reason shown. Mirroring also runs automatically
 after a transcription finishes, after an editor save, after a speaker is
 assigned, and after AI cleanup is applied; any mirroring failure only shows
-on the status bar and never undoes the save that triggered it.
+on the status bar and never undoes the save that triggered it. The path is
+stored as a resolved absolute path (a `~/Drive` entry becomes the full path),
+and the folder check is repeated before every write: a folder that has gone
+missing, been replaced by a symlink or moved inside the data folder only
+produces a status-bar message, and the app never recreates it. Deleting a
+record from History does not delete its mirrored files.
 
 ## Recognition
 

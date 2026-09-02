@@ -1,5 +1,9 @@
 param(
-    [string]$ReleaseLabel = "0.3.0-test-rc1-windows-x64"
+    [string]$ReleaseLabel = "0.3.0-test-rc1-windows-x64",
+    # Path to a passing 50-task acceptance JSON. When given, a release
+    # manifest is written next to SHA256SUMS.txt exactly like the macOS Test RC
+    # flow; without it the copy is a smoke build and carries no manifest.
+    [string]$AcceptanceResult = $env:VOICE_STUDIO_ACCEPTANCE_RESULT
 )
 
 $ErrorActionPreference = "Stop"
@@ -182,6 +186,29 @@ This artifact must pass a real Windows 10/11 x64 microphone, hotkey and
 "@ | Set-Content -Path $ReadmePath -Encoding UTF8
 
     $ChecksumTargets = @($ArchivePath, $RuntimeProbe, $ReadmePath, $SBOM)
+    if ($AcceptanceResult) {
+        if (-not (Test-Path -LiteralPath $AcceptanceResult)) {
+            throw "VOICE_STUDIO_ACCEPTANCE_RESULT does not exist: $AcceptanceResult"
+        }
+        $AcceptanceCopy = Join-Path $StageDirectory "acceptance-result.json"
+        Copy-Item -LiteralPath $AcceptanceResult -Destination $AcceptanceCopy
+        $ManifestPath = Join-Path $StageDirectory "release-manifest.json"
+        Invoke-Checked $Python scripts/create_release_manifest.py `
+            --release-directory $StageDirectory `
+            --release-label $ReleaseLabel `
+            --release-kind unsigned-windows-test-rc `
+            --acceptance-result $AcceptanceCopy `
+            --repository-root $ProjectRoot `
+            --sbom $SBOM `
+            --artifact $ArchivePath `
+            --artifact $WheelPath `
+            --artifact $RuntimeProbe `
+            --artifact $AcceptanceCopy `
+            --output $ManifestPath | Out-Null
+        $ChecksumTargets += @($AcceptanceCopy, $ManifestPath)
+    } else {
+        Write-Host "No acceptance result given: smoke build without release-manifest.json"
+    }
     $ChecksumTargets += Get-ChildItem -LiteralPath $StageDirectory -Filter "*.whl" |
         Select-Object -ExpandProperty FullName
     $ChecksumLines = foreach ($Target in $ChecksumTargets) {

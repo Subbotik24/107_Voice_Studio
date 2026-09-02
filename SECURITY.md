@@ -73,6 +73,24 @@ report and asks for a private channel — no details.
 - Model archives require HTTPS, size checks, SHA-256, safe ZIP validation and
   atomic installation. ZIP members extract to fixed names, never to arbitrary
   paths.
+- The sync folder is an explicit, off-by-default export boundary. When enabled,
+  each stored transcript (`raw_text`, `corrected_text`, metadata including
+  speaker labels, optionally the retained managed audio copy) is written as
+  files into a folder the user chose, typically one a third-party cloud client
+  synchronises. The app makes no network call, never reads an external
+  original, never deletes anything there, writes no `source_path` and no keys,
+  and stores the folder as a resolved absolute path. The folder must exist,
+  must not be a symlink or reparse point and must lie outside the app data
+  folder; that check runs on Save and again before every mirror write, so a
+  hand-edited or restored `settings.json` cannot redirect the mirror. Deleting
+  a record does not delete its mirrored files: what left the device under the
+  cloud client's rules stays under those rules.
+- The batch queue reuses the single-file job path, including the per-file cloud
+  consent of the OpenAI profile, and is not persisted across restarts.
+- The source launchers make no network call by default. Only
+  `VOICE_STUDIO_AUTO_UPDATE=1` enables the developer self-update (fetch and
+  check out `origin/main` before the launch); a folder with local edits is
+  never overwritten, and the fetched code carries no publisher signature.
 - Model files must never be committed to Git.
 
 ## Unresolved production issues

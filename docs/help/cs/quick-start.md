@@ -6,7 +6,10 @@ Cíl: vytvořit první soukromý přepis pomocí místní Ollama.
 
 Otevřete **VOICE Studio.exe**. Program zobrazí rovnou hlavní okno; průvodce
 počátečním nastavením se automaticky neotevírá. U portable verze nejprve
-rozbalte celý ZIP včetně sousední složky **VOICE Studio**.
+rozbalte celý ZIP včetně sousední složky **VOICE Studio**. Spuštění ze
+zdrojového kódu přes `run_windows.bat` nebo `run_mac.command` nevyužívá síť;
+pouze proměnná `VOICE_STUDIO_AUTO_UPDATE=1` zapne aktualizaci checkoutu na
+nejnovější `main` před startem a složka s místními úpravami se nikdy nepřepíše.
 
 ## 2. Kontrola místního modelu
 

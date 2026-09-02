@@ -693,17 +693,28 @@ class LocalStore:
         """
 
         stored = speaker_labels_to_metadata(labels)
-        transcript = self.get(transcript_id)
-        if transcript is None:
-            raise KeyError(f"transcript not found: {transcript_id}")
-        metadata = {**transcript.metadata}
-        if stored:
-            metadata[SPEAKER_LABELS_KEY] = stored
-        else:
-            metadata.pop(SPEAKER_LABELS_KEY, None)
-        transcript.metadata = metadata
-        self.save(transcript)
-        return transcript
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload_json FROM transcripts WHERE id = ?", (transcript_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"transcript not found: {transcript_id}")
+            transcript = Transcript.from_dict(json.loads(row["payload_json"]))
+            metadata = {**transcript.metadata}
+            if stored:
+                metadata[SPEAKER_LABELS_KEY] = stored
+            else:
+                metadata.pop(SPEAKER_LABELS_KEY, None)
+            transcript.metadata = metadata
+            payload = json.dumps(transcript.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            # Read and write happen under one write lock, so a concurrent
+            # editor save (CLI or another process) cannot be lost in between.
+            db.execute(
+                "UPDATE transcripts SET payload_json = ? WHERE id = ?",
+                (payload, transcript.id),
+            )
+            return transcript
 
     def update_editor_state(
         self,

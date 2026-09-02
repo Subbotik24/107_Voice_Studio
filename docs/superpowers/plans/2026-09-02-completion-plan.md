@@ -221,6 +221,16 @@ SECURITY.md ні).
 
 ## 4. Рішення: етапи до кінцевого стану
 
+> **Стан на 2026-09-02 (вечір):** R0.11, R0.12, R0.14 і in-repo частина R0.13
+> виконані одним раундом (гейт `1389 passed`, 14 junction skips; запис у
+> `VERIFICATION.md` § «In-repo completion gate»). Прийняті припущення замість
+> рішень § 6: F-3 → opt-in `VOICE_STUDIO_AUTO_UPDATE=1`; batch/smart text/sync
+> у R0 (amendment у spec); Dependabot #6/#7 перенесено, #5 не перенесено.
+> Не виконано з цього середовища: видалення 5 сторонніх remote-гілок (git-проксі
+> сесії пропускає лише `main`), branch protection, F-5 (дзеркалення аудіо на
+> worker — лишається P4). Далі — лише етапи власника: W5-A/B, W4-M, W4-R, P0.6,
+> W4-S, W6.
+
 Нумерація продовжує R0 (R0.1–R0.10 закриті source/headless). Кожен in-repo етап =
 RED → GREEN → review → один controller full gate → commit → `git push origin main` →
 запис у `docs/verification/`. Кожен зовнішній етап має протокол і формат доказу.

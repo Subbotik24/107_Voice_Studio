@@ -52,6 +52,11 @@ more disk space. Offline import is available with
 `VOICE_STUDIO_MODEL_REGISTRY_URL` to the published `models-v1` registry URL to
 install the verified GitHub Release packs; no model binary belongs in Git.
 
+The launchers never contact the network on their own. A developer checkout can
+opt in to a self-update before each start with `VOICE_STUDIO_AUTO_UPDATE=1`;
+the launcher then fetches `origin/main` and checks it out, skips the update
+when the folder has local edits, and starts the current version when offline.
+
 ## Saved profiles, interface language and local Ollama
 
 Open **Settings → Profiles** to switch between **Local Ollama** (default),
@@ -149,6 +154,35 @@ These usability features have source/headless test evidence on Linux; playback
 through a real audio device and Windows/macOS packaged acceptance remain
 **NOT RUN**.
 
+## Batch queue, Smart text and sync folder
+
+**Queue** (the button on the Studio heading) transcribes many files one after
+another with the active profile: add files or a folder (optionally recursive),
+Start/Pause/Resume, Skip, remove finished rows. A failed file records its error
+and the queue continues; Cancel fails the running item and pauses the queue;
+only the last successful transcript opens in the editor and never over unsaved
+edits. Each file goes through the same job path as a single transcription,
+including the per-file cloud consent of the OpenAI profile. The queue lives in
+memory only and is not restored after a restart.
+
+**Smart text** (fourth Studio tab) renders the transcript as paragraphs split
+on pauses, with optional timestamps and manual speaker labels, and exports the
+result as Markdown or plain text. Speaker labels are stored in transcript
+metadata only; `raw_text` and the segments are never touched.
+
+**Sync folder** (Settings → Synchronisation) is the local alternative to a
+cloud upload: VOICE Studio writes each stored transcript as a Markdown + JSON
+pair, optionally with the retained managed audio copy, into a folder that a
+third-party client of your choice (Google Drive, OneDrive, …) may synchronise.
+The app itself makes no network call, never reads an external original, never
+deletes anything in that folder, writes no `source_path` and no keys, and stores
+the folder as a resolved absolute path. The folder must exist, must not be a
+symlink and must lie outside the app data folder; that check runs on Save and
+again before every mirror write, so a hand-edited or restored settings file
+cannot redirect the mirror. Deleting a record from History does not delete its
+mirrored files. Whatever you point the folder at leaves the device under that
+client's rules.
+
 ## Optional OpenAI features
 
 Cloud use is opt-in, never a fallback. Configure a key in an environment
@@ -228,7 +262,10 @@ python -m pip check
 ```
 
 The CI workflows run those checks on Python 3.11/3.12 for macOS ARM64 and
-Windows x64. Live cloud calls are intentionally excluded from CI.
+Windows x64, plus a Linux job on Python 3.12 with Tk under Xvfb, which is the
+environment the source/headless evidence is produced in. The test suite
+imports `tkinter` at collection time, so a Python without Tk cannot run it.
+Live cloud calls are intentionally excluded from CI.
 
 ## Data and privacy
 

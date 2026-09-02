@@ -2,17 +2,23 @@
 setlocal EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem Self-update a developer checkout: sync to the latest main before the
-rem launch. Offline or without git the launcher just starts what is here.
-rem Local edits inside the checkout are discarded by the sync.
+rem Optional self-update of a developer checkout: only when the user sets
+rem VOICE_STUDIO_AUTO_UPDATE=1 the launcher contacts origin and syncs to the
+rem latest main before the launch. Off by default: the product is local/private
+rem by default and a launch must not make a network call on its own. Offline or
+rem without git the launcher just starts what is here, and a checkout with
+rem local edits is never overwritten.
 set "UPDATE_MOVED_HEAD=0"
-if exist ".git" (
+if "%VOICE_STUDIO_AUTO_UPDATE%"=="1" if exist ".git" (
   git --version >nul 2>nul
   if not errorlevel 1 (
     echo Updating VOICE Studio to the latest version...
     set "HAS_LOCAL_CHANGES="
     for /f "delims=" %%s in ('git status --porcelain 2^>nul') do set "HAS_LOCAL_CHANGES=1"
-    if defined HAS_LOCAL_CHANGES echo Local changes in this folder are discarded by the update.
+    if defined HAS_LOCAL_CHANGES (
+      echo Local changes in this folder are kept - the update is skipped.
+      goto :launch
+    )
     set "BEFORE_REV="
     for /f "delims=" %%h in ('git rev-parse HEAD 2^>nul') do set "BEFORE_REV=%%h"
     set "GIT_TERMINAL_PROMPT=0"
@@ -28,6 +34,7 @@ if exist ".git" (
     if not "!BEFORE_REV!"=="!AFTER_REV!" if not "!AFTER_REV!"=="" set "UPDATE_MOVED_HEAD=1"
   )
 )
+:launch
 
 set "PYTHON_LAUNCHER=py -3.11"
 %PYTHON_LAUNCHER% -c "import sys" >nul 2>nul

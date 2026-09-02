@@ -160,8 +160,33 @@ def _render_markdown(transcript: Transcript) -> str:
     return "\n".join(lines)
 
 
+def _existing_mirror_root(root: Path, data_root: Path | None) -> Path:
+    """Return ``root`` only if it is still a safe, existing mirror target.
+
+    With ``data_root`` the full :func:`validate_sync_root` contract is applied
+    again at write time, so a hand-edited or restored ``settings.json`` cannot
+    bypass the containment check that Settings → Save performs. Without it the
+    folder must at least exist as a real directory: the mirror never creates
+    the root itself, so a removed or unmounted folder is reported instead of
+    being silently recreated on the local disk.
+    """
+
+    if data_root is not None:
+        return validate_sync_root(root, data_root=data_root)
+    candidate = Path(root).expanduser()
+    try:
+        entry = candidate.lstat()
+    except OSError as exc:
+        raise SyncFolderError(f"sync folder does not exist: {candidate}") from exc
+    if _is_reparse_point(entry) or not stat.S_ISDIR(entry.st_mode):
+        raise SyncFolderError(f"sync folder is not a real directory: {candidate}")
+    return candidate
+
+
 def _atomic_write_text(destination: Path, content: str) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    # Only the ``YYYY-MM`` sub-folder may be created here; the mirror root has
+    # been checked by ``_existing_mirror_root`` and is never (re)created.
+    destination.parent.mkdir(exist_ok=True)
     temp_name: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -188,7 +213,7 @@ def _atomic_write_text(destination: Path, content: str) -> None:
 
 
 def _atomic_copy_file(source: Path, destination: Path) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp"
     )
@@ -238,17 +263,21 @@ def mirror_transcript(
     *,
     include_audio: bool,
     sources_root: Path,
+    data_root: Path | None = None,
 ) -> tuple[Path, ...]:
     """Write (overwrite) one transcript's mirror files under ``root``.
 
     Writes are atomic (temp file + fsync + replace) and idempotent — re-running
     with the same transcript overwrites the same deterministic file names.
-    Nothing already present under ``root`` is ever deleted.
+    Nothing already present under ``root`` is ever deleted, and the root itself
+    is never created: it must already exist (and, when ``data_root`` is given,
+    pass :func:`validate_sync_root` again) or :class:`SyncFolderError` is raised.
     """
 
+    root = _existing_mirror_root(Path(root), data_root)
     md_name, json_name = transcript_mirror_names(transcript)
     base_name = md_name[: -len(".md")]
-    target_dir = Path(root) / _subfolder(transcript)
+    target_dir = root / _subfolder(transcript)
     md_path = target_dir / md_name
     json_path = target_dir / json_name
 
@@ -273,16 +302,26 @@ def mirror_all(
     *,
     include_audio: bool,
     sources_root: Path,
+    data_root: Path | None = None,
 ) -> SyncSummary:
-    """Mirror every transcript, capturing per-transcript failures instead of raising."""
+    """Mirror every transcript, capturing per-transcript failures instead of raising.
 
+    The root is checked once up front (see :func:`mirror_transcript`); an
+    unsafe or missing root raises before any transcript is touched.
+    """
+
+    root = _existing_mirror_root(Path(root), data_root)
     written = 0
     audio = 0
     failed: list[tuple[str, str]] = []
     for transcript in transcripts:
         try:
             paths = mirror_transcript(
-                transcript, root, include_audio=include_audio, sources_root=sources_root
+                transcript,
+                root,
+                include_audio=include_audio,
+                sources_root=sources_root,
+                data_root=data_root,
             )
         except Exception as exc:  # noqa: BLE001 - captured per transcript, never raised
             failed.append((transcript.id, str(exc)))
