@@ -220,7 +220,9 @@ def _atomic_copy_file(source: Path, destination: Path) -> None:
     os.close(fd)
     try:
         shutil.copyfile(source, temp_name)
-        with open(temp_name, "rb") as handle:
+        # Windows refuses fsync on a read-only handle (EBADF), so reopen the
+        # copy for update: no bytes are written, the data is only flushed.
+        with open(temp_name, "r+b") as handle:
             os.fsync(handle.fileno())
         os.replace(temp_name, destination)
         temp_name = None

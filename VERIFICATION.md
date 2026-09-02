@@ -42,6 +42,15 @@ SECURITY, IMPLEMENTATION_STATUS, ROADMAP, FUTURE_GROWTH, RELEASE_ACCEPTANCE,
 R0 spec amendment, CLAUDE/AGENTS baseline and uk/cs/en Help aligned with the
 2026-09 feature pack.
 
+GitHub CI finding: the `CI` workflow on `main` had been red on both
+windows-2022 jobs since 2026-09-01 (runs 60–73; macOS jobs green) while
+every Linux gate passed. Two causes, both fixed in the follow-up commit:
+the executable macOS launcher-block test invoked `bash`, which on a Windows
+runner is the WSL stub (now skipped on `win32`), and `_atomic_copy_file`
+called `os.fsync` on a read-only handle, which Windows rejects with EBADF
+(now reopened `r+b`). The remaining Windows-only signal is the CI run of
+that follow-up commit itself.
+
 Not run and not claimed: any packaged or native run, a real audio device, a
 real Ollama/Whisper transcription, a real cloud-sync client, the new Linux CI
 job on GitHub (first execution happens on this push), deletion of the five

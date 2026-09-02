@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -120,6 +123,14 @@ def _write_git_repo_with_master_only(tmp_path: Path) -> Path:
     return repo
 
 
+# ``bash`` on a Windows runner resolves to the WSL stub, which cannot run the
+# macOS launcher; the block is a POSIX shell script by definition.
+_POSIX_SHELL_ONLY = pytest.mark.skipif(
+    sys.platform == "win32", reason="the macOS launcher update block needs a POSIX bash"
+)
+
+
+@_POSIX_SHELL_ONLY
 def test_mac_launcher_update_block_survives_a_missing_origin_main(tmp_path: Path) -> None:
     launcher = (PROJECT_ROOT / "run_mac.command").read_text(encoding="utf-8")
     begin = launcher.index("# --- self-update: begin ---")
@@ -161,6 +172,7 @@ def test_mac_launcher_update_block_survives_a_missing_origin_main(tmp_path: Path
     assert "Updating VOICE Studio" not in quiet.stdout
 
 
+@_POSIX_SHELL_ONLY
 def test_mac_launcher_update_block_keeps_local_edits(tmp_path: Path) -> None:
     """A dirty checkout is never overwritten: the update is skipped instead."""
 
