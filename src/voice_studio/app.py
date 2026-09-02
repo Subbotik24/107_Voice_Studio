@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 import tkinter as tk
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -20,6 +21,7 @@ from .backup import (
     restore_backup,
     verify_backup,
 )
+from .batch import BatchQueue
 from .cloud_cleanup import list_ollama_models, propose_cleanup
 from .cloud_secrets import (
     delete_openai_api_key,
@@ -74,18 +76,52 @@ from .profiles import (
     with_preferred_ollama_model,
 )
 from .recorder import AudioRecorder
+from .smart_text import (
+    MAX_PARAGRAPH_GAP_SECONDS,
+    MAX_PARAGRAPH_SECONDS,
+    MIN_PARAGRAPH_SECONDS,
+    SmartTextOptions,
+    format_timestamp,
+    render_markdown,
+    render_plain,
+    speaker_labels_from_metadata,
+)
 from .storage import LocalStore
 from .subtitles import editable_text
 
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
 
 # Visible build stamp in the window title so an outdated launch is obvious.
-APP_BUILD = "2026-09-01.12"
+APP_BUILD = "2026-09-02.1"
 EDITOR_FIND_TAG = "editor_find"
 EDITOR_CONFIDENCE_TAG = "editor_confidence"
 FILLER_CONTEXT_WIDTH = 30
 CONFIDENCE_SNIPPET_WIDTH = 48
 DEFAULT_CONFIDENCE_THRESHOLD = "0.60"
+SMART_TEXT_SNIPPET_WIDTH = 40
+DEFAULT_SMART_TEXT_GAP = "2.0"
+DEFAULT_SMART_TEXT_MAX = "90"
+BATCH_COLUMNS = (
+    ("file", "batch_column_file", 240),
+    ("status", "batch_column_status", 120),
+    ("seconds", "batch_column_seconds", 90),
+    ("error", "batch_column_error", 280),
+)
+
+def _write_text_atomically(destination: Path, content: str) -> Path:
+    """Write one exported text file the way ``exporters`` does: never partial."""
+
+    destination = destination.expanduser()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f"{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(content)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return destination
+
 
 MEDIA_FILETYPES = [
     ("Audio/video", "*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.aac *.mp4 *.mov *.mkv *.webm"),
@@ -253,6 +289,11 @@ class VoiceStudioApp(tk.Tk):
         self._shutdown_residue_threads: tuple[str, ...] = ()
         self._history_items: list[Transcript] = []
         self._busy = False
+        self.batch_queue = BatchQueue()
+        self._batch_owned = False
+        self._batch_started: float | None = None
+        self._batch_last_transcript: Transcript | None = None
+        self._smart_text_rendered = ""
         self._continuous_recording = False
         self._pending_microphone_files: set[Path] = set()
         self._active_recording_path: Path | None = None
@@ -829,6 +870,12 @@ class VoiceStudioApp(tk.Tk):
             style="PrimaryLarge.TButton",
         )
         self.file_button.pack(side="right", padx=(18, 0))
+        self.batch_button = ttk.Button(
+            heading,
+            text=self._t("batch_button"),
+            command=self._toggle_batch_panel,
+        )
+        self.batch_button.pack(side="right", padx=(12, 0))
         heading_copy = ttk.Frame(heading, style="Canvas.TFrame")
         heading_copy.pack(side="left", fill="x", expand=True)
         self.workspace_kicker_label = ttk.Label(
@@ -880,6 +927,78 @@ class VoiceStudioApp(tk.Tk):
         )
         self.copy_button.pack(side="right")
 
+        self.batch_panel = ttk.Labelframe(
+            main_area,
+            text=self._t("batch_panel_title"),
+            padding=12,
+            style="Card.TLabelframe",
+        )
+        self.batch_panel.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        self.batch_panel.grid_remove()
+        self.batch_panel_visible = False
+        self.batch_panel.grid_columnconfigure(0, weight=1)
+        batch_list_frame = ttk.Frame(self.batch_panel, style="Card.TFrame")
+        batch_list_frame.grid(row=0, column=0, sticky="ew")
+        self.batch_tree = ttk.Treeview(
+            batch_list_frame,
+            columns=tuple(column for column, _key, _width in BATCH_COLUMNS),
+            show="headings",
+            height=4,
+            selectmode="extended",
+        )
+        for column, key, width in BATCH_COLUMNS:
+            self.batch_tree.heading(column, text=self._t(key))
+            self.batch_tree.column(column, width=width, stretch=column == "error")
+        batch_scrollbar = ttk.Scrollbar(
+            batch_list_frame, orient="vertical", command=self.batch_tree.yview
+        )
+        self.batch_tree.configure(yscrollcommand=batch_scrollbar.set)
+        self.batch_tree.pack(side="left", fill="both", expand=True)
+        batch_scrollbar.pack(side="right", fill="y")
+        # Two rows: sources on the first, run control on the second, so the
+        # panel never clips its buttons at the default window width.
+        batch_sources = ttk.Frame(self.batch_panel, style="Card.TFrame")
+        batch_sources.grid(row=1, column=0, sticky="ew", pady=(8, 0))
+        batch_actions = ttk.Frame(self.batch_panel, style="Card.TFrame")
+        batch_actions.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._batch_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("batch_add_files", self._batch_add_files),
+            ("batch_add_folder", self._batch_add_folder),
+        ):
+            button = ttk.Button(batch_sources, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._batch_button_keys[button] = key
+        self.batch_recursive_var = tk.BooleanVar(value=False)
+        self.batch_recursive_check = ttk.Checkbutton(
+            batch_sources,
+            text=self._t("batch_recursive"),
+            variable=self.batch_recursive_var,
+        )
+        self.batch_recursive_check.pack(side="left", padx=(10, 0))
+        start_button = ttk.Button(
+            batch_actions,
+            text=self._t("batch_start"),
+            command=self._batch_start,
+            style="Primary.TButton",
+        )
+        start_button.pack(side="left", padx=(0, 5))
+        self._batch_button_keys[start_button] = "batch_start"
+        self.batch_pause_button = ttk.Button(
+            batch_actions,
+            text=self._t("batch_pause"),
+            command=self._batch_toggle_pause,
+        )
+        self.batch_pause_button.pack(side="left", padx=(0, 5))
+        for key, command in (
+            ("batch_skip", self._batch_skip_selected),
+            ("batch_clear_finished", self._batch_clear_finished),
+            ("batch_clear", self._batch_clear),
+        ):
+            button = ttk.Button(batch_actions, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._batch_button_keys[button] = key
+
         self.editor_frame = ttk.Labelframe(
             main_area, text=self._t("transcript"), padding=14, style="Card.TLabelframe"
         )
@@ -890,9 +1009,11 @@ class VoiceStudioApp(tk.Tk):
         corrected_frame = ttk.Frame(self.notebook, style="Card.TFrame")
         raw_frame = ttk.Frame(self.notebook, style="Card.TFrame")
         details_frame = ttk.Frame(self.notebook, style="Card.TFrame")
+        smart_text_frame = ttk.Frame(self.notebook, style="Card.TFrame")
         self.notebook.add(corrected_frame, text=self._t("corrected_text"))
         self.notebook.add(raw_frame, text=self._t("raw"))
         self.notebook.add(details_frame, text=self._t("data"))
+        self.notebook.add(smart_text_frame, text=self._t("smart_text_tab"))
 
         format_bar = ttk.Frame(corrected_frame, padding=(0, 7, 0, 7), style="Card.TFrame")
         format_bar.pack(fill="x")
@@ -1135,6 +1256,127 @@ class VoiceStudioApp(tk.Tk):
             pady=12,
         )
         self.details.pack(fill="both", expand=True)
+
+        smart_options = ttk.Frame(smart_text_frame, padding=(0, 7, 0, 7), style="Card.TFrame")
+        smart_options.pack(fill="x")
+        self.smart_text_gap_label = ttk.Label(
+            smart_options, text=self._t("smart_text_gap"), style="CardMuted.TLabel"
+        )
+        self.smart_text_gap_label.pack(side="left")
+        self.smart_gap_var = tk.StringVar(value=DEFAULT_SMART_TEXT_GAP)
+        smart_gap_spin = ttk.Spinbox(
+            smart_options,
+            from_=0.0,
+            to=MAX_PARAGRAPH_GAP_SECONDS,
+            increment=0.5,
+            width=6,
+            textvariable=self.smart_gap_var,
+            command=self._refresh_smart_text,
+        )
+        smart_gap_spin.pack(side="left", padx=(6, 14))
+        smart_gap_spin.bind("<Return>", lambda _event: self._refresh_smart_text())
+        self.smart_text_max_label = ttk.Label(
+            smart_options, text=self._t("smart_text_max"), style="CardMuted.TLabel"
+        )
+        self.smart_text_max_label.pack(side="left")
+        self.smart_max_var = tk.StringVar(value=DEFAULT_SMART_TEXT_MAX)
+        smart_max_spin = ttk.Spinbox(
+            smart_options,
+            from_=MIN_PARAGRAPH_SECONDS,
+            to=MAX_PARAGRAPH_SECONDS,
+            increment=5.0,
+            width=6,
+            textvariable=self.smart_max_var,
+            command=self._refresh_smart_text,
+        )
+        smart_max_spin.pack(side="left", padx=(6, 14))
+        smart_max_spin.bind("<Return>", lambda _event: self._refresh_smart_text())
+        self.smart_timestamps_var = tk.BooleanVar(value=True)
+        self.smart_timestamps_check = ttk.Checkbutton(
+            smart_options,
+            text=self._t("smart_text_timestamps"),
+            variable=self.smart_timestamps_var,
+            command=self._refresh_smart_text,
+        )
+        self.smart_timestamps_check.pack(side="left")
+        self.smart_speakers_var = tk.BooleanVar(value=True)
+        self.smart_speakers_check = ttk.Checkbutton(
+            smart_options,
+            text=self._t("smart_text_speakers"),
+            variable=self.smart_speakers_var,
+            command=self._refresh_smart_text,
+        )
+        self.smart_speakers_check.pack(side="left", padx=(10, 0))
+        # Actions sit on their own row: with the options they clip at the
+        # default window width.
+        smart_actions = ttk.Frame(smart_text_frame, padding=(0, 0, 0, 7), style="Card.TFrame")
+        smart_actions.pack(fill="x")
+        self._smart_text_button_keys: dict[ttk.Button, str] = {}
+        for key, command in (
+            ("smart_text_refresh", self._refresh_smart_text),
+            ("smart_text_copy", self._copy_smart_text),
+            ("smart_text_export_md", partial(self._export_smart_text, "md")),
+            ("smart_text_export_txt", partial(self._export_smart_text, "txt")),
+        ):
+            button = ttk.Button(smart_actions, text=self._t(key), command=command)
+            button.pack(side="left", padx=(0, 5))
+            self._smart_text_button_keys[button] = key
+        # Preview and segment list share the height side by side: stacked,
+        # the list would squeeze the preview out of a small window.
+        smart_body = ttk.Frame(smart_text_frame, style="Card.TFrame")
+        smart_body.pack(fill="both", expand=True)
+        smart_speakers = ttk.Frame(smart_body, padding=(10, 0, 0, 0), style="Card.TFrame")
+        smart_speakers.pack(side="right", fill="y")
+        self.smart_text_view = tk.Text(
+            smart_body,
+            wrap="word",
+            height=5,
+            width=40,
+            font=(theme.ui_font, 11),
+            state="disabled",
+            background=theme.surface,
+            foreground=theme.ink,
+            relief="flat",
+            padx=14,
+            pady=12,
+        )
+        self.smart_text_view.pack(side="left", fill="both", expand=True)
+        self.smart_speaker_caption = ttk.Label(
+            smart_speakers,
+            text=self._t("smart_text_speaker_list"),
+            style="CardMuted.TLabel",
+        )
+        self.smart_speaker_caption.pack(anchor="w")
+        smart_speaker_button = ttk.Button(
+            smart_speakers,
+            text=self._t("smart_text_assign_speaker"),
+            command=self._assign_smart_speaker,
+        )
+        smart_speaker_button.pack(fill="x", pady=(4, 4))
+        self._smart_text_button_keys[smart_speaker_button] = "smart_text_assign_speaker"
+        smart_speaker_frame = ttk.Frame(smart_speakers, style="Card.TFrame")
+        smart_speaker_frame.pack(fill="both", expand=True)
+        self.smart_speaker_list = tk.Listbox(
+            smart_speaker_frame,
+            height=3,
+            width=44,
+            activestyle="dotbox",
+            background=theme.surface,
+            foreground=theme.ink,
+            selectbackground=theme.selection,
+            selectforeground=theme.ink,
+            highlightbackground=theme.border,
+            highlightcolor=theme.accent,
+            relief="flat",
+            borderwidth=1,
+            font=(theme.ui_font, 10),
+        )
+        smart_speaker_scrollbar = ttk.Scrollbar(
+            smart_speaker_frame, orient="vertical", command=self.smart_speaker_list.yview
+        )
+        self.smart_speaker_list.configure(yscrollcommand=smart_speaker_scrollbar.set)
+        self.smart_speaker_list.pack(side="left", fill="both", expand=True)
+        smart_speaker_scrollbar.pack(side="right", fill="y")
 
         export_bar = ttk.Frame(self.editor_frame, style="Card.TFrame")
         export_bar.pack(fill="x", pady=(10, 0))
@@ -2228,6 +2470,8 @@ class VoiceStudioApp(tk.Tk):
         self._refresh_editor_tools_ui_text()
         self._refresh_confidence_ui_text()
         self._refresh_playback_ui_text()
+        self._refresh_batch_ui_text()
+        self._refresh_smart_text_ui_text()
         self.local_boundary_label.configure(text=self._t("local_boundary"))
         self.local_boundary_detail_label.configure(text=self._t("local_boundary_detail"))
         self.record_button.configure(text=self._t("hold_record"))
@@ -2245,6 +2489,7 @@ class VoiceStudioApp(tk.Tk):
         self.notebook.tab(0, text=self._t("corrected_text"))
         self.notebook.tab(1, text=self._t("raw"))
         self.notebook.tab(2, text=self._t("data"))
+        self.notebook.tab(3, text=self._t("smart_text_tab"))
         self.format_label.configure(text=self._t("formatting"))
         self.save_edits_button.configure(text=self._t("save_edits"))
         self.cleanup_button.configure(text=self._t("cleanup"))
@@ -2607,16 +2852,25 @@ class VoiceStudioApp(tk.Tk):
                     transcript, cleanup = value
                     self._cleanup_temp(cleanup)
                     self._set_busy(False)
-                    if not self._try_show_result(transcript, copy=True):
-                        self._refresh_history(select_id=self.current.id if self.current else None)
-                        self._refresh_dashboard()
-                    self._report_automatic_cleanup_warning(transcript)
+                    if self.__dict__.get("_batch_owned", False):
+                        self._batch_job_finished(transcript=transcript)
+                    else:
+                        if not self._try_show_result(transcript, copy=True):
+                            self._refresh_history(
+                                select_id=self.current.id if self.current else None
+                            )
+                            self._refresh_dashboard()
+                        self._report_automatic_cleanup_warning(transcript)
                 elif event == "error":
                     error, cleanup = value
                     self._cleanup_temp(cleanup)
                     self._set_busy(False)
-                    self.status.set(self._t("processing_error"))
-                    messagebox.showerror(self._t("error"), str(error))
+                    if self.__dict__.get("_batch_owned", False):
+                        # One failed file must not stop the queue behind a modal.
+                        self._batch_job_finished(error=error)
+                    else:
+                        self.status.set(self._t("processing_error"))
+                        messagebox.showerror(self._t("error"), str(error))
                 elif event == "model_progress":
                     downloaded, expected = value
                     percent = min(99, round(downloaded * 100 / max(expected, 1)))
@@ -2732,6 +2986,8 @@ class VoiceStudioApp(tk.Tk):
                     self._cleanup_temp(cleanup)
                     self._set_busy(False)
                     self.status.set(self._t("task_cancelled"))
+                    if self.__dict__.get("_batch_owned", False):
+                        self._batch_job_cancelled()
                 elif event == "backup_done":
                     action, result = value
                     self._set_busy(False)
@@ -2935,7 +3191,7 @@ class VoiceStudioApp(tk.Tk):
         if name:
             self._process(Path(name), cleanup=False)
 
-    def _process(self, source: Path, *, cleanup: bool) -> bool:
+    def _process(self, source: Path, *, cleanup: bool, batch: bool = False) -> bool:
         if self._busy:
             # The source is retained for a later retry; deleting it here would
             # discard a finished recording while another job is still running.
@@ -2977,6 +3233,10 @@ class VoiceStudioApp(tk.Tk):
                 return False
         self._set_busy(True)
         self._cancel_event.clear()
+        # The done/error/cancel handlers need to know whether this job is the
+        # queue's, and Tk callbacks are single threaded, so the flag is set
+        # before the worker can post its first event.
+        self._batch_owned = batch
         self.status.set(self._t("prepare_local"))
 
         def work() -> None:
@@ -3005,6 +3265,7 @@ class VoiceStudioApp(tk.Tk):
             # completion event cleared the busy flag; recover instead of
             # letting the error escape into the Tk callback.
             self._set_busy(False)
+            self._batch_owned = False
             self.status.set(
                 f"{self._t('processing_not_started')} {self._t('task_already_running')}"
             )
@@ -3014,6 +3275,345 @@ class VoiceStudioApp(tk.Tk):
         if self._busy:
             self._cancel_event.set()
             self.status.set(self._t("cancel_running"))
+
+    # -- batch transcription queue -----------------------------------------
+
+    def _toggle_batch_panel(self) -> None:
+        if self.batch_panel_visible:
+            self.batch_panel.grid_remove()
+            self.batch_panel_visible = False
+            return
+        self.batch_panel.grid()
+        self.batch_panel_visible = True
+        self._batch_refresh_view()
+
+    def _batch_refresh_view(self) -> None:
+        """Redraw the queue rows and the pause/resume label from the model."""
+
+        tree = self.__dict__.get("batch_tree")
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        for index, item in enumerate(self.batch_queue.items):
+            tree.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(
+                    item.path.name,
+                    self._t(f"batch_status_{item.status}"),
+                    f"{item.seconds:.1f}",
+                    item.error or "",
+                ),
+            )
+        pause_button = self.__dict__.get("batch_pause_button")
+        if pause_button is not None:
+            pause_button.configure(
+                text=self._t("batch_resume" if self.batch_queue.paused else "batch_pause")
+            )
+
+    def _refresh_batch_ui_text(self) -> None:
+        self.batch_button.configure(text=self._t("batch_button"))
+        self.batch_panel.configure(text=self._t("batch_panel_title"))
+        self.batch_recursive_check.configure(text=self._t("batch_recursive"))
+        for button, key in self._batch_button_keys.items():
+            button.configure(text=self._t(key))
+        for column, key, _width in BATCH_COLUMNS:
+            self.batch_tree.heading(column, text=self._t(key))
+        self._batch_refresh_view()
+
+    def _batch_report(
+        self, added: list[Path], rejected: list[tuple[Path, str]]
+    ) -> None:
+        parts = [self._t("batch_added", count=len(added))]
+        if rejected:
+            parts.append(self._t("batch_rejected", count=len(rejected)))
+        self.status.set(" ".join(parts))
+        self._batch_refresh_view()
+
+    def _batch_add_files(self) -> None:
+        selection = filedialog.askopenfilenames(filetypes=MEDIA_FILETYPES)
+        if isinstance(selection, str):
+            selection = self.tk.splitlist(selection) if selection else ()
+        if not selection:
+            return
+        added, rejected = self.batch_queue.add_paths(Path(name) for name in selection)
+        self._batch_report(added, rejected)
+
+    def _batch_add_folder(self) -> None:
+        folder = filedialog.askdirectory()
+        if not folder:
+            return
+        added, rejected = self.batch_queue.add_folder(
+            Path(folder), recursive=bool(self.batch_recursive_var.get())
+        )
+        self._batch_report(added, rejected)
+
+    def _batch_start(self) -> None:
+        if self._busy:
+            self.status.set(self._t("batch_busy"))
+            return
+        self.batch_queue.resume()
+        self._batch_refresh_view()
+        self._batch_advance()
+
+    def _batch_toggle_pause(self) -> None:
+        if self.batch_queue.paused:
+            self._batch_start()
+            return
+        self.batch_queue.pause()
+        self._batch_refresh_view()
+
+    def _batch_seconds(self) -> float:
+        started = self.__dict__.get("_batch_started")
+        if started is None:
+            return 0.0
+        return max(0.0, time.monotonic() - started)
+
+    def _batch_advance(self) -> None:
+        """Start the next pending item, or end the run with a summary."""
+
+        if (
+            self._busy
+            or self.__dict__.get("_batch_owned", False)
+            or self.batch_queue.running() is not None
+        ):
+            return
+        while not self.batch_queue.paused:
+            item = self.batch_queue.next_pending()
+            if item is None:
+                break
+            self.batch_queue.mark_running(item.path)
+            self._batch_started = time.monotonic()
+            self._batch_refresh_view()
+            if self._process(item.path, cleanup=False, batch=True):
+                self.status.set(self._t("batch_running_file", name=item.path.name))
+                return
+            # The job never started (busy, refused cloud upload, unreadable
+            # source): record why and keep the rest of the queue moving.
+            self._batch_owned = False
+            self.batch_queue.mark_failed(
+                item.path, self._t("processing_not_started"), self._batch_seconds()
+            )
+            self._batch_started = None
+        self._batch_finish()
+
+    def _batch_finish(self) -> None:
+        summary = self.batch_queue.summary()
+        self._batch_refresh_view()
+        transcript = self.__dict__.get("_batch_last_transcript")
+        self._batch_last_transcript = None
+        if transcript is not None:
+            # Only the last result opens in the editor: a queue must not steal
+            # the editor away from the user after every single file.
+            self._try_show_result(transcript, refresh=False)
+        self._refresh_history(select_id=self.current.id if self.current else None)
+        self._refresh_dashboard()
+        if self.batch_queue.paused and summary.pending:
+            # A pause is not an end: say what is still waiting instead of a
+            # summary that reads as if the queue were finished.
+            self.status.set(self._t("batch_paused", count=summary.pending))
+            return
+        self.status.set(
+            self._t(
+                "batch_finished",
+                done=summary.done,
+                failed=summary.failed,
+                skipped=summary.skipped,
+            )
+        )
+
+    def _batch_job_finished(
+        self, *, transcript: Transcript | None = None, error: object | None = None
+    ) -> None:
+        self._batch_owned = False
+        seconds = self._batch_seconds()
+        self._batch_started = None
+        item = self.batch_queue.running()
+        if item is not None:
+            if transcript is not None:
+                self.batch_queue.mark_done(item.path, transcript.id, seconds)
+            else:
+                self.batch_queue.mark_failed(item.path, str(error), seconds)
+        if transcript is not None:
+            self._batch_last_transcript = transcript
+        self._batch_refresh_view()
+        self.after(0, self._batch_advance)
+
+    def _batch_job_cancelled(self) -> None:
+        """Cancel stops the running item and holds the queue where it is."""
+
+        self._batch_owned = False
+        seconds = self._batch_seconds()
+        self._batch_started = None
+        item = self.batch_queue.running()
+        self.batch_queue.pause()
+        if item is not None:
+            self.batch_queue.mark_failed(
+                item.path, self._t("batch_status_cancelled"), seconds
+            )
+        self._batch_refresh_view()
+
+    def _batch_selected_indexes(self) -> list[int]:
+        indexes: list[int] = []
+        for identifier in self.batch_tree.selection():
+            try:
+                indexes.append(int(identifier))
+            except (TypeError, ValueError):
+                continue
+        return sorted(indexes)
+
+    def _batch_skip_selected(self) -> None:
+        items = self.batch_queue.items
+        skipped = 0
+        for index in self._batch_selected_indexes():
+            if index >= len(items) or items[index].status != "pending":
+                continue
+            self.batch_queue.mark_skipped(items[index].path)
+            skipped += 1
+        if not skipped:
+            self.status.set(self._t("batch_no_selection"))
+            return
+        self._batch_refresh_view()
+
+    def _batch_clear_finished(self) -> None:
+        removed = self.batch_queue.clear_finished()
+        self._batch_refresh_view()
+        self.status.set(self._t("batch_removed", count=removed))
+
+    def _batch_clear(self) -> None:
+        try:
+            self.batch_queue.clear()
+        except ValueError:
+            self.status.set(self._t("batch_busy"))
+            return
+        self._batch_refresh_view()
+
+    # -- smart text --------------------------------------------------------
+
+    def _smart_text_options(self) -> SmartTextOptions | None:
+        try:
+            return SmartTextOptions(
+                paragraph_gap_seconds=float(str(self.smart_gap_var.get()).replace(",", ".")),
+                max_paragraph_seconds=float(str(self.smart_max_var.get()).replace(",", ".")),
+                timestamps=bool(self.smart_timestamps_var.get()),
+                speakers=bool(self.smart_speakers_var.get()),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def _smart_speaker_labels(self) -> dict[int, str]:
+        transcript = self.current
+        if transcript is None:
+            return {}
+        return speaker_labels_from_metadata(transcript.metadata)
+
+    def _refresh_smart_text(self) -> None:
+        if "smart_text_view" not in self.__dict__:
+            return
+        transcript = self.current
+        if transcript is None:
+            self._smart_text_rendered = ""
+            self._set_readonly_text(self.smart_text_view, self._t("smart_text_empty"))
+            self._refresh_smart_speaker_list()
+            return
+        options = self._smart_text_options()
+        if options is None:
+            # A rejected option must not leave a preview that ignores it.
+            self._smart_text_rendered = ""
+            self._set_readonly_text(self.smart_text_view, "")
+            self.status.set(self._t("smart_text_invalid"))
+            return
+        self._smart_text_rendered = render_plain(transcript, options)
+        self._set_readonly_text(self.smart_text_view, self._smart_text_rendered)
+        self._refresh_smart_speaker_list()
+
+    def _refresh_smart_speaker_list(self) -> None:
+        self.smart_speaker_list.delete(0, "end")
+        transcript = self.current
+        if transcript is None:
+            return
+        labels = self._smart_speaker_labels()
+        for index, segment in enumerate(transcript.segments):
+            snippet = " ".join(editable_text(segment).split())
+            if len(snippet) > SMART_TEXT_SNIPPET_WIDTH:
+                snippet = snippet[:SMART_TEXT_SNIPPET_WIDTH].rstrip() + "…"
+            row = f"{index} · {format_timestamp(segment.start)} · {snippet}"
+            name = labels.get(index)
+            if name:
+                row = f"{row} — {name}"
+            self.smart_speaker_list.insert("end", row)
+
+    def _assign_smart_speaker(self) -> None:
+        transcript = self.current
+        if transcript is None:
+            self.status.set(self._t("smart_text_empty"))
+            return
+        selection = self.smart_speaker_list.curselection()
+        if not selection:
+            self.status.set(self._t("smart_text_select_segment"))
+            return
+        index = int(selection[0])
+        if index >= len(transcript.segments):
+            self.status.set(self._t("smart_text_select_segment"))
+            return
+        labels = self._smart_speaker_labels()
+        answer = simpledialog.askstring(
+            self._t("smart_text_assign_speaker"),
+            self._t("smart_text_speaker_prompt"),
+            initialvalue=labels.get(index, ""),
+            parent=self,
+        )
+        if answer is None:
+            return
+        name = " ".join(answer.split())
+        if name:
+            labels[index] = name
+        else:
+            labels.pop(index, None)
+        # Metadata only: raw_text and every segment stay exactly as recognised.
+        self.current = self.store.update_speaker_labels(transcript.id, labels)
+        self._refresh_smart_text()
+
+    def _copy_smart_text(self) -> None:
+        if not self._smart_text_rendered:
+            self.status.set(self._t("smart_text_empty"))
+            return
+        self._copy_to_clipboard(self._smart_text_rendered)
+        self.status.set(self._t("copied"))
+
+    def _export_smart_text(self, fmt: str) -> None:
+        transcript = self.current
+        if transcript is None:
+            self.status.set(self._t("smart_text_empty"))
+            return
+        options = self._smart_text_options()
+        if options is None:
+            self.status.set(self._t("smart_text_invalid"))
+            return
+        content = (
+            render_markdown(transcript, options)
+            if fmt == "md"
+            else render_plain(transcript, options)
+        )
+        destination = filedialog.asksaveasfilename(
+            defaultextension=f".{fmt}",
+            initialfile=f"{Path(transcript.source_name).stem}.{fmt}",
+        )
+        if not destination:
+            return
+        written = _write_text_atomically(Path(destination), content)
+        self.status.set(self._t("smart_text_exported", name=written.name))
+
+    def _refresh_smart_text_ui_text(self) -> None:
+        self.smart_text_gap_label.configure(text=self._t("smart_text_gap"))
+        self.smart_text_max_label.configure(text=self._t("smart_text_max"))
+        self.smart_timestamps_check.configure(text=self._t("smart_text_timestamps"))
+        self.smart_speakers_check.configure(text=self._t("smart_text_speakers"))
+        self.smart_speaker_caption.configure(text=self._t("smart_text_speaker_list"))
+        for button, key in self._smart_text_button_keys.items():
+            button.configure(text=self._t(key))
+        self._refresh_smart_text()
 
     def _show_result(
         self, transcript: Transcript, *, copy: bool = False, refresh: bool = True
@@ -3059,6 +3659,7 @@ class VoiceStudioApp(tk.Tk):
         )
         if self.confidence_panel_visible:
             self._refresh_confidence_panel()
+        self._refresh_smart_text()
         if refresh:
             self._refresh_history(select_id=transcript.id)
             self._refresh_dashboard()
@@ -5059,6 +5660,7 @@ class VoiceStudioApp(tk.Tk):
         self._editor_baseline = snapshot_editor("", {})
         self._set_readonly_text(self.raw_editor, "")
         self._set_readonly_text(self.details, "")
+        self._refresh_smart_text()
 
     def _restart_runtime(self) -> None:
         self.store = LocalStore(data_dir())
@@ -5101,6 +5703,11 @@ class VoiceStudioApp(tk.Tk):
         ):
             return
         self._closing = True
+        # The queue must not hand out another file while the app shuts down;
+        # the running job still goes through the normal cancel path below.
+        batch_queue = self.__dict__.get("batch_queue")
+        if batch_queue is not None:
+            batch_queue.pause()
         shutdown = self.__dict__.setdefault("_shutdown_event", threading.Event())
         lock = self.__dict__.setdefault("_worker_lock", threading.RLock())
         with lock:

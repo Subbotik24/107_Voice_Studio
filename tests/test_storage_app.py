@@ -950,6 +950,49 @@ def test_editor_formatting_is_saved_without_changing_raw_or_corrected_text(tmp_p
     assert updated.metadata["editor_formatting"]["bold"] == [["1.0", "1.4"]]
 
 
+def test_speaker_labels_are_saved_as_metadata_without_touching_transcript_text(tmp_path):
+    """Manual speaker labels are presentation metadata, never a text rewrite."""
+
+    from voice_studio.models import Segment
+
+    store = LocalStore(tmp_path)
+    item = transcript()
+    item.segments = [
+        Segment(start=0.0, end=1.0, text="první"),
+        Segment(start=1.0, end=2.0, text="druhý"),
+    ]
+    store.save(item)
+
+    updated = store.update_speaker_labels("1", {1: "  Olga  ", -1: "ignored", 0: ""})
+
+    assert updated.metadata["speaker_labels"] == {"1": "Olga"}
+    assert updated.raw_text == item.raw_text
+    assert updated.corrected_text == item.corrected_text
+    assert [segment.text for segment in updated.segments] == ["první", "druhý"]
+    assert [segment.corrected_text for segment in updated.segments] == [None, None]
+    persisted = store.get("1")
+    assert persisted.metadata["speaker_labels"] == {"1": "Olga"}
+
+
+def test_clearing_the_last_speaker_label_removes_the_metadata_key(tmp_path):
+    store = LocalStore(tmp_path)
+    item = transcript()
+    store.save(item)
+    store.update_speaker_labels("1", {0: "Olga"})
+
+    updated = store.update_speaker_labels("1", {})
+
+    assert "speaker_labels" not in updated.metadata
+    assert "speaker_labels" not in store.get("1").metadata
+
+
+def test_speaker_labels_for_a_missing_transcript_fail_fast(tmp_path):
+    store = LocalStore(tmp_path)
+
+    with pytest.raises(KeyError, match="transcript not found"):
+        store.update_speaker_labels("missing", {0: "Olga"})
+
+
 def test_editor_state_update_persists_text_and_formatting_atomically(tmp_path):
     store = LocalStore(tmp_path)
     item = transcript()

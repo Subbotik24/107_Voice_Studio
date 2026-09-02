@@ -45,6 +45,46 @@ Po uložení ruční úpravy používají TXT/MD a SRT/VTT stejný opravený tex
 přes hranice časovaných segmentů je sloučí do jejich existujícího vnějšího
 intervalu; aplikace žádný časový kód nevytváří, nedělí ani neposouvá.
 
+## Fronta přepisů
+
+1. Ve **Studio** zvolte **Fronta** a otevřete panel **Fronta přepisů** nad
+   editorem.
+2. Přidejte soubory tlačítkem **Přidat soubory…**, nebo **Přidat složku…**
+   (zaškrtněte **Včetně podsložek** pro rekurzivní přidání). Do fronty se
+   přidají jen podporované mediální formáty; stavový řádek oznámí, kolik
+   souborů bylo přidáno a kolik odmítnuto.
+3. Zvolte **Spustit**. Soubory se zpracují jeden po druhém s aktuálním
+   profilem — stejný engine, jazyk a nastavení jako u jednoho souboru;
+   cloudový profil i tak žádá souhlas u každého souboru. **Pozastavit** /
+   **Pokračovat** zastaví frontu po dokončení aktuálního souboru, nebo v ní
+   pokračuje. **Přeskočit** vynechá jen vybrané soubory, které ještě čekají.
+   **Odebrat dokončené** vymaže dokončené řádky. **Vyprázdnit** je odmítnuto,
+   dokud se soubor zpracovává.
+
+Každý výsledek se uloží do **Historie**. Neúspěšný soubor zaznamená důvod ve
+sloupci **Chyba** a fronta pokračuje dalším souborem bez chybového okna.
+Zrušení běžící úlohy označí soubor jako „Zrušeno“ a frontu pozastaví. Po
+dokončení fronty stavový řádek zobrazí souhrn a v editoru se otevře jen
+poslední úspěšný přepis — nikdy přes neuložené úpravy. Zavření aplikace
+frontu pozastaví.
+
+## Chytrý text
+
+1. Otevřete přepis a zvolte kartu **Chytrý text** vedle **Data**.
+2. Nastavte **Pauza, s** (mezera, po které začíná nový odstavec) a
+   **Odstavec, s** (nejvyšší délka odstavce) a zaškrtněte **Časové značky**
+   nebo **Mluvčí**, chcete-li je zahrnout. Zvolte **Obnovit**, nebo stiskněte
+   Enter v některém z polí, pro přestavění náhledu.
+3. Zvolte **Kopírovat** pro zkopírování textu, nebo **Export MD…** /
+   **Export TXT…** pro uložení do souboru.
+4. Pro označení mluvčího vyberte segment v seznamu **Segmenty**, zvolte
+   **Přiřadit mluvčího…** a zadejte jméno — prázdné pole značku odebere.
+
+Neplatná hodnota **Pauza, s** nebo **Odstavec, s** se ohlásí ve stavovém
+řádku a náhled se vyprázdní. Značky mluvčích se ukládají pouze do metadat
+přepisu; `raw_text` a každý segment zůstávají přesně tak, jak byly
+rozpoznány.
+
 ## Ruční AI oprava
 
 Po uložení ručních změn zvolte **AI úprava…**, zkontrolujte Before/After a

@@ -105,6 +105,43 @@ spravovaná kopie v úložišti aplikace; externí originální soubor se nikdy
 nevyhledává ani neotevírá. Pokud zvuk záznamu není uložen, panel to oznámí.
 Přepnutí stránky nebo záznamu i obnovení ze zálohy přehrávání zastaví.
 
+## Fronta přepisů
+
+| Ovládací prvek | Účel |
+|---|---|
+| **Fronta** | Zobrazí nebo skryje panel **Fronta přepisů** nad editorem. |
+| **Přidat soubory…** | Otevře výběr souborů; přidají se jen podporované mediální formáty. |
+| **Přidat složku…**, **Včetně podsložek** | Přidá všechny podporované soubory ze složky, rekurzivně, je-li zaškrtnuto. |
+| **Spustit** | Spustí zpracování čekajících souborů jeden po druhém s aktuálním profilem. |
+| **Pozastavit** / **Pokračovat** | Zastaví frontu po aktuálním souboru, nebo v ní pokračuje. |
+| **Přeskočit** | Přeskočí vybrané soubory, které ještě čekají. |
+| **Odebrat dokončené** | Vymaže řádky se stavem hotovo, chyba, přeskočeno nebo zrušeno. |
+| **Vyprázdnit** | Vyprázdní frontu; odmítnuto, dokud se soubor zpracovává. |
+
+Sloupce tabulky jsou **Soubor**, **Stav**, **Sekundy** a **Chyba**. Fronta
+pojme nejvýše 500 souborů. Položka se stavem chyba nebo zrušeno zaznamená
+důvod ve sloupci **Chyba** a fronta pokračuje dalším souborem. V editoru se
+otevře jen poslední úspěšný přepis, nikdy přes neuložené úpravy; zavření
+aplikace frontu pozastaví.
+
+## Karta Chytrý text
+
+| Ovládací prvek | Účel |
+|---|---|
+| **Pauza, s** | Mezera mezi segmenty, po které začíná nový odstavec (0–600 s, výchozí 2.0). |
+| **Odstavec, s** | Nejvyšší délka odstavce, po které se rozdělí (5–3600 s, výchozí 90). |
+| **Časové značky**, **Mluvčí** | Zahrnou do textu časové značky nebo značky mluvčích. |
+| **Obnovit** | Přestaví náhled z aktuálního přepisu a nastavení. |
+| **Kopírovat** | Zkopíruje text do schránky. |
+| **Export MD…**, **Export TXT…** | Uloží text jako Markdown nebo plain text; výchozí název souboru je název zdroje bez přípony. |
+| **Segmenty**, **Přiřadit mluvčího…** | Seznam každého segmentu (pořadí · čas · úryvek); vyberte jej a zadejte jméno pro označení, nebo pole ponechte prázdné pro odebrání značky. |
+
+Neplatná hodnota **Pauza, s** nebo **Odstavec, s** zobrazí ve stavovém řádku
+hlášení „Pauza musí být 0 až 600 s a odstavec 5 až 3600 s.“ a náhled se
+vyprázdní. Značky mluvčích se ukládají pouze do metadat přepisu; `raw_text`
+a text segmentů se nikdy nemění. Pokud není vybraný žádný přepis, karta
+zobrazí „Vyberte záznam, aby se zobrazil chytrý text.“
+
 ## Formáty a soukromí
 
 Podporované vstupy: WAV, MP3, M4A, FLAC, OGG, OPUS, AAC, MP4, MOV, MKV,

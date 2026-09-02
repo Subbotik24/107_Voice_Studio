@@ -106,6 +106,43 @@ the application's storage is played; the external original file is never
 looked up or opened. When a record has no retained audio, the bar says so.
 Switching the page or the record, and restoring from a backup, stop playback.
 
+## Batch transcription queue
+
+| Control | Purpose |
+|---|---|
+| **Queue** | Toggles the **Transcription queue** panel above the editor. |
+| **Add files…** | Opens a file picker; only supported media formats are added. |
+| **Add folder…**, **Include subfolders** | Adds every supported file in a folder, recursively when checked. |
+| **Start** | Runs the pending files one after another with the current profile. |
+| **Pause** / **Resume** | Stops the queue after the current file, or continues it. |
+| **Skip** | Skips the selected files that are still queued. |
+| **Remove finished** | Clears done, failed, skipped, and cancelled rows. |
+| **Clear** | Empties the queue; refused while a file is running. |
+
+The table columns are **File**, **Status**, **Seconds**, and **Error**. The
+queue holds at most 500 files. A failed or cancelled item records its reason
+in **Error** and the queue continues with the next file. Only the last
+successful transcript opens in the editor, and never over unsaved edits;
+closing the app pauses the queue.
+
+## Smart text tab
+
+| Control | Purpose |
+|---|---|
+| **Pause, s** | Gap between segments that starts a new paragraph (0–600 s, default 2.0). |
+| **Paragraph, s** | Maximum paragraph length before it is split (5–3600 s, default 90). |
+| **Timestamps**, **Speakers** | Include timestamps or speaker labels in the rendered text. |
+| **Refresh** | Rebuilds the preview from the current transcript and options. |
+| **Copy** | Copies the rendered text to the clipboard. |
+| **Export MD…**, **Export TXT…** | Saves the rendered text as Markdown or plain text; the default file name is the source file's stem. |
+| **Segments**, **Assign speaker…** | Lists every segment (index · timestamp · snippet); select one and enter a name to label it, or leave the name empty to remove the label. |
+
+An invalid **Pause, s** or **Paragraph, s** value shows "The pause must be 0
+to 600 s and a paragraph 5 to 3600 s." in the status bar and clears the
+preview. Speaker labels are stored only in transcript metadata; `raw_text`
+and segment text are never changed. With no transcript selected, the tab
+shows "Select a transcript to see its smart text."
+
 ## Formats and limits
 
 Input: WAV, MP3, M4A, FLAC, OGG, OPUS, AAC, MP4, MOV, MKV, WEBM; up to 2 GiB

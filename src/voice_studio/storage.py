@@ -10,7 +10,7 @@ import string
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +22,7 @@ from .operation import (
     OperationBudget,
     OwnedPartialCleanupError,
 )
+from .smart_text import SPEAKER_LABELS_KEY, speaker_labels_to_metadata
 from .subtitles import document_text_from_segments, sync_segments
 
 IMMUTABLE_TRANSCRIPT_FIELDS = (
@@ -678,6 +679,29 @@ class LocalStore:
         if transcript is None:
             raise KeyError(f"transcript not found: {transcript_id}")
         transcript.metadata = {**transcript.metadata, "editor_formatting": normalized}
+        self.save(transcript)
+        return transcript
+
+    def update_speaker_labels(
+        self, transcript_id: str, labels: Mapping[int, str]
+    ) -> Transcript:
+        """Persist manual speaker labels; no transcript text is ever touched.
+
+        The labels live in ``metadata["speaker_labels"]`` only, so ``raw_text``
+        and every segment stay exactly as the engine reported them. Clearing
+        the last label removes the key instead of storing an empty mapping.
+        """
+
+        stored = speaker_labels_to_metadata(labels)
+        transcript = self.get(transcript_id)
+        if transcript is None:
+            raise KeyError(f"transcript not found: {transcript_id}")
+        metadata = {**transcript.metadata}
+        if stored:
+            metadata[SPEAKER_LABELS_KEY] = stored
+        else:
+            metadata.pop(SPEAKER_LABELS_KEY, None)
+        transcript.metadata = metadata
         self.save(transcript)
         return transcript
 

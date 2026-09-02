@@ -52,6 +52,45 @@ Saving a manual edit keeps TXT/MD and SRT/VTT wording aligned. An edit across
 timed segment boundaries merges those cues into their existing outer interval;
 it never creates, splits, or moves a timecode.
 
+## Batch transcription queue
+
+1. On **Studio**, choose **Queue** to open the **Transcription queue** panel
+   above the editor.
+2. Add files with **Add files…**, or **Add folder…** (check **Include
+   subfolders** to add its files recursively). Only supported media formats
+   are queued; the status bar reports how many files were added and how many
+   were rejected.
+3. Choose **Start**. Files run one after another with the current profile —
+   the same engine, language, and settings as a single file; a cloud profile
+   still asks for the same per-file consent. **Pause**/**Resume** stops the
+   queue after the current file finishes, or continues it. **Skip** drops the
+   selected files that are still queued. **Remove finished** clears completed
+   rows. **Clear** is refused while a file is running.
+
+Each result is saved to **History**. A failed file records its error in the
+queue's **Error** column and the queue moves on to the next file, with no
+error popup. Cancelling the running job marks that file **Cancelled** and
+pauses the queue. When the queue ends, the status bar shows a summary, and
+only the last successful transcript opens in the editor — never over unsaved
+edits. Closing the app pauses the queue.
+
+## Smart text
+
+1. Open a transcript, then select the **Smart text** tab next to **Data**.
+2. Set **Pause, s** (gap that starts a new paragraph) and **Paragraph, s**
+   (maximum paragraph length), and check **Timestamps** or **Speakers** to
+   include them. Choose **Refresh**, or press Enter in either field, to
+   rebuild the preview.
+3. Choose **Copy** to copy the rendered text, or **Export MD…** /
+   **Export TXT…** to save it to a file.
+4. To label a speaker, select a segment in the **Segments** list, choose
+   **Assign speaker…**, and enter a name — leave it empty to remove the
+   label.
+
+An invalid **Pause, s** or **Paragraph, s** value is reported in the status
+bar and clears the preview. Speaker labels are stored only in transcript
+metadata; `raw_text` and every segment stay exactly as recognised.
+
 ## Manual AI cleanup
 
 Save manual edits, choose **AI cleanup…**, review Before/After, and confirm.
