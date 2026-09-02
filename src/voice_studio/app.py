@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 import tkinter as tk
@@ -99,7 +100,7 @@ from .sync_folder import (
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
 
 # Visible build stamp in the window title so an outdated launch is obvious.
-APP_BUILD = "2026-09-02.2"
+APP_BUILD = "2026-09-02.3"
 EDITOR_FIND_TAG = "editor_find"
 EDITOR_CONFIDENCE_TAG = "editor_confidence"
 FILLER_CONTEXT_WIDTH = 30
@@ -114,6 +115,15 @@ BATCH_COLUMNS = (
     ("seconds", "batch_column_seconds", 90),
     ("error", "batch_column_error", 280),
 )
+
+_ERROR_TYPE_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Cancelled):\s+")
+
+
+def _plain_error_text(error: object) -> str:
+    """Drop the ``SomeError:`` prefix the job worker adds for diagnostics."""
+
+    return _ERROR_TYPE_PREFIX.sub("", str(error), count=1).strip() or str(error)
+
 
 def _write_text_atomically(destination: Path, content: str) -> Path:
     """Write one exported text file the way ``exporters`` does: never partial."""
@@ -1065,7 +1075,8 @@ class VoiceStudioApp(tk.Tk):
         self.editor_frame.grid(row=3, column=0, sticky="nsew")
 
         self.notebook = ttk.Notebook(self.editor_frame)
-        self.notebook.pack(fill="both", expand=True)
+        # Packed after the export bar (see below) so the bar keeps its place
+        # at the bottom of the card when the window is short.
         corrected_frame = ttk.Frame(self.notebook, style="Card.TFrame")
         raw_frame = ttk.Frame(self.notebook, style="Card.TFrame")
         details_frame = ttk.Frame(self.notebook, style="Card.TFrame")
@@ -1126,7 +1137,6 @@ class VoiceStudioApp(tk.Tk):
             pady=12,
             height=9,
         )
-        self.editor.pack(fill="both", expand=True)
         self.editor.tag_configure("bold", font=(theme.ui_font, 11, "bold"))
         self.editor.tag_configure("italic", font=(theme.ui_font, 11, "italic"))
         self.editor.tag_configure(
@@ -1138,8 +1148,11 @@ class VoiceStudioApp(tk.Tk):
         self.editor.bind("<Return>", self._insert_editor_newline)
         self.editor.bind("<Control-Return>", self._insert_editor_newline)
 
+        # Bottom-packed before the editor text: a short window shrinks the
+        # text, never the transport controls.
         self.playback_bar = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
-        self.playback_bar.pack(fill="x")
+        self.playback_bar.pack(side="bottom", fill="x")
+        self.editor.pack(fill="both", expand=True)
         playback_controls_row = ttk.Frame(self.playback_bar, style="Card.TFrame")
         playback_controls_row.pack(fill="x")
         self.playback_toggle_button = ttk.Button(
@@ -1460,7 +1473,8 @@ class VoiceStudioApp(tk.Tk):
         smart_speaker_scrollbar.pack(side="right", fill="y")
 
         export_bar = ttk.Frame(self.editor_frame, style="Card.TFrame")
-        export_bar.pack(fill="x", pady=(10, 0))
+        export_bar.pack(side="bottom", fill="x", pady=(10, 0))
+        self.notebook.pack(fill="both", expand=True)
         self.save_edits_button = ttk.Button(
             export_bar, text=self._t("save_edits"), command=self._save_edits
         )
@@ -3575,7 +3589,7 @@ class VoiceStudioApp(tk.Tk):
             if transcript is not None:
                 self.batch_queue.mark_done(item.path, transcript.id, seconds)
             else:
-                self.batch_queue.mark_failed(item.path, str(error), seconds)
+                self.batch_queue.mark_failed(item.path, _plain_error_text(error), seconds)
         if transcript is not None:
             self._batch_last_transcript = transcript
         self._batch_refresh_view()
@@ -3896,7 +3910,7 @@ class VoiceStudioApp(tk.Tk):
         if self.find_panel_visible:
             self._close_find_panel()
             return
-        self.find_panel.pack(fill="x")
+        self.find_panel.pack(side="bottom", fill="x")
         self.find_panel_visible = True
 
     def _close_find_panel(self) -> None:
@@ -4079,7 +4093,7 @@ class VoiceStudioApp(tk.Tk):
         if self.confidence_panel_visible:
             self._close_confidence_panel()
             return
-        self.confidence_panel.pack(fill="x")
+        self.confidence_panel.pack(side="bottom", fill="x")
         self.confidence_panel_visible = True
         self._refresh_confidence_panel()
 

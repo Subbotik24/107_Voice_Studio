@@ -13,6 +13,8 @@ from typing import Any
 
 import numpy as np
 
+from .audio_errors import friendly_device_error
+
 BLOCK_FRAMES = 1_600
 MAX_PENDING_BLOCKS = 64
 MAX_RECORDING_SECONDS = 7_200
@@ -191,7 +193,10 @@ class AudioRecorder:
             writer_error = self._writer_error
             cleanup_error = self._remove_owned_partial()
             self._clear_session()
-            self._raise_with_cleanup(stream_error or writer_error or exc, cleanup_error)
+            self._raise_with_cleanup(
+                stream_error or writer_error or friendly_device_error(exc, kind="input"),
+                cleanup_error,
+            )
             raise AssertionError("unreachable") from exc
         return path
 

@@ -62,7 +62,7 @@ This is a privacy-first desktop transcription application. Treat this file and
 
 ## Current verified state
 
-The source quality gate last passed on Linux/CPython 3.12 on 2026-09-01, after
+The source quality gate last passed on Linux/CPython 3.12 on 2026-09-02 (build 2026-09-02.3, `1379 passed`, 14 Windows-junction skips; increments 4–16 in `docs/verification/2026-09-01-usability-pack.md`). Before that it passed on 2026-09-01, after
 a full-repository correctness audit whose confirmed findings were all fixed
 with failing-first regression tests: compilation, Ruff, `check_help.py`,
 `875 passed` (14 Windows-junction skips), wheel build, `pip check`,

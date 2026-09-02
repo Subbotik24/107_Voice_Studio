@@ -26,6 +26,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Protocol
 
+from .audio_errors import friendly_device_error
+
 CHUNK_SECONDS = 0.1
 SUPPORTED_SPEEDS = (0.75, 1.0, 1.25, 1.5, 2.0)
 PLAYBACK_THREAD_NAME = "voice-studio-playback"
@@ -239,12 +241,15 @@ class SounddeviceSink:
         except (ImportError, OSError) as exc:
             raise RuntimeError(f"sounddevice is not available for playback: {exc}") from exc
 
-        stream = sd.RawOutputStream(
-            samplerate=sample_rate,
-            channels=channels,
-            dtype="int16",
-        )
-        stream.start()
+        try:
+            stream = sd.RawOutputStream(
+                samplerate=sample_rate,
+                channels=channels,
+                dtype="int16",
+            )
+            stream.start()
+        except Exception as exc:
+            raise friendly_device_error(exc, kind="output") from exc
         self._stream = stream
 
     def write(self, chunk: bytes) -> None:
