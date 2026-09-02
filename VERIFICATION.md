@@ -48,8 +48,10 @@ every Linux gate passed. Two causes, both fixed in the follow-up commit:
 the executable macOS launcher-block test invoked `bash`, which on a Windows
 runner is the WSL stub (now skipped on `win32`), and `_atomic_copy_file`
 called `os.fsync` on a read-only handle, which Windows rejects with EBADF
-(now reopened `r+b`). The remaining Windows-only signal is the CI run of
-that follow-up commit itself.
+(now reopened `r+b`). GitHub CI run 75 on the follow-up commit `952475c`
+passed on every job (windows-2022 × CPython 3.11/3.12, macos-14 × 3.11/3.12,
+the new `test-linux` job with Tk under Xvfb) and CodeQL run 78 passed;
+`main` is green again for the first time since 2026-09-01.
 
 Not run and not claimed: any packaged or native run, a real audio device, a
 real Ollama/Whisper transcription, a real cloud-sync client, the new Linux CI

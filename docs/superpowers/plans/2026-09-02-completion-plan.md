@@ -226,6 +226,8 @@ SECURITY.md ні).
 > `VERIFICATION.md` § «In-repo completion gate»). Прийняті припущення замість
 > рішень § 6: F-3 → opt-in `VOICE_STUDIO_AUTO_UPDATE=1`; batch/smart text/sync
 > у R0 (amendment у spec); Dependabot #6/#7 перенесено, #5 не перенесено.
+> GitHub CI на `main` був червоним на Windows з 2026-09-01 (не помічено жодним
+> документом); виправлено у `952475c`, run 75 зелений на всіх п'яти джобах.
 > Не виконано з цього середовища: видалення 5 сторонніх remote-гілок (git-проксі
 > сесії пропускає лише `main`), branch protection, F-5 (дзеркалення аудіо на
 > worker — лишається P4). Далі — лише етапи власника: W5-A/B, W4-M, W4-R, P0.6,
