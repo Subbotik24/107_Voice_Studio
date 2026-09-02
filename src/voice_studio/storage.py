@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .dashboard import DashboardStatistics, HistoryFilter, aggregate_statistics
+from .dashboard import DashboardStatistics, HistoryFilter, aggregate_statistics, daily_activity
 from .models import Segment, Transcript
 from .operation import (
     ManagedTargetAllocationError,
@@ -972,6 +972,18 @@ class LocalStore:
             cursor = db.execute("SELECT payload_json FROM transcripts")
             return aggregate_statistics(
                 (row["payload_json"] for row in cursor), now=reference
+            )
+
+    def daily_activity(
+        self, *, now: datetime | None = None, days: int = 14
+    ) -> tuple[tuple[str, int], ...]:
+        """Count records per day for the last ``days`` days, oldest first."""
+
+        reference = now if now is not None else datetime.now(UTC)
+        with self._connect() as db:
+            cursor = db.execute("SELECT payload_json FROM transcripts")
+            return daily_activity(
+                (row["payload_json"] for row in cursor), now=reference, days=days
             )
 
     def audit(self) -> dict[str, object]:

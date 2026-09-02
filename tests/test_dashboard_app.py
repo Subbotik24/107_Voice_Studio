@@ -8,6 +8,7 @@ from voice_studio.dashboard import (
     DashboardStatistics,
     HistoryFilter,
     aggregate_statistics,
+    daily_activity,
 )
 from voice_studio.models import Transcript
 from voice_studio.storage import LocalStore
@@ -449,6 +450,100 @@ def test_filtered_list_rejects_legacy_query_and_non_positive_limit(tmp_path):
         store.list(filters=HistoryFilter(), limit=0)
     with pytest.raises(ValueError):
         store.list(limit=0)
+
+
+def test_daily_activity_returns_days_oldest_first_with_today_last():
+    activity = daily_activity(
+        (json.dumps(payload(id="a", created_at=NOW.isoformat())),), now=NOW, days=3
+    )
+
+    assert [day for day, _count in activity] == [
+        "2026-08-30",
+        "2026-08-31",
+        "2026-09-01",
+    ]
+    assert activity[-1] == ("2026-09-01", 1)
+    assert activity[0] == ("2026-08-30", 0)
+
+
+def test_daily_activity_counts_per_day_and_ignores_dates_outside_the_window():
+    activity = daily_activity(
+        (
+            json.dumps(payload(id="in-1", created_at=NOW.isoformat())),
+            json.dumps(payload(id="in-2", created_at=NOW.isoformat())),
+            json.dumps(
+                payload(
+                    id="yesterday",
+                    created_at=(NOW - timedelta(days=1)).isoformat(),
+                )
+            ),
+            json.dumps(
+                payload(
+                    id="too-old",
+                    created_at=(NOW - timedelta(days=30)).isoformat(),
+                )
+            ),
+        ),
+        now=NOW,
+        days=14,
+    )
+
+    by_day = dict(activity)
+    assert len(activity) == 14
+    assert by_day["2026-09-01"] == 2
+    assert by_day["2026-08-31"] == 1
+    assert sum(by_day.values()) == 3
+
+
+def test_daily_activity_tolerates_bad_rows_without_raising():
+    activity = daily_activity(
+        (
+            "not json",
+            json.dumps({"id": "incomplete"}),
+            json.dumps(payload(id="unparseable-date", created_at="not-a-date")),
+            json.dumps(payload(id="good", created_at=NOW.isoformat())),
+        ),
+        now=NOW,
+        days=7,
+    )
+
+    assert dict(activity)["2026-09-01"] == 1
+    assert sum(count for _day, count in activity) == 1
+
+
+def test_daily_activity_treats_naive_timestamps_as_utc():
+    activity = daily_activity(
+        (json.dumps(payload(id="naive", created_at="2026-09-01T12:00:00")),),
+        now=NOW,
+        days=1,
+    )
+
+    assert activity == (("2026-09-01", 1),)
+
+
+def test_daily_activity_zero_or_negative_days_is_empty():
+    assert daily_activity((), now=NOW, days=0) == ()
+    assert daily_activity((), now=NOW, days=-1) == ()
+
+
+def test_store_daily_activity_reads_every_stored_record(tmp_path):
+    store = LocalStore(tmp_path)
+    insert_payloads(
+        store,
+        payload(id="today", created_at=NOW.isoformat()),
+        payload(id="yesterday", created_at=(NOW - timedelta(days=1)).isoformat()),
+    )
+
+    activity = store.daily_activity(now=NOW, days=3)
+
+    assert [day for day, _count in activity] == [
+        "2026-08-30",
+        "2026-08-31",
+        "2026-09-01",
+    ]
+    by_day = dict(activity)
+    assert by_day["2026-09-01"] == 1
+    assert by_day["2026-08-31"] == 1
 
 
 def test_unfiltered_list_keeps_legacy_behaviour(tmp_path):

@@ -6,7 +6,7 @@ import re
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from .models import Transcript
 
@@ -192,3 +192,36 @@ def aggregate_statistics(
         weighted_real_time_factor=weighted_real_time_factor,
         speed_multiplier=speed_multiplier,
     )
+
+
+def daily_activity(
+    payloads: Iterable[str], *, now: datetime, days: int = 14
+) -> tuple[tuple[str, int], ...]:
+    """Count records created on each of the last ``days`` days, oldest first.
+
+    Tolerant of bad rows exactly like ``aggregate_statistics``: a payload that
+    fails to parse, or has no usable ``created_at``, is silently skipped
+    rather than raising or breaking the day sequence. The last entry is
+    always ``now``'s own UTC calendar day.
+    """
+
+    if days <= 0:
+        return ()
+    reference = _as_utc(now)
+    today = reference.date()
+    start_day = today - timedelta(days=days - 1)
+    counts: dict[date, int] = {start_day + timedelta(days=offset): 0 for offset in range(days)}
+
+    for payload in payloads:
+        try:
+            transcript = Transcript.from_dict(json.loads(payload))
+            created = _parse_timestamp(transcript.created_at)
+        except Exception:
+            continue
+        if created is None:
+            continue
+        day = created.date()
+        if day in counts:
+            counts[day] += 1
+
+    return tuple((day.isoformat(), counts[day]) for day in sorted(counts))

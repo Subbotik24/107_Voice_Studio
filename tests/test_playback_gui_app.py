@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from voice_studio import app as app_module
 from voice_studio.app import VoiceStudioApp
 from voice_studio.i18n import translate
@@ -40,6 +42,7 @@ class FakePlayer:
         self.stop_calls = 0
         self.stop_result = True
         self.seek_deltas: list[float] = []
+        self.seek_to_calls: list[float] = []
         self.speed_calls: list[float] = []
         self.toggle_calls = 0
 
@@ -63,8 +66,23 @@ class FakePlayer:
         self.position = max(0.0, self.position + delta)
         return self.position
 
+    def seek_to(self, position: float) -> float:
+        self.seek_to_calls.append(position)
+        self.position = max(0.0, position)
+        return self.position
+
     def set_speed(self, speed: float) -> None:
         self.speed_calls.append(speed)
+
+
+class FakeScale:
+    def __init__(self) -> None:
+        self.state_value = "disabled"
+
+    def configure(self, **kwargs: object) -> None:
+        state = kwargs.get("state")
+        if isinstance(state, str):
+            self.state_value = state
 
 
 class FakeStore:
@@ -114,6 +132,10 @@ def _playback_app(tmp_path: Path, transcript: Transcript | None) -> VoiceStudioA
     app.playback_speed_label = FakeButton()
     app.playback_speed_var = FakeVar("1×")
     app.playback_position_var = FakeVar("0:00 / —")
+    app.playback_seek_label = FakeButton()
+    app.playback_seek_var = FakeVar(0.0)
+    app.playback_seek_scale = FakeScale()
+    app._playback_seek_dragging = False
     app._playback_button_keys = {
         FakeButton(): key
         for key in ("playback_stop", "playback_back_5", "playback_forward_5")
@@ -427,6 +449,99 @@ def test_the_idle_tick_surfaces_a_worker_error_once(tmp_path: Path) -> None:
     assert app.status.get() == ""
 
 
+# --- seek slider -------------------------------------------------------------
+
+
+def test_tick_updates_the_seek_scale_from_the_player_position(tmp_path: Path) -> None:
+    """Catches a slider that keeps showing 0 while playback advances."""
+
+    app = _playback_app(tmp_path, None)
+    app.player.state = "playing"
+    app.player.position = 25.0
+    app.player.duration = 100.0
+
+    app._playback_tick()
+
+    assert app.playback_seek_var.get() == pytest.approx(250.0)
+
+
+def test_seek_value_is_zero_without_a_known_duration(tmp_path: Path) -> None:
+    app = _playback_app(tmp_path, None)
+    app.player.state = "playing"
+    app.player.position = 25.0
+    app.player.duration = None
+
+    app._playback_tick()
+
+    assert app.playback_seek_var.get() == 0.0
+
+
+def test_a_drag_in_progress_freezes_the_seek_scale(tmp_path: Path) -> None:
+    """Catches a tick that fights the user's finger while they are dragging."""
+
+    app = _playback_app(tmp_path, None)
+    app.player.state = "playing"
+    app.player.position = 10.0
+    app.player.duration = 100.0
+    app._press_playback_seek()
+    app.playback_seek_var.set(777.0)
+
+    app._playback_tick()
+
+    assert app.playback_seek_var.get() == 777.0
+    assert app._playback_seek_dragging is True
+
+
+def test_releasing_the_seek_scale_seeks_to_the_absolute_position(tmp_path: Path) -> None:
+    media = _managed_file(tmp_path)
+    app = _playback_app(tmp_path, _transcript(str(media)))
+    app.player.state = "playing"
+    app.player.duration = 200.0
+    app._press_playback_seek()
+    app.playback_seek_var.set(250.0)
+
+    app._release_playback_seek()
+
+    assert app.player.seek_to_calls == [50.0]
+    assert app._playback_seek_dragging is False
+
+
+def test_release_without_a_player_does_not_crash(tmp_path: Path) -> None:
+    app = _playback_app(tmp_path, None)
+    app.player = None
+    app._press_playback_seek()
+
+    app._release_playback_seek()
+
+    assert app._playback_seek_dragging is False
+
+
+def test_release_while_idle_does_not_seek(tmp_path: Path) -> None:
+    app = _playback_app(tmp_path, None)
+    app.player.state = "idle"
+
+    app._release_playback_seek()
+
+    assert app.player.seek_to_calls == []
+
+
+def test_the_seek_scale_is_disabled_without_playable_audio(tmp_path: Path) -> None:
+    app = _playback_app(tmp_path, _transcript(None))
+
+    app._sync_playback_toggle()
+
+    assert app.playback_seek_scale.state_value == "disabled"
+
+
+def test_the_seek_scale_is_enabled_once_audio_is_playable(tmp_path: Path) -> None:
+    media = _managed_file(tmp_path)
+    app = _playback_app(tmp_path, _transcript(str(media)))
+
+    app._sync_playback_toggle()
+
+    assert app.playback_seek_scale.state_value == "normal"
+
+
 def test_shutdown_records_a_playback_residue_when_stop_times_out(tmp_path: Path) -> None:
     app = _playback_app(tmp_path, None)
     app.player.stop_result = False
@@ -462,4 +577,5 @@ def test_retranslate_relabels_the_playback_bar(tmp_path: Path) -> None:
         labels = {button.text for button in app._playback_button_keys}
         assert translate(locale, "playback_stop") in labels
         assert app.playback_speed_label.text == translate(locale, "playback_speed")
+        assert app.playback_seek_label.text == translate(locale, "playback_seek")
         assert app.playback_toggle_button.text == translate(locale, "playback_play")

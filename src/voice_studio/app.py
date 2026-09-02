@@ -8,7 +8,7 @@ import tkinter as tk
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from datetime import time as day_time
 from functools import partial
 from pathlib import Path
@@ -88,11 +88,18 @@ from .smart_text import (
 )
 from .storage import LocalStore
 from .subtitles import editable_text
+from .sync_folder import (
+    SyncFolderError,
+    SyncSummary,
+    mirror_all,
+    mirror_transcript,
+    validate_sync_root,
+)
 
 _BACKUP_PASSPHRASE_REQUIRED = "backup is encrypted; a passphrase is required"
 
 # Visible build stamp in the window title so an outdated launch is obvious.
-APP_BUILD = "2026-09-02.1"
+APP_BUILD = "2026-09-02.2"
 EDITOR_FIND_TAG = "editor_find"
 EDITOR_CONFIDENCE_TAG = "editor_confidence"
 FILLER_CONTEXT_WIDTH = 30
@@ -216,6 +223,7 @@ def studio_content_metrics(width: int) -> tuple[tuple[int, int, int, int], int, 
 
 DASHBOARD_EMPTY_VALUE = "—"
 DASHBOARD_RECENT_LIMIT = 5
+DASHBOARD_ACTIVITY_DAYS = 14
 
 
 def format_audio_duration(seconds: float) -> str:
@@ -757,6 +765,14 @@ class VoiceStudioApp(tk.Tk):
         ttk.Label(self.status_bar, textvariable=self.status, style="Status.TLabel").pack(
             side="left", padx=(7, 0)
         )
+        self.status_progress = ttk.Progressbar(
+            self.status_bar, mode="indeterminate", length=110, maximum=100
+        )
+        self.status_batch_var = tk.StringVar(value="")
+        self.status_batch_label = ttk.Label(
+            self.status_bar, textvariable=self.status_batch_var, style="Status.TLabel"
+        )
+        self.status_batch_label.pack(side="right", padx=(0, 10))
 
         self.dashboard_page = ttk.Frame(self.page_host, padding=28, style="Canvas.TFrame")
         self.dashboard_page.grid(row=0, column=0, sticky="nsew")
@@ -853,6 +869,50 @@ class VoiceStudioApp(tk.Tk):
             recent_card, text=self._t("dashboard_recent_empty"), style="CardValue.TLabel"
         )
         self.dashboard_recent_empty_label.grid(row=DASHBOARD_RECENT_LIMIT + 1, column=0, sticky="w")
+
+        dynamics_card = ttk.Frame(self.dashboard_page, padding=(12, 10), style="Card.TFrame")
+        dynamics_card.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        dynamics_card.grid_columnconfigure(0, weight=1, uniform="dashboard_dynamics")
+        dynamics_card.grid_columnconfigure(1, weight=1, uniform="dashboard_dynamics")
+        self.dashboard_dynamics_caption = ttk.Label(
+            dynamics_card, text=self._t("dashboard_dynamics"), style="CardMuted.TLabel"
+        )
+        self.dashboard_dynamics_caption.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.dashboard_activity_caption = ttk.Label(
+            dynamics_card, text=self._t("dashboard_activity_14d"), style="CardMuted.TLabel"
+        )
+        self.dashboard_activity_caption.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.dashboard_distribution_caption = ttk.Label(
+            dynamics_card, text=self._t("dashboard_distribution"), style="CardMuted.TLabel"
+        )
+        self.dashboard_distribution_caption.grid(
+            row=1, column=1, sticky="w", pady=(6, 0), padx=(12, 0)
+        )
+        self.dashboard_activity_canvas = tk.Canvas(
+            dynamics_card,
+            height=120,
+            background=theme.surface,
+            highlightthickness=0,
+        )
+        self.dashboard_activity_canvas.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self.dashboard_distribution_canvas = tk.Canvas(
+            dynamics_card,
+            height=120,
+            background=theme.surface,
+            highlightthickness=0,
+        )
+        self.dashboard_distribution_canvas.grid(
+            row=2, column=1, sticky="ew", pady=(4, 0), padx=(12, 0)
+        )
+        self._dashboard_activity_data: tuple[tuple[str, int], ...] = ()
+        self._dashboard_language_data: tuple[tuple[str, int], ...] = ()
+        self._dashboard_engine_data: tuple[tuple[str, int], ...] = ()
+        self.dashboard_activity_canvas.bind(
+            "<Configure>", lambda _event: self._redraw_dashboard_activity_chart()
+        )
+        self.dashboard_distribution_canvas.bind(
+            "<Configure>", lambda _event: self._redraw_dashboard_distribution_chart()
+        )
 
         self.studio_page = ttk.Frame(self.page_host, style="Canvas.TFrame")
         self.main_area = self.studio_page
@@ -1080,8 +1140,10 @@ class VoiceStudioApp(tk.Tk):
 
         self.playback_bar = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
         self.playback_bar.pack(fill="x")
+        playback_controls_row = ttk.Frame(self.playback_bar, style="Card.TFrame")
+        playback_controls_row.pack(fill="x")
         self.playback_toggle_button = ttk.Button(
-            self.playback_bar,
+            playback_controls_row,
             text=self._t("playback_play"),
             command=self._toggle_playback,
         )
@@ -1092,16 +1154,16 @@ class VoiceStudioApp(tk.Tk):
             ("playback_back_5", lambda: self._seek_playback(-5.0)),
             ("playback_forward_5", lambda: self._seek_playback(5.0)),
         ):
-            button = ttk.Button(self.playback_bar, text=self._t(key), command=command)
+            button = ttk.Button(playback_controls_row, text=self._t(key), command=command)
             button.pack(side="left", padx=(5, 0))
             self._playback_button_keys[button] = key
         self.playback_speed_label = ttk.Label(
-            self.playback_bar, text=self._t("playback_speed"), style="CardMuted.TLabel"
+            playback_controls_row, text=self._t("playback_speed"), style="CardMuted.TLabel"
         )
         self.playback_speed_label.pack(side="left", padx=(12, 4))
         self.playback_speed_var = tk.StringVar(value="1×")
         speed_combo = ttk.Combobox(
-            self.playback_bar,
+            playback_controls_row,
             textvariable=self.playback_speed_var,
             values=[f"{speed:g}×" for speed in SUPPORTED_SPEEDS],
             state="readonly",
@@ -1111,10 +1173,29 @@ class VoiceStudioApp(tk.Tk):
         speed_combo.bind("<<ComboboxSelected>>", self._set_playback_speed)
         self.playback_position_var = tk.StringVar(value="0:00 / —")
         ttk.Label(
-            self.playback_bar,
+            playback_controls_row,
             textvariable=self.playback_position_var,
             style="CardMuted.TLabel",
         ).pack(side="right")
+        playback_seek_row = ttk.Frame(self.playback_bar, style="Card.TFrame")
+        playback_seek_row.pack(fill="x", pady=(6, 0))
+        self.playback_seek_label = ttk.Label(
+            playback_seek_row, text=self._t("playback_seek"), style="CardMuted.TLabel"
+        )
+        self.playback_seek_label.pack(side="left", padx=(0, 8))
+        self.playback_seek_var = tk.DoubleVar(value=0.0)
+        self._playback_seek_dragging = False
+        self.playback_seek_scale = ttk.Scale(
+            playback_seek_row,
+            from_=0,
+            to=1000,
+            orient="horizontal",
+            variable=self.playback_seek_var,
+        )
+        self.playback_seek_scale.configure(state="disabled")
+        self.playback_seek_scale.pack(side="left", fill="x", expand=True)
+        self.playback_seek_scale.bind("<ButtonPress-1>", self._press_playback_seek)
+        self.playback_seek_scale.bind("<ButtonRelease-1>", self._release_playback_seek)
 
         self.find_panel = ttk.Frame(corrected_frame, padding=(0, 7, 0, 0), style="Card.TFrame")
         self.find_panel_visible = False
@@ -1959,6 +2040,18 @@ class VoiceStudioApp(tk.Tk):
         self._build_settings_page()
         return True
 
+    def _validate_settings_for_save(self, updated: Settings) -> None:
+        """Raise if ``updated`` cannot be saved.
+
+        Runs the ordinary field validation, then — only when Sync is
+        enabled — also confirms the folder is a real, safe mirror target
+        (not missing, a symlink, or inside/around the app data folder).
+        """
+
+        updated.validate()
+        if updated.sync_enabled:
+            validate_sync_root(Path(updated.sync_folder), data_root=data_dir())
+
     def _apply_settings_update(self, updated: Settings) -> bool:
         previous_ui_language = self.settings.ui_language
         path_changed = updated.dictionary_path != self.settings.dictionary_path
@@ -2349,9 +2442,10 @@ class VoiceStudioApp(tk.Tk):
         )
         style.map(
             "Sidebar.TButton",
-            background=[("active", theme.accent_soft), ("disabled", theme.surface)],
+            background=[("active", theme.selection), ("disabled", theme.surface)],
             foreground=[("active", theme.ink), ("disabled", theme.muted_ink)],
             bordercolor=[("focus", theme.accent)],
+            cursor=[("active", "hand2"), ("disabled", "")],
         )
         style.configure(
             "SidebarActive.TButton",
@@ -2368,6 +2462,7 @@ class VoiceStudioApp(tk.Tk):
             "SidebarActive.TButton",
             background=[("active", theme.accent_soft)],
             bordercolor=[("focus", theme.accent)],
+            cursor=[("active", "hand2")],
         )
         style.configure(
             "Record.TButton",
@@ -2520,6 +2615,12 @@ class VoiceStudioApp(tk.Tk):
             label.configure(text=self._t(f"dashboard_top_{key}"))
         self.dashboard_recent_caption.configure(text=self._t("dashboard_recent"))
         self.dashboard_recent_empty_label.configure(text=self._t("dashboard_recent_empty"))
+        if "dashboard_dynamics_caption" in self.__dict__:
+            self.dashboard_dynamics_caption.configure(text=self._t("dashboard_dynamics"))
+            self.dashboard_activity_caption.configure(text=self._t("dashboard_activity_14d"))
+            self.dashboard_distribution_caption.configure(
+                text=self._t("dashboard_distribution")
+            )
         self._refresh_dashboard()
 
     def _refresh_history_filter_ui_text(self) -> None:
@@ -2610,6 +2711,20 @@ class VoiceStudioApp(tk.Tk):
         self.cleanup_button.configure(state=state)
         self.undo_cleanup_button.configure(state=state)
         self.cancel_button.configure(state="normal" if value else "disabled")
+        if "status_progress" in self.__dict__:
+            if value:
+                self.status_progress.configure(mode="indeterminate")
+                self.status_progress.pack(side="right", padx=(0, 10))
+                try:
+                    self.status_progress.start(12)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.status_progress.stop()
+                except Exception:
+                    pass
+                self.status_progress.pack_forget()
 
     def _start_hotkey(self) -> None:
         if self.hotkey is not None:
@@ -2852,6 +2967,7 @@ class VoiceStudioApp(tk.Tk):
                     transcript, cleanup = value
                     self._cleanup_temp(cleanup)
                     self._set_busy(False)
+                    self._mirror_transcript_quietly(transcript)
                     if self.__dict__.get("_batch_owned", False):
                         self._batch_job_finished(transcript=transcript)
                     else:
@@ -2875,6 +2991,9 @@ class VoiceStudioApp(tk.Tk):
                     downloaded, expected = value
                     percent = min(99, round(downloaded * 100 / max(expected, 1)))
                     self.status.set(self._t("model_download_progress", percent=percent))
+                    if "status_progress" in self.__dict__:
+                        self.status_progress.configure(mode="determinate", maximum=100)
+                        self.status_progress.configure(value=percent)
                 elif event == "model_done":
                     self._set_busy(False)
                     self.status.set(self._t("model_installed_status", model=value["id"]))
@@ -3024,6 +3143,20 @@ class VoiceStudioApp(tk.Tk):
                     self._set_busy(False)
                     self.status.set(self._t("backup_error"))
                     messagebox.showerror(self._t("backup"), str(error))
+                elif event == "sync_done":
+                    self._set_busy(False)
+                    if isinstance(value, SyncSummary):
+                        self.status.set(
+                            self._t(
+                                "sync_done",
+                                written=value.written,
+                                audio=value.audio,
+                                failed=len(value.failed),
+                            )
+                        )
+                    else:
+                        self.status.set(self._t("sync_failed", error=str(value)))
+                        messagebox.showerror(self._t("sync_section"), str(value), parent=self)
                 elif event == "cleanup_proposal":
                     transcript, proposal = value
                     self._set_busy(False)
@@ -3048,6 +3181,7 @@ class VoiceStudioApp(tk.Tk):
                         )
                         self._show_result(updated, refresh=True)
                         self.status.set(self._t("cleanup_applied"))
+                        self._mirror_transcript_quietly(updated)
                     else:
                         self.status.set(self._t("cleanup_not_applied"))
                 elif event == "cleanup_error":
@@ -3311,6 +3445,13 @@ class VoiceStudioApp(tk.Tk):
             pause_button.configure(
                 text=self._t("batch_resume" if self.batch_queue.paused else "batch_pause")
             )
+        if "status_batch_var" in self.__dict__:
+            summary = self.batch_queue.summary()
+            if summary.total > 0:
+                done = summary.done + summary.failed + summary.skipped
+                self.status_batch_var.set(f"{done}/{summary.total}")
+            else:
+                self.status_batch_var.set("")
 
     def _refresh_batch_ui_text(self) -> None:
         self.batch_button.configure(text=self._t("batch_button"))
@@ -3573,6 +3714,7 @@ class VoiceStudioApp(tk.Tk):
             labels.pop(index, None)
         # Metadata only: raw_text and every segment stay exactly as recognised.
         self.current = self.store.update_speaker_labels(transcript.id, labels)
+        self._mirror_transcript_quietly(self.current)
         self._refresh_smart_text()
 
     def _copy_smart_text(self) -> None:
@@ -4111,6 +4253,25 @@ class VoiceStudioApp(tk.Tk):
             return
         self._refresh_playback_label()
 
+    def _press_playback_seek(self, _event: Any = None) -> None:
+        self._playback_seek_dragging = True
+
+    def _release_playback_seek(self, _event: Any = None) -> None:
+        self._playback_seek_dragging = False
+        player = self.__dict__.get("player")
+        if player is None or player.state == "idle":
+            return
+        duration = player.duration
+        if duration is None or duration <= 0:
+            return
+        fraction = max(0.0, min(1000.0, self.playback_seek_var.get())) / 1000.0
+        try:
+            player.seek_to(fraction * duration)
+        except (RuntimeError, ValueError) as exc:
+            self.status.set(self._t("playback_error", error=exc))
+            return
+        self._refresh_playback_label()
+
     def _set_playback_speed(self, _event: Any = None) -> None:
         player = self.__dict__.get("player")
         if player is None or player.state == "idle":
@@ -4164,6 +4325,18 @@ class VoiceStudioApp(tk.Tk):
         self.playback_position_var.set(
             f"{self._format_playback_seconds(player.position)} / {rendered}"
         )
+        self._sync_playback_seek_value(player, duration)
+
+    def _sync_playback_seek_value(self, player: Any, duration: float | None) -> None:
+        if "playback_seek_var" not in self.__dict__:
+            return
+        if self.__dict__.get("_playback_seek_dragging"):
+            return
+        if duration is None or duration <= 0:
+            self.playback_seek_var.set(0.0)
+            return
+        fraction = max(0.0, min(1.0, player.position / duration))
+        self.playback_seek_var.set(fraction * 1000.0)
 
     def _sync_playback_toggle(self) -> None:
         if "playback_toggle_button" not in self.__dict__:
@@ -4173,6 +4346,9 @@ class VoiceStudioApp(tk.Tk):
             "playback_play"
         )
         self.playback_toggle_button.configure(text=self._t(key))
+        if "playback_seek_scale" in self.__dict__:
+            playable = self._playable_source_path() is not None
+            self.playback_seek_scale.configure(state="normal" if playable else "disabled")
 
     def _shutdown_playback(self, residues: set[str]) -> None:
         """Stop the playback worker at exit; record it when it will not join."""
@@ -4193,6 +4369,8 @@ class VoiceStudioApp(tk.Tk):
         for button, key in self._playback_button_keys.items():
             button.configure(text=self._t(key))
         self.playback_speed_label.configure(text=self._t("playback_speed"))
+        if "playback_seek_label" in self.__dict__:
+            self.playback_seek_label.configure(text=self._t("playback_seek"))
         self._sync_playback_toggle()
 
     def _copy_to_clipboard(self, text: str) -> None:
@@ -4248,6 +4426,182 @@ class VoiceStudioApp(tk.Tk):
             self.dashboard_recent_empty_label.grid_remove()
         else:
             self.dashboard_recent_empty_label.grid()
+        if "dashboard_activity_canvas" in self.__dict__:
+            self._dashboard_activity_data = self.store.daily_activity(
+                days=DASHBOARD_ACTIVITY_DAYS
+            )
+            self._dashboard_language_data = statistics.language_counts
+            self._dashboard_engine_data = statistics.engine_counts
+            self._redraw_dashboard_activity_chart()
+            self._redraw_dashboard_distribution_chart()
+
+    def _dashboard_top_with_other(
+        self, counts: tuple[tuple[str, int], ...], *, top: int = 5
+    ) -> tuple[tuple[str, int], ...]:
+        if len(counts) <= top:
+            return counts
+        head = counts[:top]
+        other_total = sum(count for _name, count in counts[top:])
+        return (*head, (self._t("dashboard_other"), other_total))
+
+    @staticmethod
+    def _dashboard_weekday_label(iso_day: str) -> str:
+        try:
+            return date.fromisoformat(iso_day).strftime("%a")
+        except ValueError:
+            return iso_day[-2:]
+
+    def _draw_activity_chart(
+        self,
+        canvas: Any,
+        data: tuple[tuple[str, int], ...],
+        *,
+        width: int,
+        height: int,
+    ) -> None:
+        """Draw the 14-day activity bar chart. Pure with respect to its arguments."""
+
+        theme = VOICE_STUDIO_THEME
+        canvas.delete("all")
+        if width <= 0 or height <= 0:
+            return
+        if not data or all(count == 0 for _day, count in data):
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=self._t("dashboard_no_activity"),
+                fill=theme.muted_ink,
+                font=(theme.ui_font, 9),
+            )
+            return
+        top_margin, bottom_margin = 16, 16
+        baseline = height - bottom_margin
+        plot_height = max(1.0, baseline - top_margin)
+        peak = max(count for _day, count in data)
+        slot_width = width / len(data)
+        bar_width = max(2.0, slot_width * 0.6)
+        for index, (iso_day, count) in enumerate(data):
+            x_center = slot_width * index + slot_width / 2
+            bar_height = 0.0 if peak <= 0 else plot_height * (count / peak)
+            y_top = baseline - bar_height
+            canvas.create_rectangle(
+                x_center - bar_width / 2,
+                y_top,
+                x_center + bar_width / 2,
+                baseline,
+                fill=theme.accent,
+                outline="",
+            )
+            if count > 0:
+                canvas.create_text(
+                    x_center,
+                    max(0.0, y_top - 8),
+                    text=str(count),
+                    fill=theme.ink,
+                    font=(theme.ui_font, 8),
+                )
+            if index % 2 == 0:
+                canvas.create_text(
+                    x_center,
+                    height - bottom_margin / 2,
+                    text=self._dashboard_weekday_label(iso_day),
+                    fill=theme.muted_ink,
+                    font=(theme.ui_font, 7),
+                )
+
+    def _draw_distribution_chart(
+        self,
+        canvas: Any,
+        language_counts: tuple[tuple[str, int], ...],
+        engine_counts: tuple[tuple[str, int], ...],
+        *,
+        width: int,
+        height: int,
+    ) -> None:
+        """Draw the language/engine horizontal distribution chart onto ``canvas``."""
+
+        theme = VOICE_STUDIO_THEME
+        canvas.delete("all")
+        if width <= 0 or height <= 0:
+            return
+        rows = [
+            ("lang", name, count)
+            for name, count in self._dashboard_top_with_other(language_counts)
+        ] + [
+            ("engine", name, count)
+            for name, count in self._dashboard_top_with_other(engine_counts)
+        ]
+        if not rows or all(count == 0 for _kind, _name, count in rows):
+            canvas.create_text(
+                width / 2,
+                height / 2,
+                text=self._t("dashboard_no_activity"),
+                fill=theme.muted_ink,
+                font=(theme.ui_font, 9),
+            )
+            return
+        peak = max((count for _kind, _name, count in rows), default=0) or 1
+        row_height = height / len(rows)
+        label_width = width * 0.32
+        bar_area = max(1.0, width - label_width - 40)
+        for index, (kind, name, count) in enumerate(rows):
+            y_center = row_height * index + row_height / 2
+            canvas.create_text(
+                4,
+                y_center,
+                text=name,
+                fill=theme.ink,
+                font=(theme.ui_font, 8),
+                anchor="w",
+            )
+            bar_length = bar_area * (count / peak)
+            canvas.create_rectangle(
+                label_width,
+                y_center - row_height * 0.28,
+                label_width + bar_length,
+                y_center + row_height * 0.28,
+                fill=theme.accent if kind == "lang" else theme.primary,
+                outline="",
+            )
+            canvas.create_text(
+                label_width + bar_length + 4,
+                y_center,
+                text=str(count),
+                fill=theme.muted_ink,
+                font=(theme.ui_font, 8),
+                anchor="w",
+            )
+
+    def _redraw_dashboard_activity_chart(self) -> None:
+        canvas = self.__dict__.get("dashboard_activity_canvas")
+        if canvas is None:
+            return
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 1:
+            return
+        self._draw_activity_chart(
+            canvas,
+            self.__dict__.get("_dashboard_activity_data", ()),
+            width=width,
+            height=height,
+        )
+
+    def _redraw_dashboard_distribution_chart(self) -> None:
+        canvas = self.__dict__.get("dashboard_distribution_canvas")
+        if canvas is None:
+            return
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+        if width <= 1:
+            return
+        self._draw_distribution_chart(
+            canvas,
+            self.__dict__.get("_dashboard_language_data", ()),
+            self.__dict__.get("_dashboard_engine_data", ()),
+            width=width,
+            height=height,
+        )
 
     def _open_dashboard_recent(self, index: int) -> None:
         items = self._dashboard_recent_items
@@ -4449,6 +4803,59 @@ class VoiceStudioApp(tk.Tk):
             return True
         return False
 
+    def _mirror_transcript_quietly(self, transcript: Transcript) -> None:
+        """Mirror the current stored transcript into the sync folder, if enabled.
+
+        A no-op when sync is disabled or no folder is configured. Any failure
+        (an invalid or removed folder, a filesystem error, ...) is reported
+        on the status bar only — it must never raise into the caller and
+        never block or undo whatever save just triggered it.
+        """
+
+        try:
+            if not self.settings.sync_enabled or not self.settings.sync_folder.strip():
+                return
+            mirror_transcript(
+                transcript,
+                Path(self.settings.sync_folder),
+                include_audio=self.settings.sync_include_audio,
+                sources_root=self.store.sources,
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced on the status bar only
+            self.status.set(self._t("sync_failed", error=str(exc)))
+
+    def _sync_all_now(self) -> None:
+        """Mirror every stored transcript on the maintenance worker."""
+
+        if not self.settings.sync_enabled or not self.settings.sync_folder.strip():
+            messagebox.showerror(
+                self._t("sync_section"),
+                self._t("sync_invalid_folder", error=self._t("sync_folder")),
+                parent=self,
+            )
+            return
+        try:
+            root = validate_sync_root(Path(self.settings.sync_folder), data_root=data_dir())
+        except SyncFolderError as exc:
+            messagebox.showerror(self._t("sync_section"), str(exc), parent=self)
+            return
+        include_audio = self.settings.sync_include_audio
+        sources_root = self.store.sources
+        self._set_busy(True)
+        self.status.set(self._t("sync_running"))
+
+        def work() -> None:
+            try:
+                transcripts = self.store.list(limit=1_000_000)
+                summary = mirror_all(
+                    transcripts, root, include_audio=include_audio, sources_root=sources_root
+                )
+                self._post_event("sync_done", summary)
+            except Exception as exc:  # noqa: BLE001 - reported through the event, never raised
+                self._post_event("sync_done", exc)
+
+        self._start_worker("sync", work)
+
     def _save_edits(self) -> bool:
         if not self.current:
             if self._editor_is_dirty():
@@ -4472,6 +4879,7 @@ class VoiceStudioApp(tk.Tk):
             self.editor.get("1.0", "end-1c"), self._editor_formatting()
         )
         self.status.set(self._t("edits_saved"))
+        self._mirror_transcript_quietly(self.current)
         return True
 
     def _cleanup_result_is_current(self, transcript: Transcript) -> bool:
@@ -4899,6 +5307,9 @@ class VoiceStudioApp(tk.Tk):
             "openai_cleanup_model": tk.StringVar(value=self.settings.openai_cleanup_model),
             "cleanup_provider": tk.StringVar(value=self.settings.cleanup_provider),
             "ollama_model": tk.StringVar(value=selected_ollama_model),
+            "sync_enabled": tk.BooleanVar(value=self.settings.sync_enabled),
+            "sync_folder": tk.StringVar(value=self.settings.sync_folder),
+            "sync_include_audio": tk.BooleanVar(value=self.settings.sync_include_audio),
         }
         self._settings_variables = variables
         self._settings_baseline = {name: value.get() for name, value in variables.items()}
@@ -5097,6 +5508,58 @@ class VoiceStudioApp(tk.Tk):
             variable=variables["offline_only"],
             state="disabled",
         ).grid(row=3, column=0, columnspan=2, sticky="w")
+
+        sync_frame = ttk.Labelframe(
+            general_page,
+            text=self._t("sync_section"),
+            padding=14,
+            style="Card.TLabelframe",
+        )
+        sync_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(18, 0))
+        sync_frame.grid_columnconfigure(0, weight=1)
+
+        ttk.Checkbutton(
+            sync_frame,
+            text=self._t("sync_enabled"),
+            variable=variables["sync_enabled"],
+        ).grid(row=0, column=0, columnspan=2, sticky="w")
+
+        sync_folder_row = ttk.Frame(sync_frame, style="Card.TFrame")
+        sync_folder_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Entry(sync_folder_row, textvariable=variables["sync_folder"]).pack(
+            side="left", fill="x", expand=True
+        )
+
+        def choose_sync_folder() -> None:
+            path = filedialog.askdirectory(parent=self, title=self._t("sync_choose_folder"))
+            if path:
+                variables["sync_folder"].set(path)
+
+        ttk.Button(
+            sync_folder_row,
+            text=self._t("sync_choose_folder"),
+            command=choose_sync_folder,
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Checkbutton(
+            sync_frame,
+            text=self._t("sync_include_audio"),
+            variable=variables["sync_include_audio"],
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        ttk.Label(
+            sync_frame,
+            text=self._t("sync_caption"),
+            style="CardMuted.TLabel",
+            wraplength=760,
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 8))
+
+        ttk.Button(
+            sync_frame,
+            text=self._t("sync_all_now"),
+            command=self._sync_all_now,
+        ).grid(row=4, column=0, sticky="w")
 
         engine_field = field(recognition_page, 0, 0, self._t("engine"))
         ttk.Label(
@@ -5304,9 +5767,12 @@ class VoiceStudioApp(tk.Tk):
                     openai_cleanup_model=str(variables["openai_cleanup_model"].get()).strip(),
                     cleanup_provider=str(variables["cleanup_provider"].get()).strip(),
                     ollama_model=str(variables["ollama_model"].get()).strip(),
+                    sync_enabled=bool(variables["sync_enabled"].get()),
+                    sync_folder=str(variables["sync_folder"].get()).strip(),
+                    sync_include_audio=bool(variables["sync_include_audio"].get()),
                 )
                 updated = apply_profile(updated, updated.profile)
-                updated.validate()
+                self._validate_settings_for_save(updated)
             except Exception as exc:
                 messagebox.showerror(self._t("settings"), str(exc), parent=self)
                 return False

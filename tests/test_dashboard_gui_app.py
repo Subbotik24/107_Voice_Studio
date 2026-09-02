@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from voice_studio.app import VoiceStudioApp
+from voice_studio.app import DASHBOARD_ACTIVITY_DAYS, VoiceStudioApp
 from voice_studio.dashboard import DashboardStatistics, HistoryFilter
 from voice_studio.i18n import UI_LANGUAGE_CHOICES, translate
 from voice_studio.models import Transcript
@@ -62,9 +62,11 @@ class FakeStore:
         self,
         statistics: DashboardStatistics | None = None,
         recent: list[Transcript] | None = None,
+        activity: tuple[tuple[str, int], ...] = (),
     ) -> None:
         self._statistics = statistics if statistics is not None else DashboardStatistics()
         self._recent = recent if recent is not None else []
+        self._activity = activity
         self.calls: list[tuple[str, object]] = []
 
     def statistics(self) -> DashboardStatistics:
@@ -74,6 +76,37 @@ class FakeStore:
     def list(self, *args: object, **kwargs: object) -> list[Transcript]:
         self.calls.append(("list", (args, kwargs)))
         return list(self._recent)
+
+    def daily_activity(self, *, days: int = 14) -> tuple[tuple[str, int], ...]:
+        self.calls.append(("daily_activity", days))
+        return self._activity
+
+
+class FakeCanvas:
+    """Records draw calls instead of touching a real Tk canvas."""
+
+    def __init__(self, width: int = 220, height: int = 120) -> None:
+        self._width = width
+        self._height = height
+        self.calls: list[tuple[str, tuple, dict]] = []
+
+    def winfo_width(self) -> int:
+        return self._width
+
+    def winfo_height(self) -> int:
+        return self._height
+
+    def bind(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+    def delete(self, *args: object) -> None:
+        self.calls.append(("delete", args, {}))
+
+    def create_rectangle(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("create_rectangle", args, kwargs))
+
+    def create_text(self, *args: object, **kwargs: object) -> None:
+        self.calls.append(("create_text", args, kwargs))
 
 
 def _transcript(identifier: str = "id-1") -> Transcript:
@@ -459,3 +492,167 @@ def test_retranslation_relabels_the_dashboard_and_the_filters(language: str) -> 
         translate(language, "history_filter_no"),
     ]
     assert VoiceStudioApp._build_history_filter(history).status == "completed"
+
+
+# --- dashboard dynamics charts -----------------------------------------------
+
+
+def _chart_app() -> VoiceStudioApp:
+    app = object.__new__(VoiceStudioApp)
+    app.settings = SimpleNamespace(ui_language="en")
+    return app
+
+
+def test_activity_chart_draws_one_bar_per_day_with_a_label_every_other_day() -> None:
+    """Catches a chart that drops a day, mislabels weekdays, or skips count labels."""
+
+    app = _chart_app()
+    canvas = FakeCanvas()
+    data = tuple((f"2026-08-{19 + i:02d}", i) for i in range(4))
+
+    VoiceStudioApp._draw_activity_chart(app, canvas, data, width=200, height=120)
+
+    rectangles = [call for call in canvas.calls if call[0] == "create_rectangle"]
+    assert len(rectangles) == 4
+    texts = [call[2].get("text") for call in canvas.calls if call[0] == "create_text"]
+    # Zero-count days (index 0) get no value label; non-zero days do.
+    assert "1" in texts and "2" in texts and "3" in texts
+    assert "0" not in texts
+    # A weekday label is drawn under every other bar (indices 0 and 2).
+    assert canvas.calls[0] == ("delete", ("all",), {})
+
+
+def test_activity_chart_shows_empty_state_when_every_day_is_zero() -> None:
+    """Catches a chart that renders a flat, mute row of bars instead of an empty hint."""
+
+    app = _chart_app()
+    canvas = FakeCanvas()
+    data = tuple((f"2026-08-{19 + i:02d}", 0) for i in range(3))
+
+    VoiceStudioApp._draw_activity_chart(app, canvas, data, width=200, height=120)
+
+    assert [call[0] for call in canvas.calls] == ["delete", "create_text"]
+    assert canvas.calls[1][2]["text"] == translate("en", "dashboard_no_activity")
+
+
+def test_activity_chart_guards_against_zero_width() -> None:
+    """Catches a resize-triggered redraw that crashes on a not-yet-realized canvas."""
+
+    app = _chart_app()
+    canvas = FakeCanvas()
+    data = (("2026-08-20", 1),)
+
+    VoiceStudioApp._draw_activity_chart(app, canvas, data, width=0, height=120)
+
+    assert canvas.calls == [("delete", ("all",), {})]
+
+
+def test_distribution_chart_aggregates_beyond_top_five_as_other() -> None:
+    """Catches a distribution chart that overflows instead of folding the long tail."""
+
+    app = _chart_app()
+    canvas = FakeCanvas()
+    languages = tuple((f"lang-{i}", 10 - i) for i in range(7))
+
+    VoiceStudioApp._draw_distribution_chart(
+        app, canvas, languages, (), width=220, height=120
+    )
+
+    texts = [call[2]["text"] for call in canvas.calls if call[0] == "create_text"]
+    assert translate("en", "dashboard_other") in texts
+    assert "lang-6" not in texts
+
+
+def test_distribution_chart_shows_empty_state_without_any_counts() -> None:
+    app = _chart_app()
+    canvas = FakeCanvas()
+
+    VoiceStudioApp._draw_distribution_chart(app, canvas, (), (), width=220, height=120)
+
+    assert [call[0] for call in canvas.calls] == ["delete", "create_text"]
+    assert canvas.calls[1][2]["text"] == translate("en", "dashboard_no_activity")
+
+
+def test_redraw_activity_chart_skips_an_unrealized_zero_width_canvas() -> None:
+    """Catches a <Configure> redraw firing before the canvas has real geometry."""
+
+    app = _chart_app()
+    app.dashboard_activity_canvas = FakeCanvas(width=1, height=120)
+    app._dashboard_activity_data = (("2026-08-20", 3),)
+
+    VoiceStudioApp._redraw_dashboard_activity_chart(app)
+
+    assert app.dashboard_activity_canvas.calls == []
+
+    app.dashboard_activity_canvas._width = 200
+    VoiceStudioApp._redraw_dashboard_activity_chart(app)
+
+    assert app.dashboard_activity_canvas.calls
+
+
+def test_redraw_distribution_chart_skips_an_unrealized_zero_width_canvas() -> None:
+    app = _chart_app()
+    app.dashboard_distribution_canvas = FakeCanvas(width=1, height=120)
+    app._dashboard_language_data = (("uk", 3),)
+    app._dashboard_engine_data = (("ollama", 3),)
+
+    VoiceStudioApp._redraw_dashboard_distribution_chart(app)
+
+    assert app.dashboard_distribution_canvas.calls == []
+
+    app.dashboard_distribution_canvas._width = 200
+    VoiceStudioApp._redraw_dashboard_distribution_chart(app)
+
+    assert app.dashboard_distribution_canvas.calls
+
+
+def test_dashboard_refresh_populates_and_redraws_the_dynamics_charts() -> None:
+    """Catches a dashboard refresh that fetches activity but never redraws the charts."""
+
+    statistics = DashboardStatistics(
+        total_records=2,
+        language_counts=(("uk", 2),),
+        engine_counts=(("ollama", 2),),
+    )
+    app = _dashboard_app(statistics)
+    app.store = FakeStore(statistics, activity=(("2026-08-20", 2),))
+    app.dashboard_activity_canvas = FakeCanvas()
+    app.dashboard_distribution_canvas = FakeCanvas()
+
+    VoiceStudioApp._refresh_dashboard(app)
+
+    assert ("daily_activity", DASHBOARD_ACTIVITY_DAYS) in app.store.calls
+    assert app._dashboard_activity_data == (("2026-08-20", 2),)
+    assert app._dashboard_language_data == (("uk", 2),)
+    assert app._dashboard_engine_data == (("ollama", 2),)
+    assert app.dashboard_activity_canvas.calls
+    assert app.dashboard_distribution_canvas.calls
+
+
+def test_dashboard_refresh_without_chart_widgets_never_calls_daily_activity() -> None:
+    """Catches a chart wiring that assumes the dynamics canvases always exist."""
+
+    app = _dashboard_app()
+
+    VoiceStudioApp._refresh_dashboard(app)
+
+    assert all(name != "daily_activity" for name, _value in app.store.calls)
+
+
+@pytest.mark.parametrize("language", [code for code, _label in UI_LANGUAGE_CHOICES])
+def test_retranslation_relabels_the_dynamics_card(language: str) -> None:
+    app = _dashboard_app()
+    app.settings = SimpleNamespace(ui_language=language)
+    app.dashboard_dynamics_caption = FakeLabel()
+    app.dashboard_activity_caption = FakeLabel()
+    app.dashboard_distribution_caption = FakeLabel()
+
+    VoiceStudioApp._refresh_dashboard_ui_text(app)
+
+    assert app.dashboard_dynamics_caption.text == translate(language, "dashboard_dynamics")
+    assert app.dashboard_activity_caption.text == translate(
+        language, "dashboard_activity_14d"
+    )
+    assert app.dashboard_distribution_caption.text == translate(
+        language, "dashboard_distribution"
+    )

@@ -112,3 +112,7 @@ potvrďte. Funkce **Vrátit AI úpravu** obnoví předchozí opravený text. Nem
 Pokud obnovení přeruší výpadek napájení nebo nucené ukončení procesu, VOICE
 Studio je při příštím spuštění dokončí nebo vrátí zpět a výsledek zobrazí ve
 stavovém řádku. Adresář recovery zůstane v obou případech na disku.
+
+Pro průběžné, nikoli jednorázové, zrcadlení přepisů viz **Nastavení →
+Synchronizace**: je to soukromá alternativa k záloze — soubory se zapisují jen
+na disk, bez jakékoli síťové akce ze strany samotné aplikace.

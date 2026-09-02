@@ -119,3 +119,7 @@ is never changed. OpenAI text cleanup requires separate consent.
 If a restore is interrupted by power loss or forced process termination, VOICE
 Studio completes it or rolls it back on the next launch and reports the result
 in the status bar. The recovery directory remains on disk in either case.
+
+For ongoing, not one-off, transcript mirroring see **Settings →
+Synchronisation**: a privacy-safe alternative to backup — files are only
+written to disk, with no network action of the app's own.

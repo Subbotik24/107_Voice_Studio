@@ -353,6 +353,13 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_diagnostics": "Діагностика очищення: {details}",
         "residue_pending": "Деякі тимчасові файли залишилися; їх можна перевірити вручну: {paths}",
         "phase_elapsed": "{phase}… {elapsed:.1f} с",
+        "dashboard_dynamics": "Динаміка",
+        "dashboard_activity_14d": "Активність за 14 днів",
+        "dashboard_distribution": "Розподіл",
+        "dashboard_no_activity": "Немає активності за цей період",
+        "dashboard_other": "інше",
+        "playback_seek": "Позиція",
+        "status_batch_counter": "{done}/{total}",
         "batch_button": "Черга",
         "batch_panel_title": "Черга транскрипцій",
         "batch_add_files": "Додати файли…",
@@ -378,6 +385,23 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "batch_finished": "Чергу завершено: готово {done}, з помилкою {failed}, пропущено {skipped}.",
         "batch_busy": "Спочатку дочекайтеся завершення поточного завдання.",
         "batch_paused": "Чергу призупинено: очікує ще {count}.",
+        "sync_section": "Синхронізація",
+        "sync_enabled": "Дзеркалити транскрипти в папку",
+        "sync_folder": "Папка синхронізації",
+        "sync_choose_folder": "Вибрати…",
+        "sync_include_audio": "Копіювати також аудіо",
+        "sync_caption": (
+            "Папка — це локальне дзеркало: Markdown і JSON для кожного транскрипту. "
+            "VOICE Studio нічого не видаляє з цієї папки й не робить жодних мережевих "
+            "запитів; ключі доступу тут ніколи не зберігаються. Вкажіть будь-яку "
+            "папку, яку самостійно синхронізує обраний вами сторонній клієнт "
+            "(Google Drive, OneDrive тощо)."
+        ),
+        "sync_all_now": "Синхронізувати все зараз",
+        "sync_running": "Синхронізація…",
+        "sync_done": "Синхронізовано: {written}, аудіо: {audio}, помилок: {failed}.",
+        "sync_failed": "Синхронізацію не виконано: {error}",
+        "sync_invalid_folder": "Некоректна папка синхронізації: {error}",
         "batch_added": "Додано до черги: {count}.",
         "batch_rejected": "Не додано файлів: {count}.",
         "batch_removed": "Прибрано з черги: {count}.",
@@ -742,6 +766,13 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_diagnostics": "Diagnostika čištění: {details}",
         "residue_pending": "Některé dočasné soubory zůstaly; lze je zkontrolovat ručně: {paths}",
         "phase_elapsed": "{phase}… {elapsed:.1f} s",
+        "dashboard_dynamics": "Dynamika",
+        "dashboard_activity_14d": "Aktivita za 14 dní",
+        "dashboard_distribution": "Rozdělení",
+        "dashboard_no_activity": "Za toto období není žádná aktivita",
+        "dashboard_other": "jiné",
+        "playback_seek": "Pozice",
+        "status_batch_counter": "{done}/{total}",
         "batch_button": "Fronta",
         "batch_panel_title": "Fronta přepisů",
         "batch_add_files": "Přidat soubory…",
@@ -767,6 +798,23 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "batch_finished": "Fronta dokončena: hotovo {done}, s chybou {failed}, přeskočeno {skipped}.",
         "batch_busy": "Nejdřív počkejte na dokončení běžící úlohy.",
         "batch_paused": "Fronta pozastavena: čeká ještě {count}.",
+        "sync_section": "Synchronizace",
+        "sync_enabled": "Zrcadlit přepisy do složky",
+        "sync_folder": "Složka synchronizace",
+        "sync_choose_folder": "Vybrat…",
+        "sync_include_audio": "Kopírovat i zvuk",
+        "sync_caption": (
+            "Tato složka je lokální zrcadlo: Markdown a JSON pro každý přepis. "
+            "VOICE Studio z ní nic nemaže a nevytváří žádné síťové požadavky; "
+            "přístupové klíče se sem nikdy neukládají. Zadejte libovolnou "
+            "složku, kterou si sami synchronizuje váš vlastní klient třetí "
+            "strany (Google Drive, OneDrive apod.)."
+        ),
+        "sync_all_now": "Synchronizovat vše nyní",
+        "sync_running": "Synchronizace…",
+        "sync_done": "Synchronizováno: {written}, zvuk: {audio}, chyby: {failed}.",
+        "sync_failed": "Synchronizace se nezdařila: {error}",
+        "sync_invalid_folder": "Neplatná složka synchronizace: {error}",
         "batch_added": "Přidáno do fronty: {count}.",
         "batch_rejected": "Nepřidané soubory: {count}.",
         "batch_removed": "Odebráno z fronty: {count}.",
@@ -1129,6 +1177,13 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "cleanup_diagnostics": "Cleanup diagnostics: {details}",
         "residue_pending": "Some temporary files remain and can be inspected manually: {paths}",
         "phase_elapsed": "{phase}… {elapsed:.1f} s",
+        "dashboard_dynamics": "Dynamics",
+        "dashboard_activity_14d": "14-day activity",
+        "dashboard_distribution": "Distribution",
+        "dashboard_no_activity": "No activity in this period",
+        "dashboard_other": "other",
+        "playback_seek": "Seek",
+        "status_batch_counter": "{done}/{total}",
         "batch_button": "Queue",
         "batch_panel_title": "Transcription queue",
         "batch_add_files": "Add files…",
@@ -1154,6 +1209,23 @@ _CATALOGS: dict[str, dict[str, str]] = {
         "batch_finished": "Queue finished: {done} done, {failed} failed, {skipped} skipped.",
         "batch_busy": "Wait for the running task to finish first.",
         "batch_paused": "Queue paused: {count} still waiting.",
+        "sync_section": "Synchronisation",
+        "sync_enabled": "Mirror transcripts to a folder",
+        "sync_folder": "Sync folder",
+        "sync_choose_folder": "Choose…",
+        "sync_include_audio": "Also copy audio",
+        "sync_caption": (
+            "This folder is a local mirror: Markdown and JSON for each transcript. "
+            "VOICE Studio never deletes anything from it and makes no network "
+            "requests of its own; no API keys are ever stored here. Point it at "
+            "any folder that a third-party client of your own choice syncs "
+            "(Google Drive, OneDrive, etc.)."
+        ),
+        "sync_all_now": "Sync all now",
+        "sync_running": "Syncing…",
+        "sync_done": "Synced: {written}, audio: {audio}, failed: {failed}.",
+        "sync_failed": "Sync failed: {error}",
+        "sync_invalid_folder": "Invalid sync folder: {error}",
         "batch_added": "Added to the queue: {count}.",
         "batch_rejected": "Files not added: {count}.",
         "batch_removed": "Removed from the queue: {count}.",

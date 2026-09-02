@@ -17,6 +17,16 @@ Settings and Help open inside the main window, like Dashboard or Studio. Leaving
 the Settings page with unsaved changes asks whether to save, discard, or stay.
 Models and Backup remain separate windows.
 
+Dashboard's **Dynamics** card adds two charts under the summary tiles: a
+14-day daily activity bar chart (today rightmost, a value label over each
+non-zero day) and a language/engine distribution chart of the top entries,
+with the rest folded into "other". Both are drawn directly on the page and
+redraw when the window is resized; with no activity in the window, a chart
+shows an empty-state message instead of empty bars. The status bar on every
+page shows a slim progress indicator while a job is running — indeterminate
+by default, switching to a percent while a model downloads — and, while the
+transcription queue is active, a compact `done/total` counter next to it.
+
 ## Profiles
 
 | Profile | Recognition | AI cleanup | Network |
@@ -40,6 +50,29 @@ falls back to every installed model with a warning, and the choice stays yours.
 | **Global hotkey** | Default `<f13>`; capture a replacement in Settings. |
 | **Automatically copy** | Off by default. |
 | **Offline-only** | Controlled by the profile; local profiles block cloud actions. |
+
+## Synchronisation
+
+A local mirror for transcripts — the privacy-safe alternative to cloud sync:
+the app never makes a network call of its own, it only writes files into a
+chosen folder, which can point at any folder that a third-party client of
+your own choice syncs (Google Drive, OneDrive, etc.).
+
+| Field | Values / behavior |
+|---|---|
+| **Mirror transcripts to a folder** | Turns on auto-mirroring; requires a folder to be set. |
+| **Sync folder** + **Choose…** | Picked through the system folder-choice dialog. |
+| **Also copy audio** | Adds the retained managed audio copy to the mirror, when one exists. |
+| **Sync all now** | Mirrors every stored transcript on a background worker and reports a summary on the status bar. |
+
+Each transcript is written as a Markdown + JSON pair (deterministic file names
+by date and id); the app never deletes anything from this folder and never
+stores any API keys in it. An invalid folder (missing, a file instead of a
+directory, a symlink, or one inside/around the private data folder) is
+refused on Save with the reason shown. Mirroring also runs automatically
+after a transcription finishes, after an editor save, after a speaker is
+assigned, and after AI cleanup is applied; any mirroring failure only shows
+on the status bar and never undoes the save that triggered it.
 
 ## Recognition
 
@@ -101,10 +134,13 @@ starts local playback of the retained audio from that segment's start.
 
 The playback bar under the editor plays the retained managed audio copy:
 play/pause, stop, ±5-second seeking and 0.75–2× speed. Speed is implemented by
-resampling, so a faster pace also raises the pitch. Only the managed copy in
-the application's storage is played; the external original file is never
-looked up or opened. When a record has no retained audio, the bar says so.
-Switching the page or the record, and restoring from a backup, stop playback.
+resampling, so a faster pace also raises the pitch. A seek slider follows the
+playing position and can be dragged to any point in the audio; it stays still
+while you hold it and only jumps on release, and it is disabled when nothing
+is playable. Only the managed copy in the application's storage is played; the
+external original file is never looked up or opened. When a record has no
+retained audio, the bar says so. Switching the page or the record, and
+restoring from a backup, stop playback.
 
 ## Batch transcription queue
 

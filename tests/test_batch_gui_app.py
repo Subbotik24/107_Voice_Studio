@@ -130,6 +130,7 @@ def _app(tmp_path: Path, *names: str) -> VoiceStudioApp:
     app.batch_recursive_var = FakeVar(False)
     app.batch_recursive_check = FakeWidget()
     app.batch_tree = FakeTree()
+    app.status_batch_var = FakeVar("")
     app._batch_button_keys = {
         FakeWidget(): key
         for key in ("batch_add_files", "batch_add_folder", "batch_start")
@@ -511,3 +512,40 @@ def test_retranslation_relabels_the_panel_and_the_queue_rows(tmp_path: Path) -> 
     assert app.batch_tree.column_values(1) == [translate("uk", "batch_status_pending")]
     for widget, key in app._batch_button_keys.items():
         assert widget.text == translate("uk", key)
+
+
+# --- status-bar batch counter ------------------------------------------------
+
+
+def test_status_batch_counter_is_empty_before_any_items_are_queued(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+
+    app._batch_refresh_view()
+
+    assert app.status_batch_var.get() == ""
+
+
+def test_status_batch_counter_counts_done_failed_and_skipped_against_the_total(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path, "one.wav", "two.wav", "three.wav", "four.wav")
+    app.batch_queue.mark_running(app.batch_queue.items[0].path)
+    app.batch_queue.mark_done(app.batch_queue.items[0].path, "id-1", 1.0)
+    app.batch_queue.mark_running(app.batch_queue.items[1].path)
+    app.batch_queue.mark_failed(app.batch_queue.items[1].path, "boom", 1.0)
+    app.batch_queue.mark_skipped(app.batch_queue.items[2].path)
+
+    app._batch_refresh_view()
+
+    assert app.status_batch_var.get() == "3/4"
+
+
+def test_status_batch_counter_is_absent_without_the_status_bar_widget(
+    tmp_path: Path,
+) -> None:
+    """Catches a refresh that assumes the status-bar counter always exists."""
+
+    app = _app(tmp_path, "one.wav")
+    del app.status_batch_var
+
+    app._batch_refresh_view()

@@ -17,6 +17,16 @@ Nastavení a Nápověda se otevírají uvnitř hlavního okna, stejně jako Pře
 Studio. Odchod ze stránky Nastavení s neuloženými změnami se zeptá, zda uložit,
 zahodit, nebo zůstat. Modely a Záloha zůstávají samostatnými okny.
 
+Karta **Dynamika** na Přehledu přidává pod souhrnné karty dva grafy: sloupcový
+graf aktivity za 14 dní (dnešek zcela vpravo, nad každým nenulovým dnem
+hodnota) a graf rozdělení jazyků a enginů podle nejčastějších hodnot, zbytek
+sloučený do "jiné". Oba grafy se kreslí přímo na stránce a překreslují při
+změně velikosti okna; když v období není žádná aktivita, místo prázdných
+sloupců se zobrazí text o chybějící aktivitě. Stavový řádek na každé stránce
+zobrazuje tenký indikátor průběhu, dokud běží úloha — ve výchozím stavu
+neurčitý, při stahování modelu se přepne na procenta — a dokud běží fronta
+přepisů, vedle něj kompaktní počítadlo "hotovo/celkem".
+
 ## Profily
 
 | Profil | Rozpoznávání | AI oprava | Síť |
@@ -40,6 +50,28 @@ nainstalované modely s upozorněním a volba zůstává na vás.
 | **Globální zkratka** | Výchozí `<f13>`; lze zachytit novou kombinaci. |
 | **Automaticky kopírovat** | Ve výchozím stavu vypnuto. |
 | **Pouze offline** | Určuje profil; místní profily cloud blokují. |
+
+## Synchronizace
+
+Lokální zrcadlo přepisů — soukromá alternativa cloudové synchronizace: aplikace
+sama nic neodesílá do sítě, jen zapisuje soubory do zvolené složky, kterou lze
+nasměrovat na jakoukoli složku, kterou si sami synchronizuje váš vlastní klient
+třetí strany (Google Drive, OneDrive apod.).
+
+| Pole | Chování |
+|---|---|
+| **Zrcadlit přepisy do složky** | Zapíná automatické zrcadlení; vyžaduje zadanou složku. |
+| **Složka synchronizace** + **Vybrat…** | Volí se přes systémový dialog výběru složky. |
+| **Kopírovat i zvuk** | Přidá do zrcadla uchovanou spravovanou kopii zvuku, pokud existuje. |
+| **Synchronizovat vše nyní** | Zrcadlí všechny uložené přepisy na pozadí a zobrazí souhrn ve stavovém řádku. |
+
+Každý přepis se zapisuje jako dvojice `Markdown` + `JSON` (deterministické názvy
+souborů podle data a id); aplikace ze složky nic nemaže a neukládá do ní žádné
+přístupové klíče. Neplatná složka (neexistuje, je to soubor, symlink, nebo leží
+uvnitř/kolem privátní datové složky) se při ukládání odmítne s vysvětlením chyby.
+Zrcadlení se také spouští automaticky po dokončení rozpoznávání, uložení úprav v
+editoru, přiřazení mluvčího a po použití AI čištění; případná chyba zrcadlení se
+jen zobrazí ve stavovém řádku a nikdy nezruší samotný zápis.
 
 ## Rozpoznávání
 
@@ -100,10 +132,13 @@ začátku daného segmentu.
 
 Panel přehrávání pod editorem přehrává uloženou spravovanou kopii zvuku:
 přehrát/pauza, stop, posun o ±5 sekund a rychlost 0.75–2×. Rychlost je řešená
-převzorkováním, vyšší tempo tedy zvyšuje i výšku hlasu. Přehrává se pouze
-spravovaná kopie v úložišti aplikace; externí originální soubor se nikdy
-nevyhledává ani neotevírá. Pokud zvuk záznamu není uložen, panel to oznámí.
-Přepnutí stránky nebo záznamu i obnovení ze zálohy přehrávání zastaví.
+převzorkováním, vyšší tempo tedy zvyšuje i výšku hlasu. Posuvník pozice
+sleduje přehrávání a tažením jej lze přesunout na libovolné místo v nahrávce;
+dokud jej držíte, pozice se nemění a k posunu dojde až při puštění, a bez
+přehratelného zvuku je posuvník neaktivní. Přehrává se pouze spravovaná kopie
+v úložišti aplikace; externí originální soubor se nikdy nevyhledává ani
+neotevírá. Pokud zvuk záznamu není uložen, panel to oznámí. Přepnutí stránky
+nebo záznamu i obnovení ze zálohy přehrávání zastaví.
 
 ## Fronta přepisů
 

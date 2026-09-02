@@ -86,6 +86,18 @@ def test_configured_theme_consumes_the_approved_theme_contract() -> None:
     assert 'foreground=[("readonly", theme.ink)' in source
 
 
+def test_sidebar_buttons_get_a_hover_background_and_pointer_cursor() -> None:
+    """Catches a sidebar hover state expressed with per-widget bindings instead of style.map."""
+
+    source = inspect.getsource(VoiceStudioApp._configure_theme)
+    anchor = 'style.map(\n            "Sidebar.TButton",'
+    assert anchor in source
+    sidebar_map = source[source.index(anchor) : source.index(anchor) + 400]
+
+    assert 'background=[("active", theme.selection)' in sidebar_map
+    assert 'cursor=[("active", "hand2")' in sidebar_map
+
+
 def test_reference_layout_uses_the_narrow_readiness_panel() -> None:
     source = inspect.getsource(VoiceStudioApp._build_ui)
 
